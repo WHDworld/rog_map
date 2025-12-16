@@ -1,0 +1,103 @@
+#############################################
+#   Mapping                                 #
+#############################################
+# The points [out of local map] is considered to be [OUT_OF_MAP]
+# The points [out of virtual ceil or ground] is considered to be [OCCUPIED]
+
+rog_map:
+  resolution: 0.1 # 地图分辨率 [m]
+  inflation_resolution: 0.2 # 膨胀分辨率 [m]
+  inflation_step: 1 
+  unk_inflation_en: false
+  unk_inflation_step: 1
+  map_size: [ 50,50,6 ]
+  # If the map rolling is disable, the map origin [m] should be set.
+  fix_map_origin: [ 0,0,0 ]
+  frontier_extraction_en: true
+
+  # Virtual ceil and ground
+  virtual_ceil_height: 9999 # 虚拟天花板高度 [m]
+  virtual_ground_height: -9999 # 虚拟地面高度 [m]
+
+  block_inf_pt: false
+  kd_tree_en: false
+
+  load_pcd_en: false
+#  pcd_name: "/home/yunfan/Workspace/rog_ws/src/ROG-Map/examples/rog_map_example/PCD/small_forest_002.pcd"
+
+  map_sliding:
+    enable: true
+    # The minimum distance [m] to slide the map.
+    threshold: 1.0
+
+  esdf:
+    enable: true
+    resolution: 0.1 # ESDF分辨率 [m]
+    # The range of esdf around the odom [m].
+    local_update_box: [ 5,5,3 ] # 局部ESDF更新范围 [m]
+
+  # If [enable = true], the ROG-Map will actively take ros topic as input.
+  #  else user should call function [updateMap] to update the map.
+  ros_callback:
+    enable: true
+    cloud_topic: "/cloud_registered"
+    odom_topic: "/lidar_slam/odom"
+    odom_timeout: 2.0
+
+
+  visualization:
+    enable: true
+    # when enabled, use rqt_reconfigure to change the visualization parameters.
+    use_dynamic_reconfigure: false
+    # The rate of visualization [Hz], if set to 0, the visualization will not be triggered by frame.
+    time_rate: 10
+    # The frame rate of visualization [Hz], if set to 0, the visualization will not be triggered by frame.
+    frame_rate: 0
+    # visualization range along the odom [m].
+    range: [ 50,50,6 ] # 可视化范围 [m]
+    frame_id: "world"
+    pub_unknown_map_en: true # 发布未知地图
+
+  # Intensity filter for input point cloud. If the point intensity is less than this value,
+  # it will be ignored (to avoid noise like dusk).
+  intensity_thresh: -10 # 点云反射率滤波阈值
+  # The temporal downsample rate for input point cloud.
+  #  e.g. if set to k, the point cloud will be downsampled to 1/k.
+  point_filt_num: 5 # 点云下采样率
+
+  # Probabilistc update
+  raycasting:
+    # if disable, the map will only maintain occupied information, and all other grid
+    # will be considered as unknown.
+    enable: true
+    blind_filter_en: false
+    blind_filter_dis: 1.0
+    batch_update_size: 1 # 批量更新大小
+    local_update_box: [ 20,20,5 ] # 局部射线地图更新范围 [m]
+    # The range of raycasting [m].
+    ray_range: [ 0.0, 5 ] # 射线追踪范围 [m]
+
+    p_min: 0.12
+    p_miss: 0.49
+    p_free: 0.499
+    p_occ: 0.85
+    p_hit: 0.9
+    p_max: 0.98
+    # The threshold of a non-occupied inf map grid to be considered as free. [0.0-1.0]
+    # for counter map, if each cell contains N cells in prob map, then only when
+    # N_unk > N * unk_thresh cells are unknown, the cell will be considered as unknown.
+    # example: 1) if unk_thresh is set 0.0, then once at least one cell in prob map is unknown,
+    #             the cell will be considered as unknown.
+    #         2) if unk_thresh is set to 1.0, then only all cells in prob map are unknown,
+    #             the cell will be considered as unknown.
+    # in all, 1.0 is more aggressive while 0.0 is more conservative.
+    unk_thresh: 1.0
+
+  global_map:
+    enable: true
+    resolution: 0.2
+    map_size: [ 200, 200, 5 ]
+    map_model: 0 # 0: center, 1: right_bottom, 2: right_middle, 3: left_bottom
+    ground_height: -0.1
+    ceil_height: 9999
+    sub_grid_xy: 0.01
