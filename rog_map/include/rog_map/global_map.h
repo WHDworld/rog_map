@@ -19,9 +19,18 @@ namespace rog_map {
 
 // 全局体素状态（紧凑存储，1字节）
 enum class GlobalVoxelState : uint8_t {
-    UNKNOWN = 0,    // 未探索（默认状态，不存储）
-    FREE = 1,       // 已知自由
-    OCCUPIED = 2    // 占用
+    // --- 初始状态 ---
+    UNKNOWN = 0,            // 0: 完全未探索（几何、语义均未知）
+
+    // --- 几何已探索，无需视觉介入 ---
+    FREE = 1,               // 1: 已知自由（LiDAR确认空闲，无需相机探索）
+    
+    // --- 几何已探索，等待视觉确认 (关键的 "Camera Frontier") ---
+    OCCUPIED_UNSEEN = 2,    // 2: 几何占据 + 视觉未覆盖 (这是相机探索的候选目标)
+    
+    // --- 几何已探索 + 视觉已确认/已排除 ---
+    OCCUPIED_TARGET = 3,    // 3: 几何占据 + 视觉确认为目标 (True Positive)
+      = 4     // 4: 几何占据 + (视觉确认为背景 OR 几何先验判定为平面/墙体)
 };
 
 struct GlobalVoxelIndex
