@@ -99,14 +99,16 @@ struct SubGrid
     bool was_frontier_last_time; // 上次是否包含frontier
     bool unexplored_initialized_ = false; // 未探索体素是否已初始化
     
-    float getExplorationRate() const
+    float getExplorationRate()
     {
-        return static_cast<float>(explored_voxels_.size()) / total_voxels;
+        exploration_rate = static_cast<float>(explored_voxels_.size()) / total_voxels;
+        return exploration_rate;
     }
 
     float getUnknownRate()
     {
-        return static_cast<float>(unknown_count) / total_voxels;
+        unknown_rate = static_cast<float>(unexplored_voxels_.size()) / total_voxels;
+        return unknown_rate;
     }
 
     void ensureUnexploredInitialized()
@@ -130,18 +132,18 @@ struct SubGrid
         return exploration_rate < 0.5f;
     }
 
+    void extractFrontier(std::vector<GlobalVoxelIndex>& frontier_voxels)
+    {
+        for(const auto& sub_grid_frontier_voxel : sub_grid_frontier_voxels_)
+        {
+            frontier_voxels.push_back(sub_grid_frontier_voxel);
+        }
+    }
+
     void extractFrontier(const std::unordered_map<GlobalVoxelIndex, GlobalVoxelState, GlobalVoxelIndexHash>& voxels,
     std::vector<GlobalVoxelIndex>& frontier_voxels)
     {
         sub_grid_frontier_voxels_.clear();
-        if(!frontier_dirty)
-        {
-            for(auto& sub_grid_frontier_voxel : sub_grid_frontier_voxels_)
-            {
-                frontier_voxels.push_back(sub_grid_frontier_voxel);
-            }
-            return;
-        }
 
         if(should_iterate_explored())
         {
@@ -193,7 +195,6 @@ struct SubGrid
         }
 
         frontier_count = sub_grid_frontier_voxels_.size();
-        has_frontier = (frontier_count > 0);
         frontier_dirty = false;
 
         // std::cout << "SubGrid[" << grid_idx.x << "," << grid_idx.y << "] "
@@ -291,7 +292,7 @@ public:
         global_map_free_pub_ = nh_.advertise<sensor_msgs::PointCloud2>("global_map/free", 1);
         global_map_frontier_pub_ = nh_.advertise<sensor_msgs::PointCloud2>("global_map/frontier", 1);
         global_map_range_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("global_map/range", 1);
-        sub_grid_range_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("global_map/sub_grid_range", 1);
+        frontier_range_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("global_map/sub_grid_range", 1);
         ROS_INFO("GlobalMap initialized with visualization publishers");
     }
     ~GlobalMap() = default;
@@ -332,6 +333,7 @@ public:
     void posToIndex(const Eigen::Vector3f& pos, GlobalVoxelIndex& idx);
     void indexToPos(const GlobalVoxelIndex& idx, Eigen::Vector3f& pos);
     void getNeighbors(const GlobalVoxelIndex& idx, std::vector<GlobalVoxelIndex>& neighbors);
+    void updateExploredBounds(const GlobalVoxelIndex& idx);
 
     void visualizeGlobalMapVoxels();
     void visualizeGlobalMapRange();
@@ -347,7 +349,7 @@ private:
     ros::Publisher global_map_free_pub_;  // 自由体素可视化发布器
     ros::Publisher global_map_frontier_pub_;  // 前沿体素可视化发布器
     ros::Publisher global_map_range_pub_;  // 范围可视化发布器
-    ros::Publisher sub_grid_range_pub_;  // 子网格范围可视化发布器
+    ros::Publisher frontier_range_pub_;  // 前沿范围可视化发布器
     std::vector<SubGrid> sub_grids_;
     int sub_grid_x_num_, sub_grid_y_num_, sub_grid_total_;
     int sub_grid_size_x_, sub_grid_size_y_;
@@ -375,8 +377,7 @@ private:
     GlobalVoxelIndex explored_min_idx_ = GlobalVoxelIndex(std::numeric_limits<int64_t>::max(), std::numeric_limits<int64_t>::max(), std::numeric_limits<int64_t>::max());
     GlobalVoxelIndex explored_max_idx_ = GlobalVoxelIndex(std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::min());
 
-    bool has_data_;
-
+    int current_problem_idx_count_ = 0;
     template<class T>
     bool LoadParam(std::string param_name, T &param_value, T default_value = T{}, bool required = false) {
         if (nh_.getParam(param_name, param_value)) {

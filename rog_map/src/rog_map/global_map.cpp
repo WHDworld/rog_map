@@ -50,81 +50,55 @@ void GlobalMap::updateVoxelState(const GlobalVoxelIndex& idx, GlobalVoxelState n
     std::lock_guard<std::mutex> lock(map_mutex_);
     if(!isInGlobalMapRange(idx)) return;
     auto it = voxels_.find(idx);
-    GlobalVoxelState old_state = (it == voxels_.end()) ? GlobalVoxelState::UNKNOWN : it->second;
-    if(old_state == new_state) return;
-    
+    GlobalVoxelState old_state;
     if(it == voxels_.end())
     {
+        old_state = GlobalVoxelState::UNKNOWN;
         voxels_[idx] = new_state;
-        if(new_state != GlobalVoxelState::UNKNOWN && old_state == GlobalVoxelState::UNKNOWN)
-        {
-            Eigen::Vector3f global_pos;
-            indexToPos(idx, global_pos);
-            if(!is_bound_initialized_)
-            {
-                explored_min_ = global_pos;
-                explored_max_ = global_pos;
-                explored_min_idx_ = idx;
-                explored_max_idx_ = idx;
-                is_bound_initialized_ = true;
-            }
-            else
-            {
-                explored_min_ = explored_min_.cwiseMin(global_pos);
-                explored_max_ = explored_max_.cwiseMax(global_pos);
-                posToIndex(explored_min_, explored_min_idx_);
-                posToIndex(explored_max_, explored_max_idx_);
-            }
-            // 打印第一次更新的信息
-            static bool first_update = true;
-            if (first_update) {
-                ROS_INFO("Global map first update at idx: (%ld, %ld, %ld), pos: (%.2f, %.2f, %.2f)",
-                         idx.x, idx.y, idx.z, global_pos.x(), global_pos.y(), global_pos.z());
-                first_update = false;
-            }
-        }
     }
     else
     {
+        old_state = it->second;
+        if(new_state == GlobalVoxelState::UNKNOWN && old_state != GlobalVoxelState::UNKNOWN) 
+        {
+            current_problem_idx_count_++;
+            return;
+        }
         it->second = new_state;
     }
-
+    if(old_state == new_state) return;
+    // 1. 更新 voxels_ 状态
     SubGridIndex sg_idx;
     voxelToSubGrid(idx, sg_idx);
     SubGrid& sg = getSubGrid(sg_idx);
-    if(old_state == GlobalVoxelState::UNKNOWN)
+
+    if(new_state == GlobalVoxelState::FREE && old_state == GlobalVoxelState::UNKNOWN)
     {
-        if(new_state == GlobalVoxelState::FREE)
-        {
-            sg.unexplored_voxels_.erase(idx);
-            sg.explored_voxels_.insert(idx);
-            sg.unknown_count--;
-            sg.free_count++;
-        }
-        else if(new_state == GlobalVoxelState::OCCUPIED)
-        {
-            sg.unexplored_voxels_.erase(idx);
-            sg.explored_voxels_.insert(idx);
-            sg.unknown_count--;
-            sg.occupied_count++;
-        }
-        if(sg.sub_grid_frontier_voxels_.find(idx) != sg.sub_grid_frontier_voxels_.end())
-        {
-            sg.sub_grid_frontier_voxels_.erase(idx);
-            sg.frontier_count--;
-            sg.frontier_dirty = true;
-        }
+        sg.free_count++;
+        sg.explored_voxels_.insert(idx);
+        sg.unexplored_voxels_.erase(idx);
+        sg.frontier_dirty = true;
+        updateExploredBounds(idx);
     }
-    else if(old_state == GlobalVoxelState::FREE && new_state == GlobalVoxelState::OCCUPIED)
+    else if(new_state == GlobalVoxelState::OCCUPIED && old_state == GlobalVoxelState::UNKNOWN)
+    {
+        sg.occupied_count++;
+        sg.explored_voxels_.insert(idx);
+        sg.unexplored_voxels_.erase(idx);
+        sg.frontier_dirty = true;
+        updateExploredBounds(idx);
+    }
+    else if(new_state == GlobalVoxelState::FREE && old_state == GlobalVoxelState::OCCUPIED)
     {
         sg.free_count--;
         sg.occupied_count++;
     }
-    else if(old_state == GlobalVoxelState::OCCUPIED && new_state == GlobalVoxelState::FREE)
+    else if(new_state == GlobalVoxelState::OCCUPIED && old_state == GlobalVoxelState::FREE)
     {
         sg.occupied_count--;
         sg.free_count++;
     }
+
 }
 
 void GlobalMap::setVoxelState(const Eigen::Vector3f& pos, GlobalVoxelState state)
@@ -211,10 +185,10 @@ void GlobalMap::initializeSubGrids()
             sub_grids_[linear_idx].unknown_rate = 1.0;
             sub_grids_[linear_idx].has_frontier = false;
             sub_grids_[linear_idx].frontier_count = 0;
-            sub_grids_[linear_idx].frontier_dirty = false;
+            sub_grids_[linear_idx].frontier_dirty = true;
             sub_grids_[linear_idx].was_frontier_last_time = false;
             // 懒加载，暂不初始化 unexplored_voxels_，只在需要时初始化
-            sub_grids_[linear_idx].unexplored_initialized_ = false;
+            sub_grids_[linear_idx].ensureUnexploredInitialized();
         }
     }
     last_frontier_subgrids_.clear();
@@ -273,8 +247,8 @@ void GlobalMap::extractGlobalFrontierIncremental()
 {
     std::lock_guard<std::mutex> lock(map_mutex_);
     frontier_voxels_.clear();
+    current_frontier_subgrids_.clear();  // 清空当前帧的 frontier 子网格集合
 
-    std::unordered_set<int> dirty_subgrids;
     if(!frontier_cache_valid_ || last_frontier_subgrids_.empty())
     {
         // 🔥 首次提取或缓存失效：检查所有可能有frontier的子网格
@@ -286,7 +260,12 @@ void GlobalMap::extractGlobalFrontierIncremental()
             SubGrid& sg = sub_grids_[i];
             if(sg.getExplorationRate() > 0.0f && sg.getExplorationRate() < 1.0f)
             {
+                sg.has_frontier = true;
                 candidate_subgrids_.insert(i);
+            }
+            else
+            {
+                sg.has_frontier = false;
             }
         }
     }
@@ -301,10 +280,15 @@ void GlobalMap::extractGlobalFrontierIncremental()
         // Step 1: 从上次的frontier子网格开始
         for(int linear_idx : last_frontier_subgrids_)
         {
-            const SubGrid& sg = sub_grids_[linear_idx];
-            if(sg.has_frontier)
+            SubGrid& sg = sub_grids_[linear_idx];
+            if(sg.getExplorationRate() > 0.0f && sg.getExplorationRate() < 1.0f)
             {
+                sg.has_frontier = true;
                 next_candidates.insert(linear_idx);
+            }
+            else
+            {
+                sg.has_frontier = false;
             }
 
             std::vector<SubGridIndex> neighbors;
@@ -316,11 +300,16 @@ void GlobalMap::extractGlobalFrontierIncremental()
                 if(checked_subgrids.find(nei_linear) != checked_subgrids.end()) continue;
                 checked_subgrids.insert(nei_linear);
 
-                const SubGrid& nei_sg = sub_grids_[nei_linear];
+                SubGrid& nei_sg = sub_grids_[nei_linear];
                 float nei_exp_rate = nei_sg.getExplorationRate();
-                if((nei_exp_rate > 0.1f && nei_exp_rate < 0.9999f) || nei_sg.frontier_dirty)
+                if((nei_exp_rate > 0.0f && nei_exp_rate < 1.0f))
                 {
+                    nei_sg.has_frontier = true;
                     next_candidates.insert(nei_linear);
+                }
+                else
+                {
+                    nei_sg.has_frontier = false;
                 }
             }
         }
@@ -330,15 +319,22 @@ void GlobalMap::extractGlobalFrontierIncremental()
     for(int linear_idx : candidate_subgrids_)
     {
         SubGrid& sg = sub_grids_[linear_idx];
-
-        sg.extractFrontier(voxels_, frontier_voxels_);
-        
-        if(sg.has_frontier)
+        if(sg.frontier_dirty)
         {
-            current_frontier_subgrids_.insert(linear_idx);
+            sg.extractFrontier(voxels_, frontier_voxels_);
         }
+        else
+        {
+            sg.extractFrontier(frontier_voxels_);
+        }
+        
+        current_frontier_subgrids_.insert(linear_idx);
+    
     }
 
+    // ROS_INFO("current_problem_idx_count_: %d", current_problem_idx_count_);
+
+    current_problem_idx_count_ = 0;
     last_frontier_subgrids_ = current_frontier_subgrids_;
     if(current_frontier_subgrids_.size() > 0)
     {
@@ -472,6 +468,27 @@ void GlobalMap::getNeighbors(const GlobalVoxelIndex& idx, std::vector<GlobalVoxe
                 neighbors.push_back(GlobalVoxelIndex(idx.x + dx, idx.y + dy, idx.z + dz));
             }
         }
+    }
+}
+
+void GlobalMap::updateExploredBounds(const GlobalVoxelIndex& idx)
+{
+    Eigen::Vector3f global_pos;
+    indexToPos(idx, global_pos);
+    if(!is_bound_initialized_)
+    {
+        explored_min_ = global_pos;
+        explored_max_ = global_pos;
+        explored_min_idx_ = idx;
+        explored_max_idx_ = idx;
+        is_bound_initialized_ = true;
+    }
+    else
+    {
+        explored_min_ = explored_min_.cwiseMin(global_pos);
+        explored_max_ = explored_max_.cwiseMax(global_pos);
+        posToIndex(explored_min_, explored_min_idx_);
+        posToIndex(explored_max_, explored_max_idx_);
     }
 }
 
@@ -729,6 +746,7 @@ void GlobalMap::visualizeGlobalMapFrontier()
         point.b = 0;
         frontier_cloud.push_back(point);
     }
+    // ROS_INFO("Frontier voxels: %d", frontier_cloud.size());
     sensor_msgs::PointCloud2 frontier_cloud_msg;
     pcl::toROSMsg(frontier_cloud, frontier_cloud_msg);
     frontier_cloud_msg.header.stamp = ros::Time::now();
@@ -743,30 +761,40 @@ void GlobalMap::visualizeSubGridRange()
         return;
     }
 
-    if(sub_grid_range_pub_.getNumSubscribers() == 0)
+    if(frontier_range_pub_.getNumSubscribers() == 0)
     {
         return;
     }
     
     visualization_msgs::MarkerArray marker_array;
     
+    // 先发送一个 DELETEALL marker 来清除所有旧的 marker
+    visualization_msgs::Marker delete_marker;
+    delete_marker.header.frame_id = "world";
+    delete_marker.header.stamp = ros::Time::now();
+    delete_marker.ns = "frontier_subgrid_range";
+    delete_marker.id = 0;
+    delete_marker.action = visualization_msgs::Marker::DELETEALL;
+    marker_array.markers.push_back(delete_marker);
+    
     // 遍历所有子网格，根据状态用不同颜色显示边界框
-    for(int i = 0; i < sub_grid_total_; i++)
+    int marker_id = 1;  // 从 1 开始，因为 0 用于 DELETEALL
+    for(auto& last_frontier_subgrids : last_frontier_subgrids_ )
     {
-        const SubGrid& sg = sub_grids_[i];
+        SubGrid& sg = sub_grids_[last_frontier_subgrids];
         
         // 创建子网格边界框的线段 Marker
         visualization_msgs::Marker grid_marker;
         grid_marker.header.frame_id = "world";
         grid_marker.header.stamp = ros::Time::now();
-        grid_marker.ns = "subgrid_range";
-        grid_marker.id = i;
+        grid_marker.ns = "frontier_subgrid_range";
+        grid_marker.id = marker_id++;
         grid_marker.type = visualization_msgs::Marker::LINE_LIST;
         grid_marker.action = visualization_msgs::Marker::ADD;
         grid_marker.pose.orientation.w = 1.0;
         
         // 设置线宽
-        grid_marker.scale.x = 0.02f;
+        grid_marker.scale.x = 0.03f;
         
         // 根据子网格状态设置颜色
         float exp_rate = sg.getExplorationRate();
@@ -817,7 +845,9 @@ void GlobalMap::visualizeSubGridRange()
         p[5].x = sg.world_max.x(); p[5].y = sg.world_min.y(); p[5].z = sg.world_max.z();
         p[6].x = sg.world_max.x(); p[6].y = sg.world_max.y(); p[6].z = sg.world_max.z();
         p[7].x = sg.world_min.x(); p[7].y = sg.world_max.y(); p[7].z = sg.world_max.z();
-        
+        // ROS_INFO("SubGrid[%d] frontier_count: %d, exploration_rate: %f, unknown_rate: %f, sub_grid_range: [%.2f, %.2f, %.2f] m to [%.2f, %.2f, %.2f] m", 
+        // last_frontier_subgrids, sg.frontier_count, sg.getExplorationRate(), sg.getUnknownRate(), 
+        // sg.world_min.x(), sg.world_min.y(), sg.world_min.z(), sg.world_max.x(), sg.world_max.y(), sg.world_max.z());
         // 底面4条边
         grid_marker.points.push_back(p[0]); grid_marker.points.push_back(p[1]);
         grid_marker.points.push_back(p[1]); grid_marker.points.push_back(p[2]);
@@ -838,8 +868,8 @@ void GlobalMap::visualizeSubGridRange()
         
         marker_array.markers.push_back(grid_marker);
     }
-    
+    // ROS_INFO("SubGrid range markers: %d", marker_array.markers.size());
     // 发布所有子网格边界框
-    sub_grid_range_pub_.publish(marker_array);
+    frontier_range_pub_.publish(marker_array);
 }
 }

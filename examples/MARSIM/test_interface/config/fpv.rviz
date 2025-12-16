@@ -6,13 +6,11 @@ Panels:
       Expanded:
         - /Global Options1
         - /Status1
+        - /ENV1
         - /ENV1/GlobalCloud1/Autocompute Value Bounds1
-        - /ENV1/LocalCloud1
         - /ENV1/Odometry1/Shape1
-        - /ROGMap1
         - /Global_map1
-        - /Global_map1/occupied_voxels1
-        - /Global_map1/frontier_voxels1
+        - /Global_map1/sub_grids1
       Splitter Ratio: 0.4043392539024353
     Tree Height: 1385
   - Class: rviz/Selection
@@ -380,22 +378,13 @@ Visualization Manager:
       Enabled: true
       Name: ROGMap
     - Class: rviz/MarkerArray
-      Enabled: true
+      Enabled: false
       Marker Topic: /rm_node/rog_map/map_bound
       Name: MarkerArray
       Namespaces:
-        ESDF Map Text: true
-        ESDF Updating Range: true
-        Local Map Origin: true
-        Local Map Origin_text: true
-        Local Map Range: true
-        Local Map Range Text: true
-        Updating Range: true
-        Updating Range Text: true
-        Visualization Range: true
-        Visualization Range Text: true
+        {}
       Queue Size: 100
-      Value: true
+      Value: false
     - Class: rviz/Group
       Displays:
         - Class: rviz/MarkerArray
@@ -502,14 +491,14 @@ Visualization Manager:
           Channel Name: intensity
           Class: rviz/PointCloud2
           Color: 255; 255; 255
-          Color Transformer: ""
+          Color Transformer: RGB8
           Decay Time: 0
           Enabled: true
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
           Name: frontier_voxels
-          Position Transformer: ""
+          Position Transformer: XYZ
           Queue Size: 10
           Selectable: true
           Size (Pixels): 3
@@ -519,6 +508,14 @@ Visualization Manager:
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
+          Value: true
+        - Class: rviz/MarkerArray
+          Enabled: true
+          Marker Topic: /rm_node/global_map/sub_grid_range
+          Name: sub_grids
+          Namespaces:
+            frontier_subgrid_range: true
+          Queue Size: 100
           Value: true
       Enabled: true
       Name: Global_map
@@ -543,7 +540,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/XYOrbit
-      Distance: 42.91170883178711
+      Distance: 26.445148468017578
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -551,17 +548,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: -4.404533386230469
-        Y: 1.4496870040893555
-        Z: 2.331604264327325e-05
+        X: 3.782754898071289
+        Y: 2.8953044414520264
+        Z: 8.05725358077325e-06
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.6247974038124084
+      Pitch: 0.5647975206375122
       Target Frame: perfect_drone
-      Yaw: 2.6072661876678467
+      Yaw: 5.975440979003906
     Saved:
       - Class: rviz/ThirdPersonFollower
         Distance: 17.48538589477539
