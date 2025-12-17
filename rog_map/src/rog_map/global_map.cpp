@@ -13,7 +13,7 @@ GlobalVoxelState GlobalMap::getVoxelState(const GlobalVoxelIndex& idx)
 {
     std::lock_guard<std::mutex> lock(map_mutex_);
     auto it = voxels_.find(idx);
-    return (it != voxels_.end()) ? it->second : GlobalVoxelState::UNKNOWN;
+    return (it != voxels_.end()) ? it->second : VoxelStateBits::GEO_UNKNOWN;
 }
 
 bool GlobalMap::isInGlobalMapRange(const GlobalVoxelIndex& idx)
@@ -32,47 +32,52 @@ bool GlobalMap::isInGlobalMapRange(const Eigen::Vector3f& pos)
 
 bool GlobalMap::isOccupied(const Eigen::Vector3f& pos)
 {
-    return getVoxelState(pos) == GlobalVoxelState::OCCUPIED;
+    return VoxelStateBits::isOccupied(getVoxelState(pos));
 }
 
 bool GlobalMap::isFree(const Eigen::Vector3f& pos)
 {
-    return getVoxelState(pos) == GlobalVoxelState::FREE;
+    return VoxelStateBits::isFree(getVoxelState(pos));
 }
 
 bool GlobalMap::isUnknown(const Eigen::Vector3f& pos)
 {
-    return getVoxelState(pos) == GlobalVoxelState::UNKNOWN;
+    return VoxelStateBits::isUnknown(getVoxelState(pos));
 }
 
-void GlobalMap::updateVoxelState(const GlobalVoxelIndex& idx, GlobalVoxelState new_state)
+void GlobalMap::updateVoxelStateFromLiDAR(const GlobalVoxelIndex& idx, bool is_occupied)
 {
     std::lock_guard<std::mutex> lock(map_mutex_);
     if(!isInGlobalMapRange(idx)) return;
     auto it = voxels_.find(idx);
     GlobalVoxelState old_state;
+    GlobalVoxelState new_state;
     if(it == voxels_.end())
     {
-        old_state = GlobalVoxelState::UNKNOWN;
-        voxels_[idx] = new_state;
+        old_state = VoxelStateBits::GEO_UNKNOWN;
+        voxels_[idx] = old_state;
+        VoxelHelper::updateFromLiDAR(voxels_[idx], is_occupied);
     }
     else
     {
         old_state = it->second;
-        if(new_state == GlobalVoxelState::UNKNOWN && old_state != GlobalVoxelState::UNKNOWN) 
-        {
-            current_problem_idx_count_++;
-            return;
-        }
-        it->second = new_state;
+        // if(new_state == GlobalVoxelState::UNKNOWN && old_state != GlobalVoxelState::UNKNOWN) 
+        // {
+        //     current_problem_idx_count_++;
+        //     return;
+        // }
+        VoxelHelper::updateFromLiDAR(it->second, is_occupied);
     }
+
+    new_state = voxels_[idx];
     if(old_state == new_state) return;
+
     // 1. 更新 voxels_ 状态
     SubGridIndex sg_idx;
     voxelToSubGrid(idx, sg_idx);
     SubGrid& sg = getSubGrid(sg_idx);
 
-    if(new_state == GlobalVoxelState::FREE && old_state == GlobalVoxelState::UNKNOWN)
+    if(VoxelStateBits::isFree(new_state) && VoxelStateBits::isUnknown(old_state))
     {
         sg.free_count++;
         sg.explored_voxels_.insert(idx);
@@ -80,7 +85,7 @@ void GlobalMap::updateVoxelState(const GlobalVoxelIndex& idx, GlobalVoxelState n
         sg.frontier_dirty = true;
         updateExploredBounds(idx);
     }
-    else if(new_state == GlobalVoxelState::OCCUPIED && old_state == GlobalVoxelState::UNKNOWN)
+    else if(VoxelStateBits::isOccupied(new_state) && VoxelStateBits::isUnknown(old_state))
     {
         sg.occupied_count++;
         sg.explored_voxels_.insert(idx);
@@ -88,30 +93,17 @@ void GlobalMap::updateVoxelState(const GlobalVoxelIndex& idx, GlobalVoxelState n
         sg.frontier_dirty = true;
         updateExploredBounds(idx);
     }
-    else if(new_state == GlobalVoxelState::FREE && old_state == GlobalVoxelState::OCCUPIED)
+    else if(VoxelStateBits::isFree(new_state) && VoxelStateBits::isOccupied(old_state))
     {
         sg.free_count--;
         sg.occupied_count++;
     }
-    else if(new_state == GlobalVoxelState::OCCUPIED && old_state == GlobalVoxelState::FREE)
+    else if(VoxelStateBits::isOccupied(new_state) && VoxelStateBits::isFree(old_state))
     {
         sg.occupied_count--;
         sg.free_count++;
     }
 
-}
-
-void GlobalMap::setVoxelState(const Eigen::Vector3f& pos, GlobalVoxelState state)
-{
-    GlobalVoxelIndex idx;
-    posToIndex(pos, idx);
-    setVoxelState(idx, state);
-}
-
-void GlobalMap::setVoxelState(const GlobalVoxelIndex& idx, GlobalVoxelState state)
-{
-    std::lock_guard<std::mutex> lock(map_mutex_);
-    voxels_[idx] = state;
 }
 
 bool GlobalMap::isFrontier(const Eigen::Vector3f& pos)
@@ -135,7 +127,7 @@ bool GlobalMap::isFrontier(const GlobalVoxelIndex& idx)
     for(const auto& nei : neighbors)
     {
         auto nei_it = voxels_.find(nei);
-        if(nei_it != voxels_.end() && nei_it->second != GlobalVoxelState::UNKNOWN)
+        if(nei_it != voxels_.end() && !VoxelStateBits::isUnknown(nei_it->second))
         {
             return true;
         }
@@ -420,7 +412,7 @@ void GlobalMap::getAllKnownPointCloud(sensor_msgs::PointCloud2& pc_all_known)
     // 2. 遍历已知体素，填充PCL点云
     for(const auto& v_idx : voxels_)
     {
-        if(v_idx.second != GlobalVoxelState::UNKNOWN)
+        if(!VoxelStateBits::isUnknown(v_idx.second))
         {
             Eigen::Vector3f pos;
             indexToPos(v_idx.first, pos);
@@ -528,17 +520,17 @@ void GlobalMap::visualizeGlobalMapVoxels()
         // 根据状态设置颜色并添加到对应的点云
         switch(state)
         {
-            case GlobalVoxelState::UNKNOWN:
+            case VoxelStateBits::GEO_UNKNOWN:
                 // 不显示 UNKNOWN 状态（因为默认就是未知）
                 break;
-            case GlobalVoxelState::FREE:
+            case VoxelStateBits::GEO_FREE:
                 // 白色
                 point.r = 255;
                 point.g = 255;
                 point.b = 255;
                 free_cloud.push_back(point);
                 break;
-            case GlobalVoxelState::OCCUPIED:
+            case VoxelStateBits::GEO_OCCUPIED:
                 // 红色
                 point.r = 255;
                 point.g = 0;

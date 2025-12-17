@@ -18,19 +18,101 @@
 namespace rog_map {
 
 // 全局体素状态（紧凑存储，1字节）
-enum class GlobalVoxelState : uint8_t {
-    // --- 初始状态 ---
-    UNKNOWN = 0,            // 0: 完全未探索（几何、语义均未知）
+// enum class GlobalVoxelState : uint8_t {
+//     // --- 初始状态 ---
+//     UNKNOWN = 0,            // 0: 完全未探索（几何、语义均未知）
 
-    // --- 几何已探索，无需视觉介入 ---
-    FREE = 1,               // 1: 已知自由（LiDAR确认空闲，无需相机探索）
+//     // --- 几何已探索，无需视觉介入 ---
+//     FREE = 1,               // 1: 已知自由（LiDAR确认空闲，无需相机探索）
     
-    // --- 几何已探索，等待视觉确认 (关键的 "Camera Frontier") ---
-    OCCUPIED_UNSEEN = 2,    // 2: 几何占据 + 视觉未覆盖 (这是相机探索的候选目标)
+//     // --- 几何已探索，等待视觉确认 (关键的 "Camera Frontier") ---
+//     OCCUPIED_UNSEEN = 2,    // 2: 几何占据 + 视觉未覆盖 (这是相机探索的候选目标)
     
-    // --- 几何已探索 + 视觉已确认/已排除 ---
-    OCCUPIED_TARGET = 3,    // 3: 几何占据 + 视觉确认为目标 (True Positive)
-      = 4     // 4: 几何占据 + (视觉确认为背景 OR 几何先验判定为平面/墙体)
+//     // --- 几何已探索 + 视觉已确认/已排除 ---
+//     OCCUPIED_TARGET = 3,    // 3: 几何占据 + 视觉确认为目标 (True Positive)
+//       = 4     // 4: 几何占据 + (视觉确认为背景 OR 几何先验判定为平面/墙体)
+// };
+typedef uint8_t GlobalVoxelState;
+struct VoxelStateBits {
+
+    // --- 1. 几何层 (占用低 2 位: 0000 0011) ---
+    static constexpr uint8_t MASK_GEO       = 0x03; // 用于提取几何状态的掩码
+
+    static constexpr uint8_t GEO_UNKNOWN    = 0x00; // 0: 未知
+
+    static constexpr uint8_t GEO_FREE       = 0x01; // 1: 自由
+
+    static constexpr uint8_t GEO_OCCUPIED   = 0x02; // 2: 占据
+    // --- 2. 视觉层 (占用第 2 位: 0000 0100) ---
+    // 标记该体素是否被相机的视锥体有效覆盖过（且未被遮挡）
+    static constexpr uint8_t FLAG_VISITED   = 0x04; 
+    // --- 3. 语义层 (占用第 3 位: 0000 1000) ---
+    // 标记该体素是否被确认为目标
+    static constexpr uint8_t FLAG_TARGET    = 0x08; 
+    // --- 辅助判断函数 ---
+    static bool isUnknown(uint8_t s)  { return (s & MASK_GEO) == GEO_UNKNOWN; }
+
+    static bool isFree(uint8_t s)     { return (s & MASK_GEO) == GEO_FREE; }
+
+    static bool isOccupied(uint8_t s) { return (s & MASK_GEO) == GEO_OCCUPIED; }
+
+    static bool isVisited(uint8_t s)  { return (s & FLAG_VISITED) != 0; }
+
+    static bool isTarget(uint8_t s)   { return (s & FLAG_TARGET) != 0; }
+};
+
+// 扩展辅助函数
+struct VoxelHelper : public VoxelStateBits {
+    
+    // --- 1. LiDAR 更新流 (只修改几何层) ---
+    // 输入：当前状态引用，观测结果(是否占据)
+    static void updateFromLiDAR(uint8_t& s, bool is_occupied) {
+        // 清除旧的几何状态 (保留视觉和语义位)
+        s &= ~MASK_GEO; 
+        
+        if (is_occupied) {
+            s |= GEO_OCCUPIED;
+            // 注意：几何变占据，保持之前的 Visited/Target 状态不变
+            // 因为之前可能由几何先验判断过，或者LiDAR再次确认了该位置
+        } else {
+            s |= GEO_FREE;
+            // 【关键逻辑】: 如果物理上变为了 FREE，那么它一定不是 TARGET
+            // 强制清除 TARGET 位，但保留 VISITED 位（表示我们看过了，这里确实是空的）
+            s &= ~FLAG_TARGET; 
+        }
+    }
+    // --- 2. 相机/几何先验 更新流 (修改视觉/语义层) ---
+    // 输入：当前状态引用，是否是目标，是否仅标记为已看(Ignored)
+    static void updateFromCamera(uint8_t& s, bool is_target) {
+        // 前置检查：如果几何是 UNKNOWN，通常相机无法单独更新它 (依赖深度/LiDAR)
+        // 但如果你的策略允许纯视觉建图，可以去掉这个检查
+        if (isUnknown(s)) return; 
+
+        // 1. 标记为“已探索” (Visited)
+        s |= FLAG_VISITED;
+
+        // 2. 更新语义信息
+        if (is_target) {
+            // 只有几何占据时，才能标记为目标 (避免空中出现目标)
+            if (isOccupied(s)) {
+                s |= FLAG_TARGET;
+            }
+        } else {
+            // 确认为背景，或者几何先验排除了 -> 清除 Target 位
+            // 此时状态变为：GEO_OCCUPIED | FLAG_VISITED (即 Ignored)
+            s &= ~FLAG_TARGET;
+        }
+    }
+    
+    // --- 3. 几何先验流 (比如平面检测) ---
+    static void updateFromGeometricPrior(uint8_t& s) {
+        if (isOccupied(s)) {
+            // 标记为 Visited (表示不需要再去看了)
+            s |= FLAG_VISITED;
+            // 确保 Target 为 0 (表示这是背景/墙面)
+            s &= ~FLAG_TARGET;
+        }
+    }
 };
 
 struct GlobalVoxelIndex
@@ -159,7 +241,7 @@ struct SubGrid
             for(const auto& explored_idx : explored_voxels_)
             {
                 auto it = voxels.find(explored_idx);
-                if(it == voxels.end() || it->second != GlobalVoxelState::FREE)
+                if(it == voxels.end() || !VoxelStateBits::isFree(it->second))
                 {
                     continue;
                 }
@@ -171,7 +253,7 @@ struct SubGrid
                     if(!isInRange(nei_idx)) continue;
 
                     auto nei_it = voxels.find(nei_idx);
-                    if(nei_it == voxels.end() || nei_it->second == GlobalVoxelState::UNKNOWN)
+                    if(nei_it == voxels.end() || VoxelStateBits::isUnknown(nei_it->second))
                     {
                         sub_grid_frontier_voxels_.insert(nei_idx);
                         frontier_voxels.push_back(nei_idx);
@@ -189,7 +271,7 @@ struct SubGrid
                     GlobalVoxelIndex nei_idx = unexplored_idx + neighbor_offsets_6[d];
                     if(!isInRange(nei_idx)) continue;
                     auto nei_it = voxels.find(nei_idx);
-                    if(nei_it != voxels.end() && nei_it->second != GlobalVoxelState::UNKNOWN)
+                    if(nei_it != voxels.end() && !VoxelStateBits::isUnknown(nei_it->second))
                     {
                         is_frontier = true;
                         break;
@@ -315,10 +397,7 @@ public:
     bool isFree(const Eigen::Vector3f& pos);
     bool isUnknown(const Eigen::Vector3f& pos);
     
-    void updateVoxelState(const GlobalVoxelIndex& idx, GlobalVoxelState state);
-
-    void setVoxelState(const Eigen::Vector3f& pos, GlobalVoxelState state);
-    void setVoxelState(const GlobalVoxelIndex& idx, GlobalVoxelState state);
+    void updateVoxelStateFromLiDAR(const GlobalVoxelIndex& idx, bool is_occupied);
 
     bool isFrontier(const Eigen::Vector3f& pos);
     bool isFrontier(const GlobalVoxelIndex& idx);

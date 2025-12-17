@@ -611,15 +611,17 @@ void ProbMap::hitPointUpdate(const Vec3f& pos, const int& hash_id, const int& hi
             {
                 GlobalVoxelIndex global_idx;
                 global_map_->posToIndex(global_pos, global_idx);
-                GlobalVoxelState global_state;
-                if (to_type == GridType::OCCUPIED) {
-                    global_state = GlobalVoxelState::OCCUPIED;
-                } else if (to_type == GridType::KNOWN_FREE) {
-                    global_state = GlobalVoxelState::FREE;
-                } else {
-                    global_state = GlobalVoxelState::UNKNOWN;
-                }
-                global_map_->updateVoxelState(global_idx, global_state);
+                bool is_occupied;
+                if (to_type == GridType::OCCUPIED) 
+                {
+                    is_occupied = true;
+                    global_map_->updateVoxelStateFromLiDAR(global_idx, is_occupied);
+                } 
+                else if (to_type == GridType::KNOWN_FREE) 
+                {
+                    is_occupied = false;
+                    global_map_->updateVoxelStateFromLiDAR(global_idx, is_occupied);
+                } 
             }
         }
         if (cfg_.frontier_extraction_en && from_type == KNOWN_FREE) {
@@ -676,15 +678,17 @@ void ProbMap::missPointUpdate(const Vec3f& pos, const int& hash_id, const int& h
             {
                 GlobalVoxelIndex global_idx;
                 global_map_->posToIndex(global_pos, global_idx);
-                GlobalVoxelState global_state;
-                if (to_type == GridType::OCCUPIED) {
-                    global_state = GlobalVoxelState::OCCUPIED;
-                } else if (to_type == GridType::KNOWN_FREE) {
-                    global_state = GlobalVoxelState::FREE;
-                } else {
-                    global_state = GlobalVoxelState::UNKNOWN;
+                bool is_occupied;
+                if (to_type == GridType::OCCUPIED) 
+                {
+                    is_occupied = true;
+                    global_map_->updateVoxelStateFromLiDAR(global_idx, is_occupied);
+                } 
+                else if (to_type == GridType::KNOWN_FREE) 
+                {
+                    is_occupied = false;
+                    global_map_->updateVoxelStateFromLiDAR(global_idx, is_occupied);
                 }
-                global_map_->updateVoxelState(global_idx, global_state);
             }
         }
 
@@ -695,6 +699,7 @@ void ProbMap::missPointUpdate(const Vec3f& pos, const int& hash_id, const int& h
         }
     }
 }
+
 // 使用射线追踪器进行射线追踪，并更新更新缓存
 void ProbMap::raycastProcess(const PointCloud& input_cloud, const Vec3f& cur_odom) {
     // bounding box of updated region
