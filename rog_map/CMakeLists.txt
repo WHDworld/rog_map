@@ -28,6 +28,7 @@ find_package(catkin REQUIRED COMPONENTS
         )
 find_package(Eigen3 REQUIRED)
 find_package(PCL REQUIRED)
+find_package(ompl REQUIRED)  # GCOPTER 依赖
 
 #add dynamic reconfigure api
 set (DYNAMIC_RECONFIGURE_PATH config/visualization.cfg)
@@ -51,21 +52,37 @@ catkin_package(
 include_directories(
         SYSTEM
         include
+        include/gcopter      # GCOPTER 头文件
         ../../../devel/include
         ${catkin_INCLUDE_DIRS}
         ${Eigen3_INCLUDE_DIRS}
         ${PCL_INCLUDE_DIRS}
+        ${OMPL_INCLUDE_DIRS}  # OMPL 头文件
 )
 
 set(THIRD_PARTY
         ${catkin_LIBRARIES}
         ${PCL_LIBRARIES}
+        ${OMPL_LIBRARIES}     # GCOPTER/OMPL 依赖
         -ldw
         )
 
-file(GLOB_RECURSE srcs CONFIGURE_DEPENDS src/*.cpp include/*.h include/*.hpp include/*.cpp)
-add_library(rog_map STATIC ${srcs}
-        )
+file(GLOB_RECURSE lib_srcs 
+        CONFIGURE_DEPENDS 
+        src/rog_map/*.cpp 
+        src/gcopter/*.cpp 
+        include/*.h 
+        include/*.hpp 
+        include/*.cpp
+    )
+
+add_library(rog_map STATIC ${lib_srcs})
 target_include_directories(rog_map PUBLIC include)
-target_link_libraries(rog_map PUBLIC
-        ${THIRD_PARTY})
+target_link_libraries(rog_map PUBLIC ${THIRD_PARTY})
+
+add_executable(test_planner src/test_explore/test_planner.cpp)
+target_link_libraries(test_planner 
+        rog_map
+        ${THIRD_PARTY}
+        ${catkin_LIBRARIES}
+)

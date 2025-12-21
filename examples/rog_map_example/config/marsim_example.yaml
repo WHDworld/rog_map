@@ -7,10 +7,10 @@
 rog_map:
   resolution: 0.1 # 地图分辨率 [m]
   inflation_resolution: 0.2 # 膨胀分辨率 [m]
-  inflation_step: 1 
-  unk_inflation_en: false
-  unk_inflation_step: 1
-  map_size: [ 50,50,6 ]
+  inflation_step: 1 # 膨胀步长
+  unk_inflation_en: false # 未知膨胀是否启用
+  unk_inflation_step: 1 # 未知膨胀步长
+  map_size: [ 20,20,5 ]
   # If the map rolling is disable, the map origin [m] should be set.
   fix_map_origin: [ 0,0,0 ]
   frontier_extraction_en: true
@@ -31,7 +31,7 @@ rog_map:
     threshold: 1.0
 
   esdf:
-    enable: true
+    enable: false
     resolution: 0.1 # ESDF分辨率 [m]
     # The range of esdf around the odom [m].
     local_update_box: [ 5,5,3 ] # 局部ESDF更新范围 [m]
@@ -41,7 +41,7 @@ rog_map:
   ros_callback:
     enable: true
     cloud_topic: "/cloud_registered"
-    odom_topic: "/lidar_slam/odom"
+    odom_topic: "/ground_truth/odom"
     odom_timeout: 2.0
 
 
@@ -54,8 +54,8 @@ rog_map:
     # The frame rate of visualization [Hz], if set to 0, the visualization will not be triggered by frame.
     frame_rate: 0
     # visualization range along the odom [m].
-    range: [ 50,50,6 ] # 可视化范围 [m]
-    frame_id: "world"
+    range: [20,20,5 ] # 可视化范围 [m]
+    frame_id: "map"
     pub_unknown_map_en: true # 发布未知地图
 
   # Intensity filter for input point cloud. If the point intensity is less than this value,
@@ -75,7 +75,7 @@ rog_map:
     batch_update_size: 1 # 批量更新大小
     local_update_box: [ 20,20,5 ] # 局部射线地图更新范围 [m]
     # The range of raycasting [m].
-    ray_range: [ 0.0, 5 ] # 射线追踪范围 [m]
+    ray_range: [ 0.0, 10 ] # 射线追踪范围 [m]
 
     p_min: 0.12
     p_miss: 0.49
@@ -95,9 +95,15 @@ rog_map:
 
   global_map:
     enable: true
-    resolution: 0.2
-    map_size: [ 200, 200, 2 ]
+    map_size: [ 100, 100, 5 ]
     map_model: 0 # 0: center, 1: right_bottom, 2: right_middle, 3: left_bottom
     ground_height: -0.1
     ceil_height: 9999
     sub_grid_xy: 0.01
+
+  camera_map:
+    enable: true
+    fov_h_deg: 90
+    fov_v_deg: 60
+    max_dist: 5.0
+    min_dist: 0.3

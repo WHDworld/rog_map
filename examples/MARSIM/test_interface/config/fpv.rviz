@@ -9,8 +9,9 @@ Panels:
         - /ENV1
         - /ENV1/GlobalCloud1/Autocompute Value Bounds1
         - /ENV1/Odometry1/Shape1
+        - /ROGMap1
         - /Global_map1
-        - /Global_map1/sub_grids1
+        - /Global_map1/occupied_voxels1
       Splitter Ratio: 0.4043392539024353
     Tree Height: 1385
   - Class: rviz/Selection
@@ -30,7 +31,7 @@ Panels:
   - Class: rviz/Time
     Name: Time
     SyncMode: 0
-    SyncSource: GlobalCloud
+    SyncSource: PointCloud2
 Preferences:
   PromptSaveOnExit: true
 Toolbars:
@@ -98,13 +99,13 @@ Visualization Manager:
           Value: true
         - Alpha: 1
           Class: rviz/Axes
-          Enabled: false
+          Enabled: true
           Length: 0.30000001192092896
           Name: Body
           Radius: 0.05000000074505806
           Reference Frame: drone
           Show Trail: false
-          Value: false
+          Value: true
         - Alpha: 0.5
           Cell Size: 1
           Class: rviz/Grid
@@ -156,7 +157,7 @@ Visualization Manager:
           Marker Topic: /odom_visualization/robot
           Name: Robot
           Namespaces:
-            mesh: true
+            {}
           Queue Size: 100
           Value: true
         - Alpha: 1
@@ -425,7 +426,7 @@ Visualization Manager:
           Use Fixed Frame: true
           Use rainbow: true
           Value: false
-        - Alpha: 0.5
+        - Alpha: 0.05000000074505806
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
             Max Value: 3.6000001430511475
@@ -493,7 +494,7 @@ Visualization Manager:
           Color: 255; 255; 255
           Color Transformer: RGB8
           Decay Time: 0
-          Enabled: true
+          Enabled: false
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -508,14 +509,50 @@ Visualization Manager:
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
-          Value: true
+          Value: false
         - Class: rviz/MarkerArray
-          Enabled: true
+          Enabled: false
           Marker Topic: /rm_node/global_map/sub_grid_range
           Name: sub_grids
           Namespaces:
-            frontier_subgrid_range: true
+            {}
           Queue Size: 100
+          Value: false
+        - Class: rviz/MarkerArray
+          Enabled: true
+          Marker Topic: /rm_node/global_map/camera_frustum
+          Name: MarkerArray
+          Namespaces:
+            camera_frustum: true
+          Queue Size: 100
+          Value: true
+        - Alpha: 0.5
+          Autocompute Intensity Bounds: true
+          Autocompute Value Bounds:
+            Max Value: 10
+            Min Value: -10
+            Value: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz/PointCloud2
+          Color: 255; 255; 255
+          Color Transformer: RGB8
+          Decay Time: 0
+          Enabled: true
+          Invert Rainbow: false
+          Max Color: 255; 255; 255
+          Min Color: 0; 0; 0
+          Name: PointCloud2
+          Position Transformer: XYZ
+          Queue Size: 10
+          Selectable: true
+          Size (Pixels): 3
+          Size (m): 0.20000000298023224
+          Style: Boxes
+          Topic: /rm_node/global_map/visited_voxels
+          Unreliable: false
+          Use Fixed Frame: true
+          Use rainbow: true
           Value: true
       Enabled: true
       Name: Global_map
@@ -523,7 +560,7 @@ Visualization Manager:
   Global Options:
     Background Color: 255; 255; 255
     Default Light: true
-    Fixed Frame: world
+    Fixed Frame: map
     Frame Rate: 30
   Name: root
   Tools:
@@ -540,7 +577,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/XYOrbit
-      Distance: 26.445148468017578
+      Distance: 24.202842712402344
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -548,17 +585,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 3.782754898071289
-        Y: 2.8953044414520264
-        Z: 8.05725358077325e-06
+        X: -1.3242192268371582
+        Y: -1.1452665328979492
+        Z: 3.6825440474785864e-07
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.5647975206375122
+      Pitch: 0.5497979521751404
       Target Frame: perfect_drone
-      Yaw: 5.975440979003906
+      Yaw: 4.605429172515869
     Saved:
       - Class: rviz/ThirdPersonFollower
         Distance: 17.48538589477539

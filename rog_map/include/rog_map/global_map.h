@@ -15,6 +15,7 @@
 #include <sensor_msgs/PointCloud2.h>
 #include <visualization_msgs/Marker.h>
 #include <visualization_msgs/MarkerArray.h>
+
 namespace rog_map {
 
 // 全局体素状态（紧凑存储，1字节）
@@ -59,11 +60,7 @@ struct VoxelStateBits {
     static bool isVisited(uint8_t s)  { return (s & FLAG_VISITED) != 0; }
 
     static bool isTarget(uint8_t s)   { return (s & FLAG_TARGET) != 0; }
-};
 
-// 扩展辅助函数
-struct VoxelHelper : public VoxelStateBits {
-    
     // --- 1. LiDAR 更新流 (只修改几何层) ---
     // 输入：当前状态引用，观测结果(是否占据)
     static void updateFromLiDAR(uint8_t& s, bool is_occupied) {
@@ -156,6 +153,30 @@ const GlobalVoxelIndex neighbor_offsets_6[6] = {
     GlobalVoxelIndex(0, -1, 0),  // -Y
     GlobalVoxelIndex(0, 0, 1),   // +Z
     GlobalVoxelIndex(0, 0, -1)   // -Z
+};
+
+const GlobalVoxelIndex neighbor_offsets_26[26] = {
+    // --- 6 个面邻居 (Face) ---
+    GlobalVoxelIndex( 1,  0,  0), GlobalVoxelIndex(-1,  0,  0),
+    GlobalVoxelIndex( 0,  1,  0), GlobalVoxelIndex( 0, -1,  0),
+    GlobalVoxelIndex( 0,  0,  1), GlobalVoxelIndex( 0,  0, -1),
+    
+    // --- 12 个边邻居 (Edge) ---
+    // XY平面
+    GlobalVoxelIndex( 1,  1,  0), GlobalVoxelIndex( 1, -1,  0),
+    GlobalVoxelIndex(-1,  1,  0), GlobalVoxelIndex(-1, -1,  0),
+    // XZ平面
+    GlobalVoxelIndex( 1,  0,  1), GlobalVoxelIndex( 1,  0, -1),
+    GlobalVoxelIndex(-1,  0,  1), GlobalVoxelIndex(-1,  0, -1),
+    // YZ平面
+    GlobalVoxelIndex( 0,  1,  1), GlobalVoxelIndex( 0,  1, -1),
+    GlobalVoxelIndex( 0, -1,  1), GlobalVoxelIndex( 0, -1, -1),
+
+    // --- 8 个角邻居 (Corner) ---
+    GlobalVoxelIndex( 1,  1,  1), GlobalVoxelIndex( 1,  1, -1),
+    GlobalVoxelIndex( 1, -1,  1), GlobalVoxelIndex( 1, -1, -1),
+    GlobalVoxelIndex(-1,  1,  1), GlobalVoxelIndex(-1,  1, -1),
+    GlobalVoxelIndex(-1, -1,  1), GlobalVoxelIndex(-1, -1, -1)
 };
 
 struct SubGridIndex 
@@ -309,7 +330,7 @@ struct SubGrid
         global_idx.z = local_idx.z + global_min_idx.z;
     }
 
-    bool isInRange(const GlobalVoxelIndex& idx)
+    bool isInRange(const GlobalVoxelIndex& idx) const
     {
         return idx.x >= global_min_idx.x && idx.x < global_max_idx.x &&
                idx.y >= global_min_idx.y && idx.y < global_max_idx.y &&
@@ -327,7 +348,7 @@ public:
 
     GlobalMap(const ros::NodeHandle& nh, const std::string& name_space = "rog_map") : nh_(nh)
     {
-        LoadParam(name_space + "/global_map/resolution", global_resolution_, 0.2f);
+        LoadParam(name_space + "/resolution", global_resolution_, 0.2f);
         global_resolution_inv_ = 1.0f / global_resolution_;
         std::vector<float> temp_global_map_size;
         LoadParam(name_space + "/global_map/map_size", temp_global_map_size, std::vector<float>{200.0, 200.0, 5.0});
@@ -374,6 +395,19 @@ public:
         sub_grid_size_x_ = static_cast<int>(sub_grid_x_ * global_resolution_inv_);
         sub_grid_size_y_ = static_cast<int>(sub_grid_y_ * global_resolution_inv_);
 
+        float fov_h_deg = 90.0f, fov_v_deg = 60.0f;
+        LoadParam(name_space + "/camera_map/fov_h_deg", fov_h_deg, 90.0f);
+        LoadParam(name_space + "/camera_map/fov_v_deg", fov_v_deg, 60.0f);
+        LoadParam(name_space + "/camera_map/max_dist", max_dist_, 5.0f);
+        LoadParam(name_space + "/camera_map/min_dist", min_dist_, 0.3f);
+        LoadParam(name_space + "/camera_map/enable", enable_camera_map_, false);
+        ray_step_ = 0.5 * global_resolution_;
+        // 关键修复：度数转弧度！
+        constexpr float DEG_TO_RAD = M_PI / 180.0f;
+        fov_h_rad_ = fov_h_deg * DEG_TO_RAD;
+        fov_v_rad_ = fov_v_deg * DEG_TO_RAD;
+        tan_half_fov_h_ = std::tan(fov_h_rad_ / 2.0f);
+        tan_half_fov_v_ = std::tan(fov_v_rad_ / 2.0f);
         // 初始化子网格
         initializeSubGrids();
 
@@ -384,6 +418,8 @@ public:
         global_map_frontier_pub_ = nh_.advertise<sensor_msgs::PointCloud2>("global_map/frontier", 1);
         global_map_range_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("global_map/range", 1);
         frontier_range_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("global_map/sub_grid_range", 1);
+        visited_voxels_pub_ = nh_.advertise<sensor_msgs::PointCloud2>("global_map/visited_voxels", 1);
+        camera_frustum_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("global_map/camera_frustum", 1);
         ROS_INFO("GlobalMap initialized with visualization publishers");
     }
     ~GlobalMap() = default;
@@ -398,6 +434,7 @@ public:
     bool isUnknown(const Eigen::Vector3f& pos);
     
     void updateVoxelStateFromLiDAR(const GlobalVoxelIndex& idx, bool is_occupied);
+    void updateVoxelStateFromCamera(const GlobalVoxelIndex& idx, bool is_visited);
 
     bool isFrontier(const Eigen::Vector3f& pos);
     bool isFrontier(const GlobalVoxelIndex& idx);
@@ -423,12 +460,43 @@ public:
     void getNeighbors(const GlobalVoxelIndex& idx, std::vector<GlobalVoxelIndex>& neighbors);
     void updateExploredBounds(const GlobalVoxelIndex& idx);
 
+
+    std::vector<GlobalVoxelIndex> getVisibleVoxels();
+    // [新增接口] 快速几何判断：判断单个体素是否在视椎体范围内
+    // 注意：此函数只判断几何范围 (FOV + 距离)，不判断中间是否有遮挡
+    bool isPointInFrustum(const GlobalVoxelIndex& target_idx);
+    bool isPointInFrustum(const Eigen::Vector3f& target_pos);
+
     void visualizeGlobalMapVoxels();
     void visualizeGlobalMapRange();
     void visualizeGlobalMapFrontier();
     void visualizeSubGridRange();
+    void visualizeVisitedVoxels();
+    void visualizeCameraFrustum();
+    
     std::unordered_map<GlobalVoxelIndex, GlobalVoxelState, GlobalVoxelIndexHash> voxels_;
     std::vector<GlobalVoxelIndex> frontier_voxels_;
+    std::vector<GlobalVoxelIndex> visited_voxels_;
+
+    float global_resolution_;
+    float global_resolution_inv_;
+
+    int sub_grid_x_num_, sub_grid_y_num_, sub_grid_total_;
+    int sub_grid_size_x_, sub_grid_size_y_;
+    float sub_grid_xy_, sub_grid_x_, sub_grid_y_;
+
+    bool enable_camera_map_ = false;
+    Eigen::Vector3f current_cam_origin_ = Eigen::Vector3f::Zero();      // 相机/机体原点
+    Eigen::Quaternionf current_cam_rot_ = Eigen::Quaternionf::Identity(); // 机体到世界的旋转
+
+    float fov_h_rad_ = 90.0f * M_PI / 180.0f;    // 水平FOV (弧度)
+    float fov_v_rad_ = 60.0f * M_PI / 180.0f;    // 垂直FOV (弧度)
+    float max_dist_ = 5.0f;      // 最大有效视距 (米)
+    float min_dist_ = 0.3f;      // 最小有效视距 (防止自身遮挡)
+    float ray_step_ = 0.5f;      // 光线步长
+    float tan_half_fov_h_ = std::tan(45.0f * M_PI / 180.0f);  // tan(fov_h/2)，默认 FOV=90°
+    float tan_half_fov_v_ = std::tan(30.0f * M_PI / 180.0f);  // tan(fov_v/2)，默认 FOV=60°
+
 private:
     ros::NodeHandle nh_;
 
@@ -438,10 +506,11 @@ private:
     ros::Publisher global_map_frontier_pub_;  // 前沿体素可视化发布器
     ros::Publisher global_map_range_pub_;  // 范围可视化发布器
     ros::Publisher frontier_range_pub_;  // 前沿范围可视化发布器
+    ros::Publisher visited_voxels_pub_;  // 视觉已观测占据体素可视化发布器
+    ros::Publisher camera_frustum_pub_;  // 相机视锥体可视化发布器
+
     std::vector<SubGrid> sub_grids_;
-    int sub_grid_x_num_, sub_grid_y_num_, sub_grid_total_;
-    int sub_grid_size_x_, sub_grid_size_y_;
-    float sub_grid_xy_, sub_grid_x_, sub_grid_y_;
+
 
     std::unordered_set<int> last_frontier_subgrids_, current_frontier_subgrids_;
     std::unordered_set<int> candidate_subgrids_; // 本次需要检查的子网格
@@ -449,8 +518,6 @@ private:
 
     mutable std::mutex map_mutex_;
 
-    float global_resolution_;
-    float global_resolution_inv_;
     float global_map_ground_height_;
 
     int global_map_model_;

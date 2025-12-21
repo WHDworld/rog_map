@@ -60,21 +60,25 @@ namespace rog_map {
     }
 
 
-    void ESDFMap::resetLocalMap() {
+    void ESDFMap::resetLocalMap() 
+    {
         std::cout << RED << " -- [ESDFMap] Clear all local map." << RESET << std::endl;
         std::fill(md_.unknown_cnt.begin(), md_.unknown_cnt.end(), md_.sub_grid_num);
         std::fill(md_.occupied_cnt.begin(), md_.occupied_cnt.end(), 0);
     }
 
-    double ESDFMap::getDistance(const rog_map::Vec3f &pos) const {
+    double ESDFMap::getDistance(const rog_map::Vec3f &pos) const 
+    {
         return distance_buffer[getHashIndexFromPos(pos)];
     }
 
-    double ESDFMap::getDistance(const Vec3i &id_g) const {
+    double ESDFMap::getDistance(const Vec3i &id_g) const 
+    {
         return distance_buffer[getHashIndexFromGlobalIndex(id_g)];
     }
 
-    void ESDFMap::updateESDF3D(const rog_map::Vec3f &cur_odom) {
+    void ESDFMap::updateESDF3D(const rog_map::Vec3f &cur_odom) 
+    {
         std::lock_guard<std::mutex> lck(update_esdf_mtx);
         using namespace std;
         TimeConsuming up_t("updateESDF3D", false);

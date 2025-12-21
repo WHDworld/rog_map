@@ -616,6 +616,10 @@ void ProbMap::hitPointUpdate(const Vec3f& pos, const int& hash_id, const int& hi
                 {
                     is_occupied = true;
                     global_map_->updateVoxelStateFromLiDAR(global_idx, is_occupied);
+                    if(global_map_->isPointInFrustum(global_idx))
+                    {
+                        global_map_->updateVoxelStateFromCamera(global_idx, true);
+                    }
                 } 
                 else if (to_type == GridType::KNOWN_FREE) 
                 {
@@ -683,6 +687,10 @@ void ProbMap::missPointUpdate(const Vec3f& pos, const int& hash_id, const int& h
                 {
                     is_occupied = true;
                     global_map_->updateVoxelStateFromLiDAR(global_idx, is_occupied);
+                    if(global_map_->isPointInFrustum(global_idx))
+                    {
+                        global_map_->updateVoxelStateFromCamera(global_idx, true);
+                    }
                 } 
                 else if (to_type == GridType::KNOWN_FREE) 
                 {

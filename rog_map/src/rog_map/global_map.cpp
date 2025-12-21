@@ -56,7 +56,7 @@ void GlobalMap::updateVoxelStateFromLiDAR(const GlobalVoxelIndex& idx, bool is_o
     {
         old_state = VoxelStateBits::GEO_UNKNOWN;
         voxels_[idx] = old_state;
-        VoxelHelper::updateFromLiDAR(voxels_[idx], is_occupied);
+        VoxelStateBits::updateFromLiDAR(voxels_[idx], is_occupied);
     }
     else
     {
@@ -66,7 +66,7 @@ void GlobalMap::updateVoxelStateFromLiDAR(const GlobalVoxelIndex& idx, bool is_o
         //     current_problem_idx_count_++;
         //     return;
         // }
-        VoxelHelper::updateFromLiDAR(it->second, is_occupied);
+        VoxelStateBits::updateFromLiDAR(it->second, is_occupied);
     }
 
     new_state = voxels_[idx];
@@ -104,6 +104,16 @@ void GlobalMap::updateVoxelStateFromLiDAR(const GlobalVoxelIndex& idx, bool is_o
         sg.free_count++;
     }
 
+}
+
+void GlobalMap::updateVoxelStateFromCamera(const GlobalVoxelIndex& idx, bool is_visited)
+{
+    std::lock_guard<std::mutex> lock(map_mutex_);
+    auto it = voxels_.find(idx);
+    if(it == voxels_.end() || !VoxelStateBits::isOccupied(it->second)) return;
+    if(VoxelStateBits::isVisited(it->second)) return;
+    visited_voxels_.push_back(idx);
+    VoxelStateBits::updateFromCamera(it->second, is_visited);
 }
 
 bool GlobalMap::isFrontier(const Eigen::Vector3f& pos)
@@ -375,7 +385,7 @@ void GlobalMap::getFrontierPointCloud(sensor_msgs::PointCloud2& pc_frontier)
 {
     // 1. 先构建PCL点云容器（可直接操作点）
     pcl::PointCloud<pcl::PointXYZ> pcl_pc;
-    pcl_pc.header.frame_id = "world";
+    pcl_pc.header.frame_id = "map";
     pcl_pc.is_dense = true;
     pcl_pc.points.clear();
 
@@ -405,7 +415,7 @@ void GlobalMap::getAllKnownPointCloud(sensor_msgs::PointCloud2& pc_all_known)
 {
     // 1. 构建PCL点云容器
     pcl::PointCloud<pcl::PointXYZ> pcl_pc;
-    pcl_pc.header.frame_id = "world";
+    pcl_pc.header.frame_id = "map";
     pcl_pc.is_dense = true;
     pcl_pc.points.clear();
 
@@ -484,6 +494,57 @@ void GlobalMap::updateExploredBounds(const GlobalVoxelIndex& idx)
     }
 }
 
+bool GlobalMap::isPointInFrustum(const GlobalVoxelIndex& target_idx)
+{
+    // 1. 获取目标点的物理坐标 (世界坐标系)
+    Eigen::Vector3f target_pos;
+    indexToPos(target_idx, target_pos);
+    
+    return isPointInFrustum(target_pos);
+}
+
+bool GlobalMap::isPointInFrustum(const Eigen::Vector3f& target_pos)
+{
+    // 将点从世界坐标系转换到相机/机体坐标系
+    // P_body = R_world_to_body * (P_world - t_cam)
+    // 其中 R_world_to_body = R_body_to_world.inverse() = current_cam_rot_.inverse()
+    Eigen::Vector3f p_body = current_cam_rot_.inverse() * (target_pos - current_cam_origin_);
+    
+    // 机体坐标系约定 (FLU - Front Left Up):
+    //   x: 前向 (forward)
+    //   y: 左向 (left)  
+    //   z: 上向 (up)
+    // 相机假设固定安装在机体上，朝向机体 x 轴方向
+    float forward_dist = p_body.x(); // 前向距离（深度）
+    float horiz_dev    = p_body.y(); // 水平偏差（左为正）
+    float vert_dev     = p_body.z(); // 垂直偏差（上为正）
+
+    // 1. 必须在相机前方（forward_dist > 0）
+    if (forward_dist <= 0) {
+        return false;
+    }
+    
+    // 2. 距离检查 (Depth Check)
+    if (forward_dist < min_dist_ || forward_dist > max_dist_) {
+        return false;
+    }
+
+    // 3. 水平角度检查 (Horizontal FOV Check)
+    // 利用相似三角形原理: |y| <= x * tan(fov_h / 2)
+    float max_horiz_dev = forward_dist * tan_half_fov_h_;
+    if (std::abs(horiz_dev) > max_horiz_dev) {
+        return false;
+    }
+
+    // 4. 垂直角度检查 (Vertical FOV Check)
+    // |z| <= x * tan(fov_v / 2)
+    float max_vert_dev = forward_dist * tan_half_fov_v_;
+    if (std::abs(vert_dev) > max_vert_dev) {
+        return false;
+    }
+
+    return true;
+}
 void GlobalMap::visualizeGlobalMapVoxels()
 {
     std::lock_guard<std::mutex> lock(map_mutex_);
@@ -548,7 +609,7 @@ void GlobalMap::visualizeGlobalMapVoxels()
             sensor_msgs::PointCloud2 occupied_cloud_msg;
             pcl::toROSMsg(occupied_cloud, occupied_cloud_msg);
             occupied_cloud_msg.header.stamp = ros::Time::now();
-            occupied_cloud_msg.header.frame_id = "world";
+            occupied_cloud_msg.header.frame_id = "map";
             global_map_occupied_pub_.publish(occupied_cloud_msg);
         }
         
@@ -557,7 +618,7 @@ void GlobalMap::visualizeGlobalMapVoxels()
             sensor_msgs::PointCloud2 free_cloud_msg;
             pcl::toROSMsg(free_cloud, free_cloud_msg);
             free_cloud_msg.header.stamp = ros::Time::now();
-            free_cloud_msg.header.frame_id = "world";
+            free_cloud_msg.header.frame_id = "map";
             global_map_free_pub_.publish(free_cloud_msg);
         }
 
@@ -568,7 +629,7 @@ void GlobalMap::visualizeGlobalMapVoxels()
             sensor_msgs::PointCloud2 cloud_msg;
             pcl::toROSMsg(combined_cloud, cloud_msg);
             cloud_msg.header.stamp = ros::Time::now();
-            cloud_msg.header.frame_id = "world";
+            cloud_msg.header.frame_id = "map";
             global_map_voxels_pub_.publish(cloud_msg);
         }
     }
@@ -593,7 +654,7 @@ void GlobalMap::visualizeGlobalMapRange()
 
     // 创建边界框的线段 Marker
     visualization_msgs::Marker range_marker;
-    range_marker.header.frame_id = "world";
+    range_marker.header.frame_id = "map";
     range_marker.header.stamp = ros::Time::now();
     range_marker.ns = "global_map_range";
     range_marker.id = 0;
@@ -647,7 +708,7 @@ void GlobalMap::visualizeGlobalMapRange()
     
     // 添加文本标签 - 全局地图范围（参考局部地图的文本位置设置）
     visualization_msgs::Marker text_marker;
-    text_marker.header.frame_id = "world";
+    text_marker.header.frame_id = "map";
     text_marker.header.stamp = ros::Time::now();
     text_marker.ns = "global_map_range_text";
     text_marker.id = 1;
@@ -675,7 +736,7 @@ void GlobalMap::visualizeGlobalMapRange()
     // 如果已经有探索数据，添加探索范围的文本
     if (is_bound_initialized_) {
         visualization_msgs::Marker explored_text_marker;
-        explored_text_marker.header.frame_id = "world";
+        explored_text_marker.header.frame_id = "map";
         explored_text_marker.header.stamp = ros::Time::now();
         explored_text_marker.ns = "global_map_explored_text";
         explored_text_marker.id = 2;
@@ -738,11 +799,11 @@ void GlobalMap::visualizeGlobalMapFrontier()
         point.b = 0;
         frontier_cloud.push_back(point);
     }
-    // ROS_INFO("Frontier voxels: %d", frontier_cloud.size());
+    ROS_INFO("Frontier voxels: %d", frontier_cloud.size());
     sensor_msgs::PointCloud2 frontier_cloud_msg;
     pcl::toROSMsg(frontier_cloud, frontier_cloud_msg);
     frontier_cloud_msg.header.stamp = ros::Time::now();
-    frontier_cloud_msg.header.frame_id = "world";
+    frontier_cloud_msg.header.frame_id = "map";
     global_map_frontier_pub_.publish(frontier_cloud_msg);
 }
 
@@ -762,7 +823,7 @@ void GlobalMap::visualizeSubGridRange()
     
     // 先发送一个 DELETEALL marker 来清除所有旧的 marker
     visualization_msgs::Marker delete_marker;
-    delete_marker.header.frame_id = "world";
+    delete_marker.header.frame_id = "map";
     delete_marker.header.stamp = ros::Time::now();
     delete_marker.ns = "frontier_subgrid_range";
     delete_marker.id = 0;
@@ -777,7 +838,7 @@ void GlobalMap::visualizeSubGridRange()
         
         // 创建子网格边界框的线段 Marker
         visualization_msgs::Marker grid_marker;
-        grid_marker.header.frame_id = "world";
+        grid_marker.header.frame_id = "map";
         grid_marker.header.stamp = ros::Time::now();
         grid_marker.ns = "frontier_subgrid_range";
         grid_marker.id = marker_id++;
@@ -863,5 +924,129 @@ void GlobalMap::visualizeSubGridRange()
     // ROS_INFO("SubGrid range markers: %d", marker_array.markers.size());
     // 发布所有子网格边界框
     frontier_range_pub_.publish(marker_array);
+}
+
+void GlobalMap::visualizeVisitedVoxels()
+{
+    if(visited_voxels_pub_.getNumSubscribers() == 0 || visited_voxels_.empty())
+    {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(map_mutex_);
+    pcl::PointCloud<pcl::PointXYZRGB> visited_cloud;
+    for(const auto& v_idx : visited_voxels_)
+    {
+        Eigen::Vector3f pos;
+        indexToPos(v_idx, pos);
+        pcl::PointXYZRGB point;
+        point.x = pos.x();
+        point.y = pos.y();
+        point.z = pos.z();
+        point.r = 0;
+        point.g = 0;
+        point.b = 255;
+        visited_cloud.push_back(point);
+    }
+
+    sensor_msgs::PointCloud2 visited_cloud_msg;
+    pcl::toROSMsg(visited_cloud, visited_cloud_msg);
+    visited_cloud_msg.header.stamp = ros::Time::now();
+    visited_cloud_msg.header.frame_id = "map";
+    visited_voxels_pub_.publish(visited_cloud_msg);
+
+}
+
+void GlobalMap::visualizeCameraFrustum()
+{
+    // 1. 基础检查：如果没有订阅者，直接返回节省算力
+    if(camera_frustum_pub_.getNumSubscribers() == 0)
+    {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(map_mutex_);
+
+    // 2. 直接使用成员变量计算局部尺寸 (无需重复计算 tan)
+    // 假设成员变量命名为: tan_half_fov_h_, tan_half_fov_v_, min_dist_, max_dist_
+    float h_near = min_dist_ * tan_half_fov_h_; // 近平面半宽
+    float v_near = min_dist_ * tan_half_fov_v_; // 近平面半高
+    float h_far  = max_dist_ * tan_half_fov_h_; // 远平面半宽
+    float v_far  = max_dist_ * tan_half_fov_v_; // 远平面半高
+
+    // 3. 定义局部坐标系下的关键点 (8个角点)
+    // 坐标系假设: X向前(Forward), Y向左(Left), Z向上(Up)
+    std::vector<Eigen::Vector3f> local_pts = {
+        // 近平面 (Near Plane) - 0,1,2,3
+        {min_dist_,  h_near,  v_near}, // 左上
+        {min_dist_, -h_near,  v_near}, // 右上
+        {min_dist_, -h_near, -v_near}, // 右下
+        {min_dist_,  h_near, -v_near}, // 左下
+        // 远平面 (Far Plane) - 4,5,6,7
+        {max_dist_,  h_far,  v_far},   // 左上
+        {max_dist_, -h_far,  v_far},   // 右上
+        {max_dist_, -h_far, -v_far},   // 右下
+        {max_dist_,  h_far, -v_far}    // 左下
+    };
+
+    // 4. 坐标变换 (Local -> World) 并转换为 ROS Point
+    std::vector<geometry_msgs::Point> world_pts(8);
+    geometry_msgs::Point cam_origin_pt;
+    
+    // 相机原点
+    cam_origin_pt.x = current_cam_origin_.x();
+    cam_origin_pt.y = current_cam_origin_.y();
+    cam_origin_pt.z = current_cam_origin_.z();
+
+    for(int i=0; i<8; ++i) {
+        // P_world = T_world_cam * P_local
+        // 利用成员变量 current_cam_origin_ 和 current_cam_rot_
+        Eigen::Vector3f p_w = current_cam_origin_ + current_cam_rot_ * local_pts[i];
+        world_pts[i].x = p_w.x();
+        world_pts[i].y = p_w.y();
+        world_pts[i].z = p_w.z();
+    }
+
+    // 5. 构建 Visualization Marker
+    visualization_msgs::MarkerArray marker_array;
+    visualization_msgs::Marker frustum_marker;
+    
+    frustum_marker.header.frame_id = "map";
+    frustum_marker.header.stamp = ros::Time::now();
+    frustum_marker.ns = "camera_frustum";
+    frustum_marker.id = 0;
+    frustum_marker.type = visualization_msgs::Marker::LINE_LIST;
+    frustum_marker.action = visualization_msgs::Marker::ADD;
+    
+    // Pose 设为单位阵，因为点已经是世界坐标
+    frustum_marker.pose.orientation.w = 1.0;
+    frustum_marker.scale.x = 0.1f; // 线宽
+    
+    // 颜色设置 (青色，半透明)
+    frustum_marker.color.r = 0.0f;
+    frustum_marker.color.g = 0.8f;
+    frustum_marker.color.b = 1.0f;
+    frustum_marker.color.a = 0.8f;
+    frustum_marker.lifetime = ros::Duration(0);
+
+    // 6. 添加连线 (LINE_LIST 模式)
+    auto add_line = [&](const geometry_msgs::Point& p1, const geometry_msgs::Point& p2) {
+        frustum_marker.points.push_back(p1);
+        frustum_marker.points.push_back(p2);
+    };
+
+    // A. 近平面矩形 (0-1-2-3-0)
+    for(int i=0; i<4; ++i) add_line(world_pts[i], world_pts[(i+1)%4]);
+
+    // B. 远平面矩形 (4-5-6-7-4)
+    for(int i=0; i<4; ++i) add_line(world_pts[4+i], world_pts[4 + (i+1)%4]);
+
+    // C. 连接棱 (0-4, 1-5, 2-6, 3-7)
+    for(int i=0; i<4; ++i) add_line(world_pts[i], world_pts[i+4]);
+
+    // D. 原点连线 (Origin -> Near Plane)
+    for(int i=0; i<4; ++i) add_line(cam_origin_pt, world_pts[i]);
+
+    marker_array.markers.push_back(frustum_marker);
+    camera_frustum_pub_.publish(marker_array);
 }
 }

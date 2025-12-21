@@ -37,6 +37,30 @@ namespace rog_map {
         double getResolution()const {
             return sc_.resolution;
         }
+        
+        // const std::vector<Eigen::Vector3d>& getObstacleSurfacePoints() const {
+        //     return obstacle_surface_points_;
+        // }
+
+        // size_t getSurfacePointCount() const {
+        //     return obstacle_surface_points_.size();
+        // }
+
+        // void invalidateSurfacePoints() {
+        //     surface_points_valid_ = false;
+        // }
+        // bool isSurfaceVoxel(const Vec3i& idx) const;
+        // void updateSurfacePointIncremental(const Vec3i& idx, bool is_occupied);
+        // void rebuildSurfacePoints();
+        // int64_t voxelIndexToHash(const Vec3i& idx) const {
+        //     return static_cast<int64_t>(idx.x()) * 1000000000LL + 
+        //            static_cast<int64_t>(idx.y()) * 1000000LL + 
+        //            static_cast<int64_t>(idx.z());
+        // }
+
+        // std::vector<Eigen::Vector3d> obstacle_surface_points_;
+        // std::unordered_set<int64_t> surface_point_indices_;
+        // bool surface_points_valid_ = false;
 
         bool isOccupiedInflate(const Vec3f &pos) const;
 

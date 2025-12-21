@@ -180,7 +180,8 @@ namespace rog_map {
         }
     }
 
-    void InfMap::updateInflation(const Vec3i &id_g, const bool is_hit) {
+    void InfMap::updateInflation(const Vec3i &id_g, const bool is_hit) 
+    {
         TimeConsuming tc("updateInflation", false);
         for (const auto &nei: cfg_.spherical_neighbor) {
             const Vec3i &id_shift = id_g + nei;
@@ -246,7 +247,8 @@ namespace rog_map {
     void InfMap::triggerJumpingEdge(const rog_map::Vec3i& id_g,
         const rog_map::GridType& from_type,
         const rog_map::GridType& to_type) {
-        if (from_type == GridType::OCCUPIED) {
+        if (from_type == GridType::OCCUPIED) 
+        {
             updateInflation(id_g, false);
         }
         if (to_type == GridType::OCCUPIED) {

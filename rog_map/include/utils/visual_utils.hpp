@@ -98,7 +98,7 @@ namespace rog_map {
                               const double &size,
                               const int &id = -1) {
         visualization_msgs::Marker marker;
-        marker.header.frame_id = "world";
+        marker.header.frame_id = "map";
         marker.header.stamp = ros::Time::now();
         marker.action = visualization_msgs::Marker::ADD;
         marker.pose.orientation.w = 1.0;
@@ -135,7 +135,7 @@ namespace rog_map {
         if (isnan(pt.x()) || isnan(pt.y()) || isnan(pt.z())) {
             return;
         }
-        marker_ball.header.frame_id = "world";
+        marker_ball.header.frame_id = "map";
         marker_ball.header.stamp = ros::Time::now();
         marker_ball.ns = ns.c_str();
         marker_ball.id = id >= 0 ? id : cnt++;
@@ -158,7 +158,7 @@ namespace rog_map {
         // add test
         if (print_ns) {
             visualization_msgs::Marker marker;
-            marker.header.frame_id = "world";
+            marker.header.frame_id = "map";
             marker.header.stamp = ros::Time::now();
             marker.action = visualization_msgs::Marker::ADD;
             marker.pose.orientation.w = 1.0;
@@ -201,7 +201,7 @@ namespace rog_map {
         int id = 0;
         visualization_msgs::Marker line_strip;
         line_strip.header.stamp = ros::Time::now();
-        line_strip.header.frame_id = "world";
+        line_strip.header.frame_id = "map";
         line_strip.action = visualization_msgs::Marker::ADD;
         line_strip.ns = ns;
         line_strip.pose.orientation.w = 1.0;
@@ -266,7 +266,7 @@ namespace rog_map {
                               const double &size = 0.6,
                               const int &id = -1) {
         visualization_msgs::Marker marker;
-        marker.header.frame_id = "world";
+        marker.header.frame_id = "map";
         marker.header.stamp = ros::Time::now();
         marker.action = visualization_msgs::Marker::ADD;
         marker.pose.orientation.w = 1.0;
@@ -300,7 +300,7 @@ namespace rog_map {
         if (isnan(pt.x()) || isnan(pt.y()) || isnan(pt.z())) {
             return;
         }
-        marker_ball.header.frame_id = "world";
+        marker_ball.header.frame_id = "map";
         marker_ball.header.stamp = ros::Time::now();
         marker_ball.ns = ns.c_str();
         marker_ball.id = id >= 0 ? id : cnt++;
@@ -323,7 +323,7 @@ namespace rog_map {
         // add test
         if (print_ns) {
             visualization_msgs::Marker marker;
-            marker.header.frame_id = "world";
+            marker.header.frame_id = "map";
             marker.header.stamp = ros::Time::now();
             marker.action = visualization_msgs::Marker::ADD;
             marker.pose.orientation.w = 1.0;
@@ -364,7 +364,7 @@ namespace rog_map {
         int id = 0;
         visualization_msgs::Marker line_strip;
         line_strip.header.stamp = ros::Time::now();
-        line_strip.header.frame_id = "world";
+        line_strip.header.frame_id = "map";
         line_strip.action = visualization_msgs::Marker::ADD;
         line_strip.ns = ns;
         line_strip.pose.orientation.w = 1.0;

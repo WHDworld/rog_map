@@ -1,0 +1,4 @@
+<launch>
+    <node name="fpv" pkg="rviz" type="rviz" output="log"
+          args="-d $(find test_interface)/config/fpv.rviz"/>
+</launch>

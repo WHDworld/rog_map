@@ -65,7 +65,9 @@ namespace rog_map {
         void updateMap(const PointCloud &cloud, const Pose &pose);
 
         RobotState getRobotState() const;
-
+        
+        pcl::PointCloud<pcl::PointXYZ> inf_occ_map_pcl;
+        int inf_occ_map_pcl_size = 0;
     private:
         ros::NodeHandle nh_;
 
@@ -106,7 +108,7 @@ namespace rog_map {
         void updateCallback(const ros::TimerEvent &event);
 
         static void vecEVec3fToPC2(const vec_E<Vec3f> &points, sensor_msgs::PointCloud2 &cloud);
-
+        static void vecEVec3fToPC2(const vec_E<Vec3f> &points, pcl::PointCloud<pcl::PointXYZ> &cloud);
         void vizCallback(const ros::TimerEvent &event);
 
         void VizCfgCallback(rog_map::VizConfig &config, uint32_t level);

@@ -88,6 +88,23 @@ namespace rog_map {
             return inf_map_->getResolution();
         }
 
+        /**
+         * @brief 获取 ESDF 距离（到最近障碍物的符号距离）
+         * @param pos 查询位置
+         * @return ESDF 距离，正值表示自由空间，负值表示在障碍物内部
+         */
+        double getESDFDistance(const Vec3f &pos) const {
+            if (!cfg_.esdf_en || !esdf_map_) return 0.0;
+            return esdf_map_->getDistance(pos);
+        }
+
+        /**
+         * @brief 检查 ESDF 是否启用
+         */
+        bool isESDFEnabled() const {
+            return cfg_.esdf_en && esdf_map_ != nullptr;
+        }
+
         void updateOccPointCloud(const PointCloud &input_cloud);
 
         void writeTimeConsumingToLog(std::ofstream &log_file);

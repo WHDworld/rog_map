@@ -92,7 +92,8 @@ ROGMap::ROGMap(const ros::NodeHandle& nh) :nh_(nh) {
 
     writeMapInfoToLog(map_info_log_file_);
     map_info_log_file_.close();
-    for (int i = 0; i < time_consuming_name_.size(); i++) {
+    for (int i = 0; i < time_consuming_name_.size(); i++) 
+    {
         time_log_file_ << time_consuming_name_[i];
         if (i != time_consuming_name_.size() - 1) {
             time_log_file_ << ", ";
@@ -258,6 +259,14 @@ void ROGMap::updateRobotState(const Pose& pose) {
     robot_state_.rcv_time = ros::Time::now().toSec();
     robot_state_.rcv = true;
     robot_state_.yaw = get_yaw_from_quaternion<double>(pose.second);
+    if(cfg_.enable_global_map_)
+    {
+        if(global_map_->enable_camera_map_)
+        {
+            global_map_->current_cam_origin_ = pose.first.cast<float>();
+            global_map_->current_cam_rot_ = pose.second.cast<float>();
+        }
+    }
     updateLocalBox(pose.first);
 }
 
@@ -269,11 +278,10 @@ void ROGMap::odomCallback(const nav_msgs::OdometryConstPtr& odom_msg) {
         Quatf(odom_msg->pose.pose.orientation.w, odom_msg->pose.pose.orientation.x,
               odom_msg->pose.pose.orientation.y, odom_msg->pose.pose.orientation.z)));
 
-
     static tf2_ros::TransformBroadcaster br_map_ego;
     geometry_msgs::TransformStamped transformStamped;
     transformStamped.header.stamp = ros::Time::now();
-    transformStamped.header.frame_id = "world";
+    transformStamped.header.frame_id = "map";
     transformStamped.child_frame_id = "drone";
     transformStamped.transform.translation.x = odom_msg->pose.pose.position.x;
     transformStamped.transform.translation.y = odom_msg->pose.pose.position.y;
@@ -349,7 +357,18 @@ void ROGMap::vecEVec3fToPC2(const vec_E<Vec3f>& points, sensor_msgs::PointCloud2
     }
     pcl::toROSMsg(pcl_cloud, cloud);
     cloud.header.stamp = ros::Time::now();
-    cloud.header.frame_id = "world";
+    cloud.header.frame_id = "map";
+}
+
+void ROGMap::vecEVec3fToPC2(const vec_E<Vec3f>& points, pcl::PointCloud<pcl::PointXYZ>& cloud) {
+    // 设置header信息
+    cloud.clear();
+    cloud.resize(points.size());
+    for (long unsigned int i = 0; i < points.size(); i++) {
+        cloud[i].x = static_cast<float>(points[i][0]);
+        cloud[i].y = static_cast<float>(points[i][1]);
+        cloud[i].z = static_cast<float>(points[i][2]);
+    }
 }
 
 void ROGMap::vizCallback(const ros::TimerEvent& event) {
@@ -416,12 +435,20 @@ void ROGMap::vizCallback(const ros::TimerEvent& event) {
         vm_.occ_pub.publish(cloud_msg);
     }
 
-    if (vm_.occ_inf_pub.getNumSubscribers() >= 1) {
-        boxSearchInflate(box_min, box_max, OCCUPIED, inf_occ_map);
-        vecEVec3fToPC2(inf_occ_map, cloud_msg);
-        cloud_msg.header.stamp = ros::Time::now();
-        vm_.occ_inf_pub.publish(cloud_msg);
-    }
+    // if (vm_.occ_inf_pub.getNumSubscribers() >= 1) {
+    //     boxSearchInflate(box_min, box_max, OCCUPIED, inf_occ_map);
+    //     vecEVec3fToPC2(inf_occ_map, cloud_msg);
+    //     cloud_msg.header.stamp = ros::Time::now();
+    //     vm_.occ_inf_pub.publish(cloud_msg);
+    // }
+
+    boxSearchInflate(box_min, box_max, OCCUPIED, inf_occ_map);
+    vecEVec3fToPC2(inf_occ_map, inf_occ_map_pcl);
+    pcl::toROSMsg(inf_occ_map_pcl, cloud_msg);
+    cloud_msg.header.frame_id = "map";
+    cloud_msg.header.stamp = ros::Time::now();
+    vm_.occ_inf_pub.publish(cloud_msg);
+
 
     /* visualize ESDF Map*/
     if (cfg_.esdf_en) {
@@ -489,6 +516,11 @@ void ROGMap::vizCallback(const ros::TimerEvent& event) {
         global_map_->visualizeGlobalMapRange();
         global_map_->visualizeGlobalMapFrontier();
         global_map_->visualizeSubGridRange();
+        if(global_map_->enable_camera_map_)
+        {
+            global_map_->visualizeVisitedVoxels();
+            global_map_->visualizeCameraFrustum();
+        }
     }
 
 }

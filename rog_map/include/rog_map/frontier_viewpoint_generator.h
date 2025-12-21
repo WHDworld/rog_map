@@ -1,9 +1,13 @@
 // frontier_viewpoint_generator.h
+// 前端视点生成器 - 基于EDEN的EROI视点生成算法
+// 功能：从输入的前沿子区域生成探索视点，并规划区域探索顺序
+
 #ifndef FRONTIER_VIEWPOINT_GENERATOR_H
 #define FRONTIER_VIEWPOINT_GENERATOR_H
 
 #include <ros/ros.h>
 #include <Eigen/Dense>
+#include <Eigen/Eigenvalues>
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
@@ -11,6 +15,7 @@
 #include <cmath>
 #include <algorithm>
 #include <mutex>
+#include <list>
 
 #include "rog_map/global_map.h"
 
@@ -20,647 +25,306 @@ namespace rog_map {
 constexpr float PI = 3.14159265358979323846f;
 constexpr float TWO_PI = 2.0f * PI;
 
-// ==================== 数据结构定义 ====================
+// ==================== 核心数据结构 ====================
+
+/**
+ * @brief 前视簇结构
+ * 
+ * 前视簇是对前视体素的聚类结果，可能需要分裂
+ */
+struct FrontierCluster {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    
+    std::vector<GlobalVoxelIndex> voxel_indices;  // 簇内体素索引
+    Eigen::Vector3f centroid;            // 簇中心位置
+    Eigen::Vector3f normal;              // 簇法向量（指向已知区域）
+    Eigen::Vector3f principal_axis;      // 主轴方向（PCA最大特征值方向）
+    float extent;                        // 簇的范围（最大特征值的平方根）
+    int cluster_id;                      // 簇ID
+    int parent_region_id;                // 所属探索区域ID
+    bool needs_split;                    // 是否需要分裂
+    
+    FrontierCluster()
+        : centroid(Eigen::Vector3f::Zero())
+        , normal(Eigen::Vector3f::UnitZ())
+        , principal_axis(Eigen::Vector3f::UnitX())
+        , extent(0.0f)
+        , cluster_id(-1)
+        , parent_region_id(-1)
+        , needs_split(false)
+    {}
+    
+    int size() const { return static_cast<int>(voxel_indices.size()); }
+};
 
 /**
  * @brief 5-DOF探索视点结构
- * @note EDEN策略：视点用于观测EROI内的未知区域，不依赖frontier点
  */
 struct ExplorationViewpoint {
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     
-    // 基本属性
     Eigen::Vector3f position;           // 3D位置
     float yaw;                          // 偏航角 [-π, π)
     float pitch;                        // 俯仰角 [-π/2, π/2]
-    int subgrid_id;                     // 所属子网格(EROI)线性索引
     
-    // 评分指标
-    float exploration_gain;             // 探索信息增益
-    float motion_cost;                  // 运动成本（时间）
-    float curvature;                    // 到达该点的轨迹曲率
-    float virtual_velocity;             // 曲率惩罚后的虚拟速度
+    int region_id;                      // 所属探索区域ID
+    int cluster_id;                     // 目标前视簇ID
+    
+    // 评分
     float total_score;                  // 综合评分
+    int visible_frontier_count;         // 可见前视体素数
     
-    // 可见性信息（EDEN：只关注未知体素，不依赖frontier）
-    int visible_unknown_count;          // 可观测的未知体素数
-    int covered_voxels_count;           // 总覆盖体素数（未知区域）
+    // 覆盖信息（用于集合覆盖）
+    std::vector<int> covered_cluster_ids;  // 可覆盖的簇ID列表
     
-    // 状态标记
-    bool is_valid;                      // 是否为有效视点
-    bool is_active;                     // 引力模型中是否活跃
-    
-    // 连接信息
-    std::vector<int> visible_viewpoint_indices;  // 可见的其他视点索引
+    bool is_valid;
     
     ExplorationViewpoint() 
         : position(Eigen::Vector3f::Zero())
-        , yaw(0.0f)
-        , pitch(0.0f)
-        , subgrid_id(-1)
-        , exploration_gain(0.0f)
-        , motion_cost(0.0f)
-        , curvature(0.0f)
-        , virtual_velocity(0.0f)
+        , yaw(0.0f), pitch(0.0f)
+        , region_id(-1), cluster_id(-1)
         , total_score(0.0f)
-        , visible_unknown_count(0)
-        , covered_voxels_count(0)
+        , visible_frontier_count(0)
         , is_valid(false)
-        , is_active(true)
     {}
 };
 
 /**
- * @brief 视点对结构（探索视点 + 连续视点）
+ * @brief 探索区域块（由一个或多个子网格合并而成）
  */
-struct ViewpointPair {
-    ExplorationViewpoint vp_explore;    // 探索视点
-    ExplorationViewpoint vp_continuous; // 连续视点
-    float explore_cost;                 // 探索成本
-    float continuous_cost;              // 连续成本
-    float pair_score;                   // 视点对评分
-    bool is_feasible;                   // 连线是否可行（无障碍）
-    
-    ViewpointPair()
-        : explore_cost(0.0f)
-        , continuous_cost(0.0f)
-        , pair_score(0.0f)
-        , is_feasible(false)
-    {}
-};
-
-/**
- * @brief 三视点组合结构（探索 + 连续 + 安全）
- */
-struct ViewpointTriplet {
-    ExplorationViewpoint vp_e;          // 探索视点
-    ExplorationViewpoint vp_c;          // 连续视点
-    ExplorationViewpoint vp_s;          // 安全视点
-    float triplet_score;                // 组合评分
-    
-    ViewpointTriplet()
-        : triplet_score(0.0f)
-    {}
-};
-
-/**
- * @brief 骨架点结构（基于FC-Planner思想）
- */
-struct SkeletonPoint {
+struct ExplorationRegion {
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     
-    Eigen::Vector3f position;           // 骨架点位置
-    float distance_to_boundary;         // 到边界的距离
-    std::vector<int> neighbor_indices;  // 相邻骨架点索引
-    bool is_junction;                   // 是否为分支节点
+    int region_id;                                    // 区域ID
+    std::vector<int> subgrid_ids;                     // 包含的子网格ID
+    Eigen::Vector3f centroid;                         // 区域中心
     
-    SkeletonPoint()
-        : position(Eigen::Vector3f::Zero())
-        , distance_to_boundary(0.0f)
-        , is_junction(false)
+    std::vector<FrontierCluster> clusters;            // 区域内的前视簇
+    std::vector<ExplorationViewpoint> viewpoints;     // 区域内的探索视点
+    
+    float total_frontier_area;                        // 总前视面积
+    float exploration_priority;                       // 探索优先级
+    
+    ExplorationRegion()
+        : region_id(-1)
+        , centroid(Eigen::Vector3f::Zero())
+        , total_frontier_area(0.0f)
+        , exploration_priority(0.0f)
     {}
 };
 
 /**
- * @brief 自由空间骨架结构
+ * @brief 区域路由节点
  */
-struct FreeSpaceSkeleton {
-    std::vector<SkeletonPoint> points;  // 骨架点集合
-    std::vector<std::pair<int, int>> edges;  // 骨架边（连接关系）
-    bool is_valid;                      // 骨架是否有效
+struct RegionRouteNode {
+    int region_id;                  // 区域ID
+    float distance_from_uav;        // 距离UAV当前位置的路径长度
+    float exploration_gain;         // 探索收益
+    float route_score;              // 路由评分
+    int visit_order;                // 访问顺序（-1表示未分配）
     
-    FreeSpaceSkeleton() : is_valid(false) {}
-    
-    void clear() {
-        points.clear();
-        edges.clear();
-        is_valid = false;
-    }
-};
-
-/**
- * @brief 视点生成器参数配置
- */
-struct ViewpointGeneratorConfig {
-    // 传感器参数
-    float sensor_range_min;             // 传感器最小有效距离 (m)
-    float sensor_range_max;             // 传感器最大有效距离 (m)
-    float sensor_fov_h;                 // 水平FOV (rad)
-    float sensor_fov_v;                 // 垂直FOV (rad)
-    float optimal_viewing_distance;     // 最佳观测距离 (m)
-    
-    // 运动约束
-    float max_velocity;                 // 最大线速度 (m/s)
-    float max_acceleration;             // 最大加速度 (m/s²)
-    float max_yaw_rate;                 // 最大偏航角速度 (rad/s)
-    float uav_radius;                   // 无人机碰撞半径 (m)
-    
-    // 视点采样参数
-    float sampling_resolution;          // 采样分辨率 (m)
-    int max_viewpoints_per_subgrid;     // 每个子网格最大视点数
-    float min_viewpoint_distance;       // 视点最小间距 (m)
-    
-    // 曲率惩罚参数
-    float curvature_penalty_lambda;     // 曲率惩罚系数 λ_a
-    float anchor_time;                  // 锚点时间参数 (s)
-    
-    // 评分参数
-    float exploration_weight_lambda;    // 探索-连续权重 λ_e
-    float gain_weight;                  // 信息增益权重
-    float cost_weight;                  // 成本权重
-    
-    // 引力模型参数
-    float gravitation_radius_factor;    // 引力半径因子
-    int max_gravitation_iterations;     // 最大引力迭代次数
-    float merge_distance_threshold;     // 合并距离阈值 (m)
-    
-    // 安全参数
-    float safety_margin;                // 安全边距 (m)
-    float min_esdf_distance;            // 最小ESDF距离 (m)
-    
-    // 骨架引导采样参数（基于FC-Planner）
-    bool enable_skeleton_sampling;      // 是否启用骨架引导采样
-    float skeleton_distance_threshold;  // 骨架点最小边界距离阈值 (m)
-    int min_skeleton_points;            // 最少骨架点数
-    float skeleton_sampling_offset;     // 骨架采样偏移距离 (m)
-    
-    // 默认构造函数
-    ViewpointGeneratorConfig()
-        : sensor_range_min(0.3f)
-        , sensor_range_max(5.0f)
-        , sensor_fov_h(1.57f)           // 90°
-        , sensor_fov_v(1.22f)           // 70°
-        , optimal_viewing_distance(3.0f)
-        , max_velocity(2.0f)
-        , max_acceleration(3.0f)
-        , max_yaw_rate(1.57f)           // 90°/s
-        , uav_radius(0.35f)
-        , sampling_resolution(0.5f)
-        , max_viewpoints_per_subgrid(30)
-        , min_viewpoint_distance(0.5f)
-        , curvature_penalty_lambda(0.6f)
-        , anchor_time(1.0f)
-        , exploration_weight_lambda(0.3f)
-        , gain_weight(1.0f)
-        , cost_weight(1.0f)
-        , gravitation_radius_factor(2.0f)
-        , max_gravitation_iterations(50)
-        , merge_distance_threshold(0.3f)
-        , safety_margin(0.2f)
-        , min_esdf_distance(0.3f)
-        , enable_skeleton_sampling(true)
-        , skeleton_distance_threshold(0.5f)
-        , min_skeleton_points(3)
-        , skeleton_sampling_offset(1.0f)
+    RegionRouteNode()
+        : region_id(-1)
+        , distance_from_uav(std::numeric_limits<float>::max())
+        , exploration_gain(0.0f)
+        , route_score(0.0f)
+        , visit_order(-1)
     {}
 };
 
 /**
- * @brief UAV状态结构
+ * @brief UAV状态
  */
 struct UAVState {
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     
-    Eigen::Vector3f position;           // 当前位置
-    Eigen::Vector3f velocity;           // 当前速度
-    Eigen::Vector3f acceleration;       // 当前加速度
-    float yaw;                          // 当前偏航角
-    float yaw_rate;                     // 当前偏航角速度
+    Eigen::Vector3f position;
+    Eigen::Vector3f velocity;
+    float yaw;
     
     UAVState()
         : position(Eigen::Vector3f::Zero())
         , velocity(Eigen::Vector3f::Zero())
-        , acceleration(Eigen::Vector3f::Zero())
         , yaw(0.0f)
-        , yaw_rate(0.0f)
     {}
+};
+
+/**
+ * @brief 视点生成器配置参数
+ */
+struct ViewpointGeneratorConfig {
+    // 传感器参数
+    float sensor_range_min = 0.3f;
+    float sensor_range_max = 5.0f;
+    float sensor_fov_h = 1.57f;           // 90°
+    float sensor_fov_v = 1.22f;           // 70°
+    float optimal_viewing_distance = 3.0f;
+    
+    // 无人机参数
+    float uav_radius = 0.35f;
+    float safety_margin = 0.2f;
+    float max_velocity = 2.0f;
+    
+    // 采样参数
+    int sampling_step = 4;
+    int max_viewpoints_per_region = 20;
+    float min_viewpoint_distance = 0.5f;
+    
+    // 前视簇参数
+    int min_cluster_size = 10;
+    int max_clusters_per_region = 15;
+    float cluster_split_threshold = 3.0f;  // 超过此距离需要分裂(m)
+    int absolute_noise_threshold = 5;
+    float obstacle_ratio_threshold = 0.7f;
+    
+    // 覆盖评分参数
+    float min_coverage_score = 0.1f;
+    float max_viewing_angle = 0.785f;     // 45°
+    
+    // 路由参数
+    float exploration_weight = 0.6f;      // 探索收益权重
+    float distance_weight = 0.4f;         // 距离权重
 };
 
 // ==================== 主类定义 ====================
 
 /**
- * @brief 基于EDEN的EROI视点生成器
- * 
- * 重要说明：
- * - 类名保留"Frontier"是历史原因，实际实现采用EDEN策略
- * - EDEN策略：不依赖传统Frontier点，在EROI自由空间内直接采样
+ * @brief 前端视点生成器
  * 
  * 主要功能：
- * 1. 在EROI(SubGrid)的自由空间内采样候选视点（不依赖frontier！）
- * 2. 使用Dijkstra验证视点可达性
- * 3. 使用曲率惩罚评估运动成本
- * 4. 选择探索-连续-安全视点组合
+ * 1. 从输入的前沿子区域ID生成探索区域块
+ * 2. 对每个区域进行前视簇聚类和分裂
+ * 3. 生成覆盖所有前视簇的最小视点集
+ * 4. 规划区域探索顺序
  */
 class FrontierViewpointGenerator {
 public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     typedef std::shared_ptr<FrontierViewpointGenerator> Ptr;
     
-    /**
-     * @brief 构造函数
-     * @param global_map 全局地图指针
-     * @param config 配置参数
-     */
-    FrontierViewpointGenerator(rog_map::GlobalMap::Ptr global_map, 
+    FrontierViewpointGenerator(GlobalMap::Ptr global_map, 
                                const ViewpointGeneratorConfig& config);
-    
-    /**
-     * @brief 默认析构函数
-     */
     ~FrontierViewpointGenerator() = default;
     
     // ==================== 核心接口 ====================
     
     /**
      * @brief 更新UAV状态
-     * @param state 新的UAV状态
      */
     void updateUAVState(const UAVState& state);
     
     /**
-     * @brief 从指定子网格集合生成候选视点
-     * @param subgrid_indices 子网格索引集合
-     * @param candidate_viewpoints 输出的候选视点
-     */
-    void generateCandidateViewpoints(
-        const std::unordered_set<int>& subgrid_indices,
-        std::vector<ExplorationViewpoint>& candidate_viewpoints);
-    
-    /**
-     * @brief 从首个路由区域生成候选视点（EDEN风格）
-     * @param first_region_subgrid_id 首个路由区域的子网格ID
-     * @param candidate_viewpoints 输出的候选视点
-     */
-    void generateCandidateViewpointsForRegion(
-        int first_region_subgrid_id,
-        std::vector<ExplorationViewpoint>& candidate_viewpoints);
-    
-    /**
-     * @brief 评估所有候选视点并计算评分
-     * @param candidate_viewpoints 候选视点（会被修改以填充评分）
-     */
-    void evaluateViewpoints(std::vector<ExplorationViewpoint>& candidate_viewpoints);
-    
-    /**
-     * @brief 使用引力模型优化视点分布
-     * @param viewpoints 视点集合（会被修改）
-     */
-    void applyGravitationModel(std::vector<ExplorationViewpoint>& viewpoints);
-    
-    /**
-     * @brief 选择最优视点对（探索视点 + 连续视点）
-     * @param candidate_viewpoints 候选视点集合
-     * @param best_pair 输出的最优视点对
-     * @return 是否找到有效的视点对
-     */
-    bool selectBestViewpointPair(
-        const std::vector<ExplorationViewpoint>& candidate_viewpoints,
-        ViewpointPair& best_pair);
-    
-    /**
-     * @brief 选择最优三视点组合（探索 + 连续 + 安全）
-     * @param candidate_viewpoints 候选视点集合
-     * @param best_triplet 输出的最优三视点组合
-     * @return 是否找到有效的三视点组合
-     */
-    bool selectBestViewpointTriplet(
-        const std::vector<ExplorationViewpoint>& candidate_viewpoints,
-        ViewpointTriplet& best_triplet);
-    
-    /**
-     * @brief 一站式接口：生成并选择最优视点组合
-     * @param frontier_subgrids 包含frontier的子网格索引
-     * @param best_triplet 输出的最优三视点组合
+     * @brief 主入口：从子区域ID生成探索视点和区域路由
+     * 
+     * @param subgrid_ids 前沿子区域ID列表
+     * @param regions 输出的探索区域（含视点）
+     * @param route 输出的区域访问顺序
      * @return 是否成功
      */
-    bool generateAndSelectViewpoints(
-        const std::unordered_set<int>& frontier_subgrids,
-        ViewpointTriplet& best_triplet);
+    bool generateExplorationPlan(
+        const std::vector<int>& subgrid_ids,
+        std::vector<ExplorationRegion>& regions,
+        std::vector<int>& route);
+    
+    /**
+     * @brief 获取首个区域的探索视点（用于立即执行）
+     */
+    bool getFirstRegionViewpoints(
+        std::vector<ExplorationViewpoint>& viewpoints);
     
     // ==================== 查询接口 ====================
     
-    /**
-     * @brief 获取当前所有候选视点
-     */
-    const std::vector<ExplorationViewpoint>& getCandidateViewpoints() const {
-        return candidate_viewpoints_;
-    }
-    
-    /**
-     * @brief 获取优化后的视点
-     */
-    const std::vector<ExplorationViewpoint>& getOptimizedViewpoints() const {
-        return optimized_viewpoints_;
-    }
-    
-    /**
-     * @brief 获取配置参数
-     */
-    const ViewpointGeneratorConfig& getConfig() const {
-        return config_;
-    }
-    
-    /**
-     * @brief 设置配置参数
-     */
-    void setConfig(const ViewpointGeneratorConfig& config) {
-        config_ = config;
-    }
+    const std::vector<ExplorationRegion>& getRegions() const { return regions_; }
+    const std::vector<int>& getRoute() const { return route_; }
+    const ViewpointGeneratorConfig& getConfig() const { return config_; }
+    void setConfig(const ViewpointGeneratorConfig& config) { config_ = config; }
 
 private:
-    // ==================== 私有成员函数 ====================
-    
-    // --- 视点采样相关（基于EDEN的EROI自由空间采样） ---
+    // ==================== 核心算法 ====================
     
     /**
-     * @brief 从单个子网格(EROI)的自由空间生成候选视点
-     * @param subgrid_id 子网格线性索引
-     * @param viewpoints 输出视点
-     * @note EDEN策略：在EROI的自由空间内直接采样，不依赖frontier
+     * @brief Step 1: 将子区域划分为探索区域块
      */
-    void generateViewpointsFromSubGrid(
-        int subgrid_id, 
-        std::vector<ExplorationViewpoint>& viewpoints);
+    void partitionIntoRegions(
+        const std::vector<int>& subgrid_ids,
+        std::vector<ExplorationRegion>& regions);
     
     /**
-     * @brief 在EROI的自由空间内均匀采样候选位置
-     * @param subgrid 子网格引用
-     * @param sample_positions 输出的采样位置
-     * @note EDEN核心策略：不从frontier采样，而是在自由空间内直接采样
+     * @brief Step 2: 对区域内的前视体素进行聚类
      */
-    void sampleFreeSpaceInEROI(
-        const rog_map::SubGrid& subgrid,
-        std::vector<Eigen::Vector3f>& sample_positions);
-    
-    // --- 骨架引导采样相关（基于FC-Planner思想） ---
+    void clusterFrontiersInRegion(ExplorationRegion& region);
     
     /**
-     * @brief 从EROI的自由空间提取拓扑骨架
-     * @param subgrid 子网格引用
-     * @param skeleton 输出的骨架结构
-     * @note 基于距离场的中轴提取方法
+     * @brief Step 3: 对大簇进行PCA分裂
+     * @return 是否进行了分裂
      */
-    void extractFreeSpaceSkeleton(
-        const rog_map::SubGrid& subgrid,
-        FreeSpaceSkeleton& skeleton);
+    bool splitLargeClusters(std::vector<FrontierCluster>& clusters);
     
     /**
-     * @brief 计算自由体素到边界的距离场
-     * @param subgrid 子网格引用
-     * @param distance_field 输出的距离场（体素索引->距离）
+     * @brief 递归分裂单个簇（水平方向）
      */
-    void computeDistanceField(
-        const rog_map::SubGrid& subgrid,
-        std::unordered_map<rog_map::GlobalVoxelIndex, float, 
-                          rog_map::GlobalVoxelIndexHash>& distance_field);
+    bool splitClusterHorizontally(
+        const FrontierCluster& cluster,
+        std::list<FrontierCluster>& splits);
     
     /**
-     * @brief 从骨架点生成视点采样射线
-     * @param skeleton_point 骨架点
-     * @param subgrid 子网格引用
-     * @param sample_positions 输出的采样位置
-     * @note 类似FC-Planner的骨架射线采样
+     * @brief Step 4: 为区域生成覆盖所有簇的视点
      */
-    void generateSkeletonSamplingRays(
-        const SkeletonPoint& skeleton_point,
-        const rog_map::SubGrid& subgrid,
-        std::vector<Eigen::Vector3f>& sample_positions);
+    void generateViewpointsForRegion(ExplorationRegion& region);
     
     /**
-     * @brief 使用骨架引导采样生成候选位置
-     * @param subgrid 子网格引用
-     * @param sample_positions 输出的采样位置
+     * @brief Step 5: 贪心选择最小视点集
      */
-    void sampleFromSkeleton(
-        const rog_map::SubGrid& subgrid,
-        std::vector<Eigen::Vector3f>& sample_positions);
+    void greedySelectViewpoints(
+        const std::vector<Eigen::Vector3f>& candidates,
+        const std::vector<FrontierCluster>& clusters,
+        std::vector<ExplorationViewpoint>& selected);
     
     /**
-     * @brief 融合均匀采样和骨架采样的结果
-     * @param uniform_samples 均匀采样结果
-     * @param skeleton_samples 骨架采样结果
-     * @param merged_samples 融合后的采样结果
+     * @brief Step 6: 规划区域访问顺序
      */
-    void mergeSamplingResults(
-        const std::vector<Eigen::Vector3f>& uniform_samples,
-        const std::vector<Eigen::Vector3f>& skeleton_samples,
-        std::vector<Eigen::Vector3f>& merged_samples);
+    void planRegionRoute(std::vector<ExplorationRegion>& regions,
+                         std::vector<int>& route);
     
-    /**
-     * @brief 使用Dijkstra搜索验证视点的可达性
-     * @param viewpoint_pos 候选视点位置
-     * @param path_length 输出的路径长度
-     * @return 是否可达
-     * @note EDEN要求：视点需通过Dijkstra路径从UAV当前位置可达
-     */
-    bool verifyReachabilityDijkstra(
-        const Eigen::Vector3f& viewpoint_pos,
-        float& path_length);
+    // ==================== 辅助函数 ====================
     
-    /**
-     * @brief 计算视点在给定方向的可见未知体素数量
-     * @param viewpoint_pos 视点位置
-     * @param yaw 偏航角
-     * @param pitch 俯仰角
-     * @return 可见未知体素数量
-     */
-    int countVisibleUnknownVoxels(
-        const Eigen::Vector3f& viewpoint_pos,
-        float yaw,
-        float pitch);
+    // 聚类相关
+    void computeClusterPCA(FrontierCluster& cluster);
+    bool checkClusterNeedsSplit(const FrontierCluster& cluster);
     
-    /**
-     * @brief 计算视点的最优朝向（指向未知区域重心）
-     * @param viewpoint_pos 视点位置
-     * @param subgrid 所属子网格
-     * @param yaw 输出的偏航角
-     * @param pitch 输出的俯仰角
-     * @note 朝向计算：指向FOV内未知体素的重心方向
-     */
-    void computeOptimalOrientation(
-        const Eigen::Vector3f& viewpoint_pos,
-        const rog_map::SubGrid& subgrid,
-        float& yaw,
-        float& pitch);
+    // 采样相关
+    void sampleFreeSpaceInRegion(
+        const ExplorationRegion& region,
+        std::vector<Eigen::Vector3f>& samples);
     
-    // --- 曲率与成本计算 ---
+    // 评分相关
+    float computeCoverageScore(
+        const Eigen::Vector3f& position,
+        const FrontierCluster& cluster,
+        float& best_yaw, float& best_pitch);
     
-    /**
-     * @brief 计算到达视点的虚拟圆弧轨迹曲率
-     * @param viewpoint 目标视点
-     * @return 曲率值
-     */
-    float computeCurvatureToViewpoint(const ExplorationViewpoint& viewpoint);
+    int countVisibleFrontierVoxels(
+        const Eigen::Vector3f& pos, float yaw, float pitch,
+        const FrontierCluster& cluster);
     
-    /**
-     * @brief 计算曲率惩罚后的虚拟速度
-     * @param curvature 轨迹曲率
-     * @return 虚拟速度
-     */
-    float computeVirtualVelocity(float curvature);
-    
-    /**
-     * @brief 计算探索成本（从当前位置到视点）
-     * @param viewpoint 目标视点
-     * @return 探索成本（时间）
-     */
-    float computeExplorationCost(const ExplorationViewpoint& viewpoint);
-    
-    /**
-     * @brief 计算连续成本（从探索视点到连续视点）
-     * @param vp_explore 探索视点
-     * @param vp_continuous 连续视点
-     * @return 连续成本（时间）
-     */
-    float computeContinuousCost(
-        const ExplorationViewpoint& vp_explore,
-        const ExplorationViewpoint& vp_continuous);
-    
-    /**
-     * @brief 计算视点对评分
-     * @param vp_explore 探索视点
-     * @param vp_continuous 连续视点
-     * @return 视点对评分
-     */
-    float computeViewpointPairScore(
-        const ExplorationViewpoint& vp_explore,
-        const ExplorationViewpoint& vp_continuous);
-    
-    // --- 信息增益计算 ---
-    
-    /**
-     * @brief 计算视点的探索信息增益
-     * @param viewpoint 视点（会被修改以填充可见性信息）
-     */
-    void computeExplorationGain(ExplorationViewpoint& viewpoint);
-    
-    /**
-     * @brief 执行视点可见性射线投射
-     * @param viewpoint_pos 视点位置
-     * @param viewpoint_yaw 视点偏航角
-     * @param viewpoint_pitch 视点俯仰角
-     * @param visible_unknown_count 输出的可见未知体素数
-     * @note EDEN策略：只统计未知体素，不依赖frontier
-     */
-    void performVisibilityRaycasting(
-        const Eigen::Vector3f& viewpoint_pos,
-        float viewpoint_yaw,
-        float viewpoint_pitch,
-        int& visible_unknown_count);
-    
-    // --- 引力模型相关 ---
-    
-    /**
-     * @brief 计算引力模型的查询半径
-     * @return 查询半径
-     */
-    float computeGravitationRadius();
-    
-    /**
-     * @brief 对单个视点应用引力更新
-     * @param query_vp 查询视点（会被修改）
-     * @param neighbor_vps 邻域视点
-     */
-    void applyGravitationUpdate(
-        ExplorationViewpoint& query_vp,
-        const std::vector<ExplorationViewpoint>& neighbor_vps);
-    
-    /**
-     * @brief 合并距离过近的视点
-     * @param viewpoints 视点集合（会被修改）
-     */
-    void mergeCloseViewpoints(std::vector<ExplorationViewpoint>& viewpoints);
-    
-    // --- 安全视点选择 ---
-    
-    /**
-     * @brief 寻找安全视点
-     * @param vp_explore 探索视点
-     * @param candidate_viewpoints 候选视点集合
-     * @param vp_safety 输出的安全视点
-     * @return 是否找到有效的安全视点
-     */
-    bool findSafetyViewpoint(
-        const ExplorationViewpoint& vp_explore,
-        const std::vector<ExplorationViewpoint>& candidate_viewpoints,
-        ExplorationViewpoint& vp_safety);
-    
-    // --- 碰撞检测与可行性 ---
-    
-    /**
-     * @brief 检查位置是否安全（无碰撞）
-     * @param pos 位置
-     * @return 是否安全
-     */
+    // 安全检查
     bool isPositionSafe(const Eigen::Vector3f& pos);
+    bool isLineVisible(const Eigen::Vector3f& from, const Eigen::Vector3f& to);
     
-    /**
-     * @brief 检查两点之间的连线是否可行（无障碍）
-     * @param start 起点
-     * @param end 终点
-     * @return 是否可行
-     */
-    bool isLineFeasible(const Eigen::Vector3f& start, const Eigen::Vector3f& end);
-    
-    /**
-     * @brief 检查视点对连线的可行性（EDEN约束：连线可穿过未知但不能穿过占用）
-     * @param vp_explore 探索视点
-     * @param vp_continuous 连续视点
-     * @return 是否可行
-     */
-    bool isViewpointPairFeasible(
-        const ExplorationViewpoint& vp_explore,
-        const ExplorationViewpoint& vp_continuous);
-    
-    // --- 工具函数 ---
-    
-    /**
-     * @brief 角度解缠（计算偏航角差）
-     * @param yaw_target 目标偏航角
-     * @param yaw_current 当前偏航角
-     * @return 偏航角差 [-π, π)
-     */
-    float yawDifference(float yaw_target, float yaw_current);
-    
-    /**
-     * @brief 归一化角度到 [-π, π)
-     * @param angle 输入角度
-     * @return 归一化后的角度
-     */
+    // 工具函数
     float normalizeAngle(float angle);
-    
-    /**
-     * @brief 计算两点间的欧氏距离
-     */
-    float distance(const Eigen::Vector3f& p1, const Eigen::Vector3f& p2);
-    
-    /**
-     * @brief 计算路径长度（考虑障碍物绕行，简化为直线距离）
-     */
-    float pathLength(const Eigen::Vector3f& start, const Eigen::Vector3f& end);
+    float distance(const Eigen::Vector3f& a, const Eigen::Vector3f& b);
 
 private:
-    // ==================== 成员变量 ====================
-    
-    // 外部依赖
-    rog_map::GlobalMap::Ptr global_map_;
-    
-    // 配置
+    GlobalMap::Ptr global_map_;
     ViewpointGeneratorConfig config_;
     
-    // UAV状态
     UAVState uav_state_;
     std::mutex state_mutex_;
     
-    // 视点缓存
-    std::vector<ExplorationViewpoint> candidate_viewpoints_;
-    std::vector<ExplorationViewpoint> optimized_viewpoints_;
-    
-    // 骨架缓存（基于FC-Planner思想）
-    std::unordered_map<int, FreeSpaceSkeleton> skeleton_cache_;  // subgrid_id -> skeleton
-    
-    // 用于加速的空间索引（可选）
-    // TODO: 可添加KD-Tree或八叉树索引
+    // 缓存
+    std::vector<ExplorationRegion> regions_;
+    std::vector<int> route_;
 };
 
 } // namespace rog_map

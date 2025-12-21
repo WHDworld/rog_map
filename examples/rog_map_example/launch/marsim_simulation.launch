@@ -1,0 +1,7 @@
+<launch>
+    <node name="rm_node" pkg="rog_map_example" type="marsim_example_node" output="screen">
+<!--        remember to load the parameters like here!!-->
+        <rosparam command="load" file="$(find rog_map_example)/config/marsim_example.yaml"/>
+    </node>
+    
+</launch>
