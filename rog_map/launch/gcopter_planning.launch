@@ -1,0 +1,70 @@
+<!--
+  GCOPTER 轨迹规划 Launch 文件
+  
+  功能:
+  1. 启动 ROG-Map 地图服务
+  2. 启动 GCOPTER 规划 FSM
+  3. 启动轨迹服务器（发布控制命令）
+  
+  使用方法:
+  roslaunch rog_map gcopter_planning.launch
+  
+  话题:
+  - 输入:
+    - /odom: 无人机里程计 (nav_msgs/Odometry)
+    - /cloud: 点云数据 (sensor_msgs/PointCloud2)
+    - /move_base_simple/goal: RViz 目标点 (geometry_msgs/PoseStamped)
+  
+  - 输出:
+    - /planning/pos_cmd: 位置控制命令 (quadrotor_msgs/PositionCommand)
+    - /gcopter/trajectory: 轨迹可视化
+    - /gcopter/corridors: 安全走廊可视化
+-->
+<launch>
+    <!-- 参数配置 -->
+    <arg name="config_file" default="$(find rog_map)/config/gcopter_config.yaml"/>
+    <arg name="odom_topic" default="/ground_truth/odom"/>
+    <arg name="cloud_topic" default="/cloud_registered"/>
+    <arg name="target_type" default="1"/>  <!-- 1=手动, 2=预设 -->
+  
+    <node name="rvizvisualisation" pkg="rviz" type="rviz" output="screen"
+        args="-d $(find rog_map)/config/fpv.rviz"/>
+
+    <!-- GCOPTER 规划节点 -->
+    <node pkg="rog_map" type="gcopter_node" name="gcopter_node" output="screen">
+        <!-- 加载配置文件 -->
+        <rosparam command="load" file="$(arg config_file)"/>
+        
+        <!-- 话题重映射 -->
+        <remap from="~odom" to="$(arg odom_topic)"/>
+        <remap from="~cloud" to="$(arg cloud_topic)"/>
+        
+        <!-- FSM 参数 -->
+        <param name="fsm/target_type" value="$(arg target_type)"/>
+        <param name="fsm/planning_horizon" value="7.5"/>
+        <param name="fsm/replan_thresh" value="2.0"/>
+        <param name="fsm/emergency_time" value="0.8"/>
+        <param name="fsm/enable_fail_safe" value="true"/>
+        <param name="fsm/max_vel" value="2.0"/>
+        <param name="fsm/max_acc" value="2.0"/>
+        
+        <!-- TrajServer 参数 -->
+        <param name="traj_server/cmd_rate" value="100.0"/>
+        <param name="traj_server/time_forward" value="1.0"/>
+        <param name="traj_server/yaw_mode" value="0"/>  <!-- 0=朝向飞行方向 -->
+        <param name="traj_server/yaw_dot_max" value="6.28"/>
+        <param name="traj_server/heartbeat_timeout" value="0.5"/>
+        <param name="traj_server/enable_heartbeat_check" value="true"/>
+        <param name="traj_server/hover_at_end" value="true"/>
+        
+        <!-- Planner 参数 -->
+        <param name="rog_map/planner/max_vel" value="2.0"/>
+        <param name="rog_map/planner/max_acc" value="2.0"/>
+        <param name="rog_map/planner/safety_margin" value="0.3"/>
+        <param name="rog_map/planner/timeout_rrt" value="0.05"/>
+        <param name="rog_map/planner/weight_time" value="20.0"/>
+        <param name="rog_map/planner/use_esdf" value="false"/>
+        <param name="rog_map/planner/treat_unknown_as_free" value="true"/>
+    </node>
+</launch>
+

@@ -25,6 +25,9 @@ find_package(catkin REQUIRED COMPONENTS
         message_generation
         visualization_msgs
         message_filters
+        quadrotor_msgs    # GCOPTER 轨迹服务器需要
+        mavros_msgs       # PX4 模式切换和解锁
+        tf                # 姿态转换
         )
 find_package(Eigen3 REQUIRED)
 find_package(PCL REQUIRED)
@@ -85,4 +88,13 @@ target_link_libraries(test_planner
         rog_map
         ${THIRD_PARTY}
         ${catkin_LIBRARIES}
-)
+        )
+
+# GCOPTER 规划节点
+add_executable(gcopter_node src/gcopter/gcopter_node.cpp)
+add_dependencies(gcopter_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+target_link_libraries(gcopter_node 
+        rog_map
+        ${THIRD_PARTY}
+        ${catkin_LIBRARIES}
+        )

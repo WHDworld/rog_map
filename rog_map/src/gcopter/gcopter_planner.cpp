@@ -123,14 +123,16 @@ GCOPTERPlanner::PlanResult GCOPTERPlanner::plan(
         result.error_msg = "RRT* path search failed";
         return result;
     }
-    ROS_INFO("[GCOPTERPlanner] RRT* found path with %zu waypoints", result.rrt_path.size());
+    auto t_rrt = ros::Time::now();
+    ROS_INFO("[GCOPTERPlanner] RRT* found path with %zu waypoints, duration: %.5fs", result.rrt_path.size(), (t_rrt - t_start).toSec());
     
     // 3. 生成安全飞行走廊
     if (!generateCorridor(result.rrt_path, result.corridors)) {
         result.error_msg = "SFC generation failed";
         return result;
     }
-    ROS_INFO("[GCOPTERPlanner] Generated %zu corridors", result.corridors.size());
+    auto t_sfc = ros::Time::now();
+    ROS_INFO("[GCOPTERPlanner] Generated %zu corridors, duration: %.5fs", result.corridors.size(), (t_sfc - t_rrt).toSec());
     
     // 4. 设置起始和终止状态 [pos | vel | acc]
     Eigen::Matrix3d iniState, finState;
@@ -147,13 +149,14 @@ GCOPTERPlanner::PlanResult GCOPTERPlanner::plan(
         result.error_msg = "Trajectory optimization failed";
         return result;
     }
-    
+    auto t_opt = ros::Time::now();
+    ROS_INFO("[GCOPTERPlanner] Optimized trajectory, duration: %.5fs", (t_opt - t_sfc).toSec());
     result.success = true;
     result.total_time = result.trajectory.getTotalDuration();
     result.cost = result.total_time;
     
     auto t_end = ros::Time::now();
-    ROS_INFO("[GCOPTERPlanner] Planning succeeded! Duration: %.2fs, Planning time: %.3fs",
+    ROS_INFO("[GCOPTERPlanner] Planning succeeded! Duration: %.5fs, Planning time: %.3fs",
              result.total_time, (t_end - t_start).toSec());
     
     return result;
@@ -188,7 +191,7 @@ GCOPTERPlanner::PlanResult GCOPTERPlanner::planThroughWaypoints(
     for (const auto& wp : waypoints) {
         full_path.push_back(wp);
     }
-    
+    auto t_start = ros::Time::now();
     // 逐段搜索 RRT* 路径
     std::vector<Eigen::Vector3d> combined_rrt_path;
     for (size_t i = 0; i < full_path.size() - 1; ++i) {
@@ -206,7 +209,8 @@ GCOPTERPlanner::PlanResult GCOPTERPlanner::planThroughWaypoints(
                                      segment_path.begin() + 1, segment_path.end());
         }
     }
-    
+    auto t_rrt = ros::Time::now();
+    ROS_INFO("[GCOPTERPlanner] RRT* found path with %zu waypoints, duration: %.5fs", combined_rrt_path.size(), (t_rrt - t_start).toSec());
     result.rrt_path = combined_rrt_path;
     
     // 生成走廊
@@ -214,7 +218,8 @@ GCOPTERPlanner::PlanResult GCOPTERPlanner::planThroughWaypoints(
         result.error_msg = "SFC generation failed";
         return result;
     }
-    
+    auto t_sfc = ros::Time::now();
+    ROS_INFO("[GCOPTERPlanner] Generated %zu corridors, duration: %.5fs", result.corridors.size(), (t_sfc - t_rrt).toSec());
     // 设置状态
     Eigen::Matrix3d iniState, finState;
     iniState.col(0) = start_pos;
@@ -230,7 +235,8 @@ GCOPTERPlanner::PlanResult GCOPTERPlanner::planThroughWaypoints(
         result.error_msg = "Trajectory optimization failed";
         return result;
     }
-    
+    auto t_opt = ros::Time::now();
+    ROS_INFO("[GCOPTERPlanner] Optimized trajectory, duration: %.5fs", (t_opt - t_sfc).toSec());
     result.success = true;
     result.total_time = result.trajectory.getTotalDuration();
     

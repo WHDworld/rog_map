@@ -1,8 +1,8 @@
 [ProbMap]
-	map_size_d: 20.1 20.1  4.9
-	resolution: 0.1
-	map_size_i: 201 201  49
-	local_update_box_size: 20.1 20.1  5.1
+	map_size_d: 20.2 20.2    5
+	resolution: 0.2
+	map_size_i: 101 101  25
+	local_update_box_size: 20.2 20.2    5
 	p_min: 0.12
 	p_max: 0.98
 	p_hit: 0.9
@@ -19,6 +19,6 @@
 	batch_update_size: 1
 	frontier_extraction_en: 1
 [InfMap]
-	resolution: 0.2
-	map_size_i: 105 105  29
-	map_size_d:  21  21 5.8
+	resolution: 0.4
+	map_size_i: 55 55 17
+	map_size_d:  22  22 6.8

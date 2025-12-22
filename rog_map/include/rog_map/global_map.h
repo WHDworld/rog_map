@@ -473,7 +473,7 @@ public:
     void visualizeSubGridRange();
     void visualizeVisitedVoxels();
     void visualizeCameraFrustum();
-    
+
     std::unordered_map<GlobalVoxelIndex, GlobalVoxelState, GlobalVoxelIndexHash> voxels_;
     std::vector<GlobalVoxelIndex> frontier_voxels_;
     std::vector<GlobalVoxelIndex> visited_voxels_;
