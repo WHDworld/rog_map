@@ -106,6 +106,39 @@ bool FrontierViewpointGenerator::getFirstRegionViewpoints(
 
 // ==================== Step 1: 区域划分 ====================
 
+// Union-Find 数据结构，用于连通性合并
+class UnionFind {
+public:
+    UnionFind(int n) : parent_(n), rank_(n, 0) {
+        for (int i = 0; i < n; ++i) parent_[i] = i;
+    }
+    
+    int find(int x) {
+        if (parent_[x] != x) {
+            parent_[x] = find(parent_[x]);  // 路径压缩
+        }
+        return parent_[x];
+    }
+    
+    void unite(int x, int y) {
+        int px = find(x), py = find(y);
+        if (px == py) return;
+        
+        // 按秩合并
+        if (rank_[px] < rank_[py]) std::swap(px, py);
+        parent_[py] = px;
+        if (rank_[px] == rank_[py]) rank_[px]++;
+    }
+    
+    bool connected(int x, int y) {
+        return find(x) == find(y);
+    }
+    
+private:
+    std::vector<int> parent_;
+    std::vector<int> rank_;
+};
+
 void FrontierViewpointGenerator::partitionIntoRegions(
     const std::vector<int>& subgrid_ids,
     std::vector<ExplorationRegion>& regions)
@@ -114,34 +147,272 @@ void FrontierViewpointGenerator::partitionIntoRegions(
     
     if (subgrid_ids.empty()) return;
     
-    // 简单策略：每个子网格作为一个独立的探索区域
-    // 后续可以改进为基于连通性的合并策略
+    // ========== 阶段1：过滤有效子网格 ==========
+    // 时间复杂度：O(m)，m = subgrid_ids.size()
+    std::vector<int> valid_sg_ids;
+    std::unordered_map<int, int> sg_id_to_idx;  // subgrid_id -> 在valid_sg_ids中的索引
     
-    int region_id = 0;
     for (int sg_id : subgrid_ids) {
         SubGrid& sg = global_map_->getSubGrid(sg_id);
         
-        // 检查该子网格是否有前视体素
-        if (sg.sub_grid_frontier_voxels_.empty()) {
-            continue;
-        }
+        // 过滤条件：有前沿体素且未完全探索
+        if (sg.sub_grid_frontier_voxels_.empty()) continue;
         
-        // 检查探索率
         float exp_rate = sg.getExplorationRate();
-        if (exp_rate <= 0.0f || exp_rate >= 1.0f) {
-            continue;
-        }
+        if (exp_rate <= 0.0f || exp_rate >= 1.0f) continue;
+        
+        sg_id_to_idx[sg_id] = static_cast<int>(valid_sg_ids.size());
+        valid_sg_ids.push_back(sg_id);
+    }
+    
+    if (valid_sg_ids.empty()) return;
+    
+    // 只有一个有效子网格，直接返回
+    if (valid_sg_ids.size() == 1) {
+        int sg_id = valid_sg_ids[0];
+        SubGrid& sg = global_map_->getSubGrid(sg_id);
         
         ExplorationRegion region;
-        region.region_id = region_id++;
+        region.region_id = 0;
         region.subgrid_ids.push_back(sg_id);
         region.centroid = sg.center;
         region.total_frontier_area = static_cast<float>(sg.sub_grid_frontier_voxels_.size());
-        
         regions.push_back(region);
+        
+        computeRegionPriorities(regions);
+        return;
     }
     
-    // 计算探索优先级（基于前视面积和距离）
+    // ========== 阶段2：受限连通性合并（优化版） ==========
+    // 合并约束参数（从配置读取）
+    const float max_region_diameter = config_.planning_horizon * config_.max_region_diameter_factor;
+    const float max_direction_diff = config_.max_direction_diff;
+    const float max_region_area = config_.max_region_area;
+    
+    int n = static_cast<int>(valid_sg_ids.size());
+    UnionFind uf(n);
+    
+    // 预计算每个子网格的信息
+    // 时间复杂度：O(n * k_sample)，k_sample = min(体素数, MAX_SAMPLE)
+    struct SubGridInfo {
+        Eigen::Vector3f center;
+        Eigen::Vector3f main_frontier_direction;  // 主要前沿方向
+        float frontier_area;
+        SubGridIndex grid_idx;  // 空间索引，用于快速邻居查找
+    };
+    std::vector<SubGridInfo> sg_infos(n);
+    
+    constexpr int MAX_SAMPLE_VOXELS = 20;  // 采样上限，避免遍历所有体素
+    
+    for (int i = 0; i < n; ++i) {
+        int sg_id = valid_sg_ids[i];
+        SubGrid& sg = global_map_->getSubGrid(sg_id);
+        
+        sg_infos[i].center = sg.center;
+        sg_infos[i].frontier_area = static_cast<float>(sg.sub_grid_frontier_voxels_.size());
+        sg_infos[i].grid_idx = sg.grid_idx;  // 保存空间索引
+        
+        // 【优化】采样计算前沿方向，避免遍历所有体素
+        Eigen::Vector3f avg_normal = Eigen::Vector3f::Zero();
+        int sample_count = 0;
+        int step = std::max(1, static_cast<int>(sg.sub_grid_frontier_voxels_.size()) / MAX_SAMPLE_VOXELS);
+        int idx = 0;
+        
+        for (const auto& fv : sg.sub_grid_frontier_voxels_) {
+            if (idx % step == 0) {
+                Eigen::Vector3f pos;
+                global_map_->indexToPos(fv, pos);
+                avg_normal += (sg.center - pos).normalized();
+                sample_count++;
+                if (sample_count >= MAX_SAMPLE_VOXELS) break;
+            }
+            idx++;
+        }
+        
+        if (avg_normal.norm() > 1e-6f) {
+            sg_infos[i].main_frontier_direction = avg_normal.normalized();
+        } else {
+            sg_infos[i].main_frontier_direction = Eigen::Vector3f::UnitZ();
+        }
+    }
+    
+    // 【优化】使用空间索引检测真正相邻的子网格对
+    // 时间复杂度：O(n * 4) = O(n)，而非之前的 O(n²)
+    struct MergePair {
+        int i, j;
+        float distance;
+        bool operator>(const MergePair& other) const {
+            return distance > other.distance;
+        }
+    };
+    std::priority_queue<MergePair, std::vector<MergePair>, std::greater<MergePair>> merge_queue;
+    
+    // 使用集合避免重复添加邻居对（i,j）和（j,i）
+    std::unordered_set<uint64_t> processed_pairs;
+    auto makePairKey = [](int a, int b) -> uint64_t {
+        if (a > b) std::swap(a, b);
+        return (static_cast<uint64_t>(a) << 32) | static_cast<uint64_t>(b);
+    };
+    
+    for (int i = 0; i < n; ++i) {
+        // 获取4邻域子网格
+        std::vector<SubGridIndex> neighbors;
+        global_map_->getNeighborSubGrids4(sg_infos[i].grid_idx, neighbors);
+        
+        for (const auto& nei_idx : neighbors) {
+            int nei_sg_id = global_map_->subGridToLinearIndex(nei_idx);
+            
+            // 检查邻居是否在有效列表中
+            auto it = sg_id_to_idx.find(nei_sg_id);
+            if (it == sg_id_to_idx.end()) continue;
+            
+            int j = it->second;
+            
+            // 使用哈希集合避免重复处理（i,j）和（j,i）
+            uint64_t pair_key = makePairKey(i, j);
+            if (processed_pairs.count(pair_key) > 0) continue;
+            processed_pairs.insert(pair_key);
+            
+            float dist = (sg_infos[i].center - sg_infos[j].center).norm();
+            merge_queue.push({i, j, dist});
+        }
+    }
+    
+    // 维护每个连通分量的信息
+    struct ComponentInfo {
+        Eigen::Vector3f bbox_min, bbox_max;
+        float total_area;
+        Eigen::Vector3f avg_direction;
+    };
+    std::unordered_map<int, ComponentInfo> component_infos;
+    
+    // 初始化每个组件
+    for (int i = 0; i < n; ++i) {
+        ComponentInfo info;
+        info.bbox_min = sg_infos[i].center;
+        info.bbox_max = sg_infos[i].center;
+        info.total_area = sg_infos[i].frontier_area;
+        info.avg_direction = sg_infos[i].main_frontier_direction;
+        component_infos[i] = info;
+    }
+    
+    // Lambda: 获取组件信息（通过Union-Find根节点）
+    auto getComponentInfo = [&](int idx) -> ComponentInfo& {
+        int root = uf.find(idx);
+        return component_infos[root];
+    };
+    
+    // Lambda: 计算合并后的直径
+    auto computeMergedDiameter = [](const ComponentInfo& c1, const ComponentInfo& c2) -> float {
+        Eigen::Vector3f new_min = c1.bbox_min.cwiseMin(c2.bbox_min);
+        Eigen::Vector3f new_max = c1.bbox_max.cwiseMax(c2.bbox_max);
+        return (new_max - new_min).norm();
+    };
+    
+    // Lambda: 计算方向差异
+    auto computeDirectionDiff = [](const Eigen::Vector3f& d1, const Eigen::Vector3f& d2) -> float {
+        float dot = d1.dot(d2);
+        dot = std::max(-1.0f, std::min(1.0f, dot));  // 替代 std::clamp (C++17)
+        return std::acos(std::abs(dot));  // 使用绝对值，因为方向可能相反
+    };
+    
+    // 按距离从近到远尝试合并
+    // 时间复杂度：O(p * log(p))，p = 实际相邻对数量（通常 << n²）
+    while (!merge_queue.empty()) {
+        MergePair pair = merge_queue.top();
+        merge_queue.pop();
+        
+        // 【关键检查】已经在同一组件中，跳过（避免重复处理）
+        if (uf.connected(pair.i, pair.j)) continue;
+        
+        // 获取两个组件的当前信息
+        ComponentInfo& comp_i = getComponentInfo(pair.i);
+        ComponentInfo& comp_j = getComponentInfo(pair.j);
+        
+        // 检查约束1：合并后直径
+        float merged_diameter = computeMergedDiameter(comp_i, comp_j);
+        if (merged_diameter > max_region_diameter) continue;
+        
+        // 检查约束2：方向差异
+        float dir_diff = computeDirectionDiff(comp_i.avg_direction, comp_j.avg_direction);
+        if (dir_diff > max_direction_diff) continue;
+        
+        // 检查约束3：合并后面积
+        float merged_area = comp_i.total_area + comp_j.total_area;
+        if (merged_area > max_region_area) continue;
+        
+        // 满足所有约束，执行合并
+        int old_root_i = uf.find(pair.i);
+        int old_root_j = uf.find(pair.j);
+        uf.unite(pair.i, pair.j);
+        int new_root = uf.find(pair.i);
+        
+        // 更新合并后组件的信息
+        ComponentInfo& merged = component_infos[new_root];
+        merged.bbox_min = comp_i.bbox_min.cwiseMin(comp_j.bbox_min);
+        merged.bbox_max = comp_i.bbox_max.cwiseMax(comp_j.bbox_max);
+        merged.total_area = merged_area;
+        
+        // 加权平均方向
+        merged.avg_direction = (comp_i.avg_direction * comp_i.total_area + 
+                               comp_j.avg_direction * comp_j.total_area).normalized();
+        
+        // 清理旧的组件信息（可选，节省内存）
+        if (old_root_i != new_root) component_infos.erase(old_root_i);
+        if (old_root_j != new_root) component_infos.erase(old_root_j);
+    }
+    
+    // ========== 阶段3：提取连通分量作为探索区域 ==========
+    // 时间复杂度：O(n)
+    std::unordered_map<int, ExplorationRegion> root_to_region;
+    
+    for (int i = 0; i < n; ++i) {
+        int root = uf.find(i);
+        int sg_id = valid_sg_ids[i];
+        SubGrid& sg = global_map_->getSubGrid(sg_id);
+        
+        if (root_to_region.find(root) == root_to_region.end()) {
+            ExplorationRegion region;
+            region.region_id = static_cast<int>(root_to_region.size());
+            region.centroid = Eigen::Vector3f::Zero();
+            region.total_frontier_area = 0.0f;
+            root_to_region[root] = region;
+        }
+        
+        ExplorationRegion& region = root_to_region[root];
+        region.subgrid_ids.push_back(sg_id);
+        region.centroid += sg.center * static_cast<float>(sg.sub_grid_frontier_voxels_.size());
+        region.total_frontier_area += static_cast<float>(sg.sub_grid_frontier_voxels_.size());
+    }
+    
+    // 归一化中心点（按前沿面积加权平均）
+    for (auto& kv : root_to_region) {
+        ExplorationRegion& region = kv.second;
+        if (region.total_frontier_area > 0) {
+            region.centroid /= region.total_frontier_area;
+        }
+    }
+    
+    // 转换为向量
+    regions.reserve(root_to_region.size());
+    for (auto& kv : root_to_region) {
+        regions.push_back(std::move(kv.second));
+    }
+    
+    // 重新分配区域ID
+    for (size_t i = 0; i < regions.size(); ++i) {
+        regions[i].region_id = static_cast<int>(i);
+    }
+    
+    // ========== 阶段4：计算探索优先级 ==========
+    computeRegionPriorities(regions);
+    
+    ROS_DEBUG("[FrontierViewpointGenerator] Partitioned %lu subgrids into %lu regions (processed %lu pairs)",
+              valid_sg_ids.size(), regions.size(), processed_pairs.size());
+}
+
+void FrontierViewpointGenerator::computeRegionPriorities(std::vector<ExplorationRegion>& regions)
+{
     UAVState current_state;
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
@@ -151,6 +422,7 @@ void FrontierViewpointGenerator::partitionIntoRegions(
     for (auto& region : regions) {
         float dist = distance(current_state.position, region.centroid);
         // 优先级 = 前视面积 / (距离 + 1)，避免除零
+        // 可以考虑添加更多因素：方向一致性、区域紧凑度等
         region.exploration_priority = region.total_frontier_area / (dist + 1.0f);
     }
 }

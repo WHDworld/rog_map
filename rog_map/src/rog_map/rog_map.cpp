@@ -87,7 +87,7 @@ ROGMap::ROGMap(const ros::NodeHandle& nh) :nh_(nh) {
     if (cfg_.ros_callback_en) {
         rc_.odom_sub = nh_.subscribe(cfg_.odom_topic, 1, &ROGMap::odomCallback, this);
         rc_.cloud_sub = nh_.subscribe(cfg_.cloud_topic, 1, &ROGMap::cloudCallback, this);
-        rc_.update_timer = nh_.createTimer(ros::Duration(0.001), &ROGMap::updateCallback, this);
+        rc_.update_timer = nh_.createTimer(ros::Duration(0.01), &ROGMap::updateCallback, this);
     }
 
     writeMapInfoToLog(map_info_log_file_);
@@ -270,7 +270,6 @@ void ROGMap::updateRobotState(const Pose& pose) {
     updateLocalBox(pose.first);
 }
 
-
 void ROGMap::odomCallback(const nav_msgs::OdometryConstPtr& odom_msg) {
     updateRobotState(std::make_pair(
         Vec3f(odom_msg->pose.pose.position.x, odom_msg->pose.pose.position.y,
@@ -278,19 +277,19 @@ void ROGMap::odomCallback(const nav_msgs::OdometryConstPtr& odom_msg) {
         Quatf(odom_msg->pose.pose.orientation.w, odom_msg->pose.pose.orientation.x,
               odom_msg->pose.pose.orientation.y, odom_msg->pose.pose.orientation.z)));
 
-    static tf2_ros::TransformBroadcaster br_map_ego;
-    geometry_msgs::TransformStamped transformStamped;
-    transformStamped.header.stamp = ros::Time::now();
-    transformStamped.header.frame_id = "map";
-    transformStamped.child_frame_id = "drone";
-    transformStamped.transform.translation.x = odom_msg->pose.pose.position.x;
-    transformStamped.transform.translation.y = odom_msg->pose.pose.position.y;
-    transformStamped.transform.translation.z = odom_msg->pose.pose.position.z;
-    transformStamped.transform.rotation.x = odom_msg->pose.pose.orientation.x;
-    transformStamped.transform.rotation.y = odom_msg->pose.pose.orientation.y;
-    transformStamped.transform.rotation.z = odom_msg->pose.pose.orientation.z;
-    transformStamped.transform.rotation.w = odom_msg->pose.pose.orientation.w;
-    br_map_ego.sendTransform(transformStamped);
+    // static tf2_ros::TransformBroadcaster br_map_ego;
+    // geometry_msgs::TransformStamped transformStamped;
+    // transformStamped.header.stamp = ros::Time::now();
+    // transformStamped.header.frame_id = "map";
+    // transformStamped.child_frame_id = "drone_whd";
+    // transformStamped.transform.translation.x = odom_msg->pose.pose.position.x;
+    // transformStamped.transform.translation.y = odom_msg->pose.pose.position.y;
+    // transformStamped.transform.translation.z = odom_msg->pose.pose.position.z;
+    // transformStamped.transform.rotation.x = odom_msg->pose.pose.orientation.x;
+    // transformStamped.transform.rotation.y = odom_msg->pose.pose.orientation.y;
+    // transformStamped.transform.rotation.z = odom_msg->pose.pose.orientation.z;
+    // transformStamped.transform.rotation.w = odom_msg->pose.pose.orientation.w;
+    // br_map_ego.sendTransform(transformStamped);
 }
 
 void ROGMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr& cloud_msg) {

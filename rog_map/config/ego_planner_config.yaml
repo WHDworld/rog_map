@@ -1,0 +1,168 @@
+#####################################################
+# EGO-Planner 轨迹规划配置文件 (MINCO Trajectory)
+# 无人机质量: 1.99kg
+#####################################################
+
+#####################################################
+# ROG-Map 地图配置
+#####################################################
+rog_map:
+  resolution: 0.2
+  inflation_resolution: 0.2     # 膨胀分辨率 [m]
+  inflation_step: 1             # 膨胀步长
+  unk_inflation_en: false       # 未知膨胀是否启用
+  unk_inflation_step: 1         # 未知膨胀步长
+
+  map_size: [ 20,20,6 ]
+  fix_map_origin: [ 0,0,0 ]
+  frontier_extraction_en: true
+
+  # Virtual ceil and ground
+  virtual_ceil_height: 9999     # 虚拟天花板高度 [m]
+  virtual_ground_height: -9999  # 虚拟地面高度 [m]
+
+  block_inf_pt: false
+  kd_tree_en: false
+
+  load_pcd_en: false
+  
+  map_sliding:
+    enable: true
+    threshold: 1.0
+
+  esdf:
+    enable: false
+    resolution: 0.1
+    local_update_box: [ 10,10,6 ]
+
+  ros_callback:
+    enable: true
+    cloud_topic: "/cloud_registered"
+    odom_topic: "/ground_truth/odom"
+    odom_timeout: 2.0
+
+  visualization:
+    enable: true
+    use_dynamic_reconfigure: false
+    time_rate: 10
+    frame_rate: 0
+    range: [20,20,6 ]
+    frame_id: "map"
+    pub_unknown_map_en: true
+
+  intensity_thresh: -10
+  point_filt_num: 1
+
+  raycasting:
+    enable: true
+    blind_filter_en: false
+    blind_filter_dis: 1.0
+    batch_update_size: 1
+    local_update_box: [ 20,20,6 ]
+    ray_range: [ 0.0, 10 ]
+    p_min: 0.12
+    p_miss: 0.35
+    p_free: 0.499
+    p_occ: 0.80
+    p_hit: 0.65
+    p_max: 0.90
+    unk_thresh: 1.0
+
+  global_map:
+    enable: true
+    map_size: [ 100, 100, 2.0 ]
+    map_model: 0
+    ground_height: -0.01
+    ceil_height: 9999
+    sub_grid_xy: 0.01
+
+  camera_map:
+    enable: true
+    fov_h_deg: 90
+    fov_v_deg: 60
+    max_dist: 5.0
+    min_dist: 0.3
+
+#####################################################
+# FSM 状态机配置
+#####################################################
+fsm:
+  # 飞行模式: 1=手动目标(RViz), 2=预设路径点
+  flight_type: 2
+  
+  # 起飞参数
+  takeoff_height: 1.0           # 起飞高度 [m]
+  takeoff_accel_time: 1.0       # 起飞加速时间 [s]
+  
+  # 预设模式：起飞后自动开始
+  auto_start_preset: true
+  
+  # 重规划参数
+  thresh_replan_time: 1.0       # 剩余时间阈值 [s]
+  thresh_no_replan_meter: 1.0   # 接近目标不重规划距离 [m]
+  planning_horizon: 7.5         # 规划视野 [m]
+  replan_duration: 0.05         # 重规划轨迹起始时间偏移 [s]
+  
+  # 安全参数
+  fail_safe: true               # 启用故障保护
+  emergency_time: 1.0           # 紧急制动时间 [s]
+  
+  # 预设路径点（flight_type=2 时使用）
+  waypoint_num: 4
+  waypoint0_x: 1.0
+  waypoint0_y: 30.0
+  waypoint0_z: 1.0
+  waypoint1_x: 0.0
+  waypoint1_y: 0.0
+  waypoint1_z: 1.0
+  waypoint2_x: 1.0
+  waypoint2_y: 30.0
+  waypoint2_z: 1.0
+  waypoint3_x: 0.0
+  waypoint3_y: 0.0
+  waypoint3_z: 1.0
+
+#####################################################
+# 规划管理器配置
+#####################################################
+manager:
+  max_vel: 1.5                  # 最大速度 [m/s]
+  max_acc: 3.0                  # 最大加速度 [m/s²]
+  feasibility_tolerance: 0.05  # 可行性容差
+  polyTraj_piece_length: 1.5   # 多项式轨迹段长度 [m]
+  planning_horizon: 7.5        # 规划视野 [m]
+  use_distinctive_trajs: false # 是否使用多拓扑轨迹搜索
+
+#####################################################
+# 轨迹优化配置 (MINCO)
+#####################################################
+optimization:
+  # 约束点
+  constraint_points_perPiece: 5  # 每段轨迹的约束点数
+  
+  # 优化权重
+  weight_obstacle: 10000.0       # 障碍物代价权重
+  weight_obstacle_soft: 5000.0   # 软约束障碍物权重
+  weight_feasibility: 10000.0    # 可行性约束权重
+  weight_sqrvariance: 10000.0    # 段长度方差权重
+  weight_time: 10.0              # 时间优化权重
+  
+  # 安全距离
+  obstacle_clearance: 0.2        # 硬约束安全距离 [m]
+  obstacle_clearance_soft: 0.2   # 软约束安全距离 [m]
+  
+  # 动力学约束
+  max_vel: 1.5                   # 最大速度 [m/s]
+  max_acc: 3.0                   # 最大加速度 [m/s²]
+  
+  # 高度保持功能（用于走廊/迷宫等场景）
+  enable_height_keeping: true    # 是否启用高度保持 (true/false)
+  weight_height: 10000.0          # 高度保持权重（越大越严格）
+  height_tolerance: 0.05          # 高度容差 [m]（容差内不产生惩罚）
+
+#####################################################
+# 轨迹服务器配置
+#####################################################
+traj_server:
+  time_forward: 1.0             # Yaw规划前向时间 [s]
+

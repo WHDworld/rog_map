@@ -64,7 +64,7 @@ namespace rog_map {
 
         bool insideLocalMap(const Vec3i &id_g) const;
 
-    protected:
+    public:
         struct SlidingConfig {
             double resolution{0.0};
             double resolution_inv{0.0};

@@ -184,6 +184,12 @@ struct ViewpointGeneratorConfig {
     // 路由参数
     float exploration_weight = 0.6f;      // 探索收益权重
     float distance_weight = 0.4f;         // 距离权重
+    
+    // 区域划分参数
+    float planning_horizon = 7.5f;        // 规划视野（用于限制区域大小）
+    float max_region_diameter_factor = 2.5f;  // 最大区域直径 = planning_horizon * factor
+    float max_direction_diff = 1.88f;     // 最大方向差异（~108°）
+    float max_region_area = 5000.0f;      // 最大区域前沿面积（体素数）
 };
 
 // ==================== 主类定义 ====================
@@ -244,10 +250,21 @@ private:
     
     /**
      * @brief Step 1: 将子区域划分为探索区域块
+     * 
+     * 使用受限连通性合并策略：
+     * - 基于空间邻接性合并相邻子网格
+     * - 距离约束：合并后区域直径不超过 planning_horizon * 2.5
+     * - 方向约束：前沿方向差异不超过 ~108°
+     * - 面积约束：合并后面积不超过阈值
      */
     void partitionIntoRegions(
         const std::vector<int>& subgrid_ids,
         std::vector<ExplorationRegion>& regions);
+    
+    /**
+     * @brief 计算区域的探索优先级
+     */
+    void computeRegionPriorities(std::vector<ExplorationRegion>& regions);
     
     /**
      * @brief Step 2: 对区域内的前视体素进行聚类

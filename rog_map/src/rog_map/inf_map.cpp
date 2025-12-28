@@ -129,8 +129,10 @@ namespace rog_map {
         posToGlobalIndex(box_min, box_min_id_g);
         posToGlobalIndex(box_max, box_max_id_g);
         Vec3i box_size = box_max_id_g - box_min_id_g;
-        if (gt == UNKNOWN) {
-            if (!cfg_.unk_inflation_en) {
+        if (gt == UNKNOWN) 
+        {
+            if (!cfg_.unk_inflation_en) 
+            {
                 out_points.clear();
                 std::cout << RED << " -- [ROG] Unknown inflation is not enabled, cannot perform box search." << RESET
                           << std::endl;
@@ -149,7 +151,9 @@ namespace rog_map {
                     }
                 }
             }
-        } else if (gt == OCCUPIED) {
+        } 
+        else if (gt == OCCUPIED) 
+        {
             out_points.reserve(box_size.prod() / 3);
             for (int i = box_min_id_g.x(); i <= box_max_id_g.x(); i++) {
                 for (int j = box_min_id_g.y(); j <= box_max_id_g.y(); j++) {

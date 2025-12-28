@@ -47,7 +47,8 @@ namespace rog_map {
         ROGMap(const ros::NodeHandle &nh);
 
         ~ROGMap() = default;
-
+        Eigen::Vector3f getGlobalMapMin() const { return global_map_->getGlobalMapMin(); }
+        Eigen::Vector3f getGlobalMapMax() const { return global_map_->getGlobalMapMax(); }
 
         bool isLineFree(const Vec3f &start_pt, const Vec3f &end_pt,
                         const double &max_dis = 999999,

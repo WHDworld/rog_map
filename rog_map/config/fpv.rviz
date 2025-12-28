@@ -8,10 +8,12 @@ Panels:
         - /Status1
         - /ENV1
         - /ENV1/GlobalCloud1/Autocompute Value Bounds1
+        - /ENV1/LocalCloud1
         - /ENV1/Odometry1/Shape1
         - /ROGMap1
         - /Global_map1
         - /planner1
+        - /planner1/trajectory_vis1
       Splitter Ratio: 0.4043392539024353
     Tree Height: 1385
   - Class: rviz/Selection
@@ -30,7 +32,7 @@ Panels:
   - Class: rviz/Time
     Name: Time
     SyncMode: 0
-    SyncSource: LocalCloud
+    SyncSource: ""
 Preferences:
   PromptSaveOnExit: true
 Toolbars:
@@ -98,13 +100,13 @@ Visualization Manager:
           Value: true
         - Alpha: 1
           Class: rviz/Axes
-          Enabled: true
+          Enabled: false
           Length: 0.30000001192092896
           Name: Body
           Radius: 0.05000000074505806
           Reference Frame: drone
           Show Trail: false
-          Value: true
+          Value: false
         - Alpha: 0.5
           Cell Size: 1
           Class: rviz/Grid
@@ -180,8 +182,8 @@ Visualization Manager:
           Queue Size: 10
           Selectable: true
           Size (Pixels): 3
-          Size (m): 0.07000000029802322
-          Style: Points
+          Size (m): 0.10000000149011612
+          Style: Boxes
           Topic: /cloud_registered
           Unreliable: false
           Use Fixed Frame: true
@@ -258,7 +260,7 @@ Visualization Manager:
           Size (Pixels): 3
           Size (m): 0.10000000149011612
           Style: Boxes
-          Topic: /gcopter_node/rog_map/esdf
+          Topic: /fast_planner_node/rog_map/esdf
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
@@ -275,7 +277,7 @@ Visualization Manager:
           Color: 245; 121; 0
           Color Transformer: FlatColor
           Decay Time: 0
-          Enabled: false
+          Enabled: true
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -286,11 +288,11 @@ Visualization Manager:
           Size (Pixels): 3
           Size (m): 0.10000000149011612
           Style: Boxes
-          Topic: /gcopter_node/rog_map/occ
+          Topic: /fast_planner_node/rog_map/occ
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
-          Value: false
+          Value: true
         - Alpha: 1
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
@@ -314,16 +316,16 @@ Visualization Manager:
           Size (Pixels): 3
           Size (m): 0.10000000149011612
           Style: Boxes
-          Topic: /gcopter_node/rog_map/frontier
+          Topic: /fast_planner_node/rog_map/frontier
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
           Value: false
-        - Alpha: 0.10000000149011612
+        - Alpha: 1
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
-            Max Value: 10
-            Min Value: -10
+            Max Value: 2.5999999046325684
+            Min Value: -1
             Value: true
           Axis: Z
           Channel Name: intensity
@@ -340,9 +342,9 @@ Visualization Manager:
           Queue Size: 10
           Selectable: true
           Size (Pixels): 3
-          Size (m): 0.20000000298023224
+          Size (m): 0.30000001192092896
           Style: Boxes
-          Topic: /gcopter_node/rog_map/inf_occ
+          Topic: /fast_planner_node/rog_map/inf_occ
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
@@ -370,7 +372,7 @@ Visualization Manager:
           Size (Pixels): 3
           Size (m): 0.10000000149011612
           Style: Boxes
-          Topic: /gcopter_node/rog_map/unk
+          Topic: /fast_planner_node/rog_map/unk
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
@@ -379,7 +381,7 @@ Visualization Manager:
       Name: ROGMap
     - Class: rviz/MarkerArray
       Enabled: false
-      Marker Topic: /gcopter_node/rog_map/map_bound
+      Marker Topic: /fast_planner_node/rog_map/map_bound
       Name: MarkerArray
       Namespaces:
         {}
@@ -388,15 +390,13 @@ Visualization Manager:
     - Class: rviz/Group
       Displays:
         - Class: rviz/MarkerArray
-          Enabled: true
-          Marker Topic: /gcopter_node/global_map/range
+          Enabled: false
+          Marker Topic: /fast_planner_node/global_map/range
           Name: MarkerArray
           Namespaces:
-            global_map_explored_text: true
-            global_map_range: true
-            global_map_range_text: true
+            {}
           Queue Size: 100
-          Value: true
+          Value: false
         - Alpha: 0.10000000149011612
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
@@ -420,7 +420,7 @@ Visualization Manager:
           Size (Pixels): 3
           Size (m): 0.20000000298023224
           Style: Boxes
-          Topic: /gcopter_node/global_map/voxels
+          Topic: /fast_planner_node/global_map/voxels
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
@@ -437,7 +437,7 @@ Visualization Manager:
           Color: 239; 41; 41
           Color Transformer: RGB8
           Decay Time: 0
-          Enabled: true
+          Enabled: false
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -448,11 +448,11 @@ Visualization Manager:
           Size (Pixels): 3
           Size (m): 0.20000000298023224
           Style: Boxes
-          Topic: /gcopter_node/global_map/occupied
+          Topic: /fast_planner_node/global_map/occupied
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
-          Value: true
+          Value: false
         - Alpha: 1
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
@@ -476,7 +476,7 @@ Visualization Manager:
           Size (Pixels): 3
           Size (m): 0.20000000298023224
           Style: Boxes
-          Topic: /gcopter_node/global_map/free
+          Topic: /fast_planner_node/global_map/free
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
@@ -504,14 +504,14 @@ Visualization Manager:
           Size (Pixels): 3
           Size (m): 0.20000000298023224
           Style: Boxes
-          Topic: /gcopter_node/global_map/frontier
+          Topic: /fast_planner_node/global_map/frontier
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
           Value: false
         - Class: rviz/MarkerArray
           Enabled: false
-          Marker Topic: /gcopter_node/global_map/sub_grid_range
+          Marker Topic: /fast_planner_node/global_map/sub_grid_range
           Name: sub_grids
           Namespaces:
             {}
@@ -519,10 +519,10 @@ Visualization Manager:
           Value: false
         - Class: rviz/MarkerArray
           Enabled: true
-          Marker Topic: /gcopter_node/global_map/camera_frustum
+          Marker Topic: /fast_planner_node/global_map/camera_frustum
           Name: MarkerArray
           Namespaces:
-            camera_frustum: true
+            {}
           Queue Size: 100
           Value: true
         - Alpha: 0.5
@@ -537,7 +537,7 @@ Visualization Manager:
           Color: 255; 255; 255
           Color Transformer: RGB8
           Decay Time: 0
-          Enabled: true
+          Enabled: false
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -548,51 +548,79 @@ Visualization Manager:
           Size (Pixels): 3
           Size (m): 0.20000000298023224
           Style: Boxes
-          Topic: /gcopter_node/global_map/visited_voxels
+          Topic: /fast_planner_node/global_map/visited_voxels
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
-          Value: true
+          Value: false
       Enabled: true
       Name: Global_map
     - Class: rviz/Group
       Displays:
         - Class: rviz/Marker
           Enabled: true
-          Marker Topic: /gcopter_node/gcopter/traj_msg
-          Name: gcopter_traj_msg
+          Marker Topic: /planner_normal
+          Name: normal
           Namespaces:
             {}
           Queue Size: 100
           Value: true
         - Class: rviz/Marker
           Enabled: true
-          Marker Topic: /gcopter_node/gcopter/goal
-          Name: gcopter_goal
+          Marker Topic: /planning/position_cmd_vis
+          Name: position_cmd_vis
           Namespaces:
             {}
           Queue Size: 100
           Value: true
         - Class: rviz/Marker
           Enabled: true
-          Marker Topic: /gcopter_node/gcopter/trajectory
-          Name: gcopter_trajectory
-          Namespaces:
-            {}
-          Queue Size: 100
-          Value: true
-        - Class: rviz/MarkerArray
-          Enabled: true
-          Marker Topic: /gcopter_node/gcopter/corridors
-          Name: gcopter_corridors
+          Marker Topic: /planning/set_target_point
+          Name: set_target_point
           Namespaces:
             {}
           Queue Size: 100
           Value: true
         - Class: rviz/Marker
           Enabled: true
-          Marker Topic: /gcopter_node/traj_server/trajectory
-          Name: traj_server_trajectory
+          Marker Topic: /planning/travel_traj
+          Name: travel_traj
+          Namespaces:
+            {}
+          Queue Size: 100
+          Value: true
+        - Alpha: 1
+          Autocompute Intensity Bounds: true
+          Autocompute Value Bounds:
+            Max Value: 10
+            Min Value: -10
+            Value: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz/PointCloud2
+          Color: 255; 255; 255
+          Color Transformer: ""
+          Decay Time: 0
+          Enabled: true
+          Invert Rainbow: false
+          Max Color: 255; 255; 255
+          Min Color: 0; 0; 0
+          Name: travel_vel_traj
+          Position Transformer: ""
+          Queue Size: 10
+          Selectable: true
+          Size (Pixels): 3
+          Size (m): 0.009999999776482582
+          Style: Flat Squares
+          Topic: /planning/travel_vel_traj
+          Unreliable: false
+          Use Fixed Frame: true
+          Use rainbow: true
+          Value: true
+        - Class: rviz/Marker
+          Enabled: true
+          Marker Topic: /ego_planner/trajectory_vis
+          Name: trajectory_vis
           Namespaces:
             {}
           Queue Size: 100
@@ -601,7 +629,7 @@ Visualization Manager:
       Name: planner
   Enabled: true
   Global Options:
-    Background Color: 255; 255; 255
+    Background Color: 0; 0; 0
     Default Light: true
     Fixed Frame: map
     Frame Rate: 30
@@ -620,7 +648,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/XYOrbit
-      Distance: 27.4288330078125
+      Distance: 26.628189086914062
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -628,17 +656,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: -1.3242192268371582
-        Y: -1.1452665328979492
-        Z: 3.6825440474785864e-07
+        X: -1.011704921722412
+        Y: -1.081838607788086
+        Z: 3.2292773539666086e-06
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.26479819416999817
+      Pitch: 0.16979841887950897
       Target Frame: perfect_drone
-      Yaw: 1.7803977727890015
+      Yaw: 2.3197543621063232
     Saved:
       - Class: rviz/ThirdPersonFollower
         Distance: 17.48538589477539

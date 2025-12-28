@@ -276,6 +276,11 @@ struct SubGrid
                     auto nei_it = voxels.find(nei_idx);
                     if(nei_it == voxels.end() || VoxelStateBits::isUnknown(nei_it->second))
                     {
+                        // 🔥 过滤掉紧贴地图上下边界的frontier点
+                        // 只要frontier点本身接近边界，就不应被标记为有效frontier
+                        if(nei_idx.z >= global_max_idx.z - 1) continue;  // 距上边界<=1层
+                        if(nei_idx.z <= global_min_idx.z) continue;      // 距下边界<=0层
+                        
                         sub_grid_frontier_voxels_.insert(nei_idx);
                         frontier_voxels.push_back(nei_idx);
                     }
@@ -286,6 +291,11 @@ struct SubGrid
         {
             for(const auto& unexplored_idx : unexplored_voxels_)
             {
+                // 🔥 关键修复：过滤掉紧贴地图上下边界的未探索体素
+                // 这些体素的上方/下方已超出地图，不应作为有效frontier
+                if(unexplored_idx.z >= global_max_idx.z - 1) continue;  // 距上边界<=1层
+                if(unexplored_idx.z <= global_min_idx.z) continue;      // 距下边界<=0层
+                
                 bool is_frontier = false;
                 for(int d = 0; d < 6; d++)
                 {
@@ -424,6 +434,8 @@ public:
     }
     ~GlobalMap() = default;
 
+    Eigen::Vector3f getGlobalMapMin() const { return global_map_min_; }
+    Eigen::Vector3f getGlobalMapMax() const { return global_map_max_; }
     GlobalVoxelState getVoxelState(const Eigen::Vector3f& pos);
     GlobalVoxelState getVoxelState(const GlobalVoxelIndex& idx);
     bool isInGlobalMapRange(const GlobalVoxelIndex& idx);

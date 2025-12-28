@@ -25,7 +25,7 @@
     <arg name="config_file" default="$(find rog_map)/config/gcopter_config.yaml"/>
     <arg name="odom_topic" default="/ground_truth/odom"/>
     <arg name="cloud_topic" default="/cloud_registered"/>
-    <arg name="target_type" default="1"/>  <!-- 1=手动, 2=预设 -->
+    <arg name="target_type" default="2"/>  <!-- 1=手动, 2=预设（从配置文件读取） -->
   
     <node name="rvizvisualisation" pkg="rviz" type="rviz" output="screen"
         args="-d $(find rog_map)/config/fpv.rviz"/>
@@ -39,14 +39,9 @@
         <remap from="~odom" to="$(arg odom_topic)"/>
         <remap from="~cloud" to="$(arg cloud_topic)"/>
         
-        <!-- FSM 参数 -->
-        <param name="fsm/target_type" value="$(arg target_type)"/>
-        <param name="fsm/planning_horizon" value="7.5"/>
-        <param name="fsm/replan_thresh" value="2.0"/>
-        <param name="fsm/emergency_time" value="0.8"/>
-        <param name="fsm/enable_fail_safe" value="true"/>
-        <param name="fsm/max_vel" value="2.0"/>
-        <param name="fsm/max_acc" value="2.0"/>
+        <!-- FSM 参数（从配置文件读取，如需覆盖可取消注释） -->
+        <!-- <param name="fsm/target_type" value="$(arg target_type)"/> -->
+        <!-- <param name="fsm/auto_start_preset" value="true"/> -->
         
         <!-- TrajServer 参数 -->
         <param name="traj_server/cmd_rate" value="100.0"/>

@@ -284,7 +284,8 @@ namespace rog_rrt {
             std::reverse(std::begin(path), std::end(path));
         }
 
-        bool rrt_star(const Eigen::Vector3d& s, const Eigen::Vector3d& g) {
+        bool rrt_star(const Eigen::Vector3d& s, const Eigen::Vector3d& g) 
+        {
             ros::Time rrt_start_time = ros::Time::now();
             bool goal_found = false;
             double c_square = (g - s).squaredNorm() / 4.0;

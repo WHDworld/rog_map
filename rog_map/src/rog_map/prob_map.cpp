@@ -606,26 +606,22 @@ void ProbMap::hitPointUpdate(const Vec3f& pos, const int& hash_id, const int& hi
         // Update global map
         if (cfg_.enable_global_map_)
         {
-            Eigen::Vector3f global_pos = center_pos.cast<float>();
+            Eigen::Vector3f global_pos = pos.cast<float>();
             if(global_map_->isInGlobalMapRange(global_pos))
             {
                 GlobalVoxelIndex global_idx;
                 global_map_->posToIndex(global_pos, global_idx);
-                bool is_occupied;
+                
+                // 🔥 修复：只在明确为OCCUPIED时更新全局地图
+                // KNOWN_FREE状态可能是暂时的（受raycasting影响），不应更新到全局地图
                 if (to_type == GridType::OCCUPIED) 
                 {
-                    is_occupied = true;
-                    global_map_->updateVoxelStateFromLiDAR(global_idx, is_occupied);
+                    global_map_->updateVoxelStateFromLiDAR(global_idx, true);
                     if(global_map_->isPointInFrustum(global_idx))
                     {
                         global_map_->updateVoxelStateFromCamera(global_idx, true);
                     }
-                } 
-                else if (to_type == GridType::KNOWN_FREE) 
-                {
-                    is_occupied = false;
-                    global_map_->updateVoxelStateFromLiDAR(global_idx, is_occupied);
-                } 
+                }
             }
         }
         if (cfg_.frontier_extraction_en && from_type == KNOWN_FREE) {
@@ -682,20 +678,23 @@ void ProbMap::missPointUpdate(const Vec3f& pos, const int& hash_id, const int& h
             {
                 GlobalVoxelIndex global_idx;
                 global_map_->posToIndex(global_pos, global_idx);
-                bool is_occupied;
-                if (to_type == GridType::OCCUPIED) 
+                
+                // 🔥 修复：miss更新只处理特定状态转换
+                // 1. OCCUPIED → FREE: 可能是误判或动态障碍物移除，更新到全局地图
+                // 2. UNKNOWN → FREE: 正常的空间探索，更新到全局地图
+                // 3. 其他情况：不更新全局地图
+                if (to_type == GridType::KNOWN_FREE) 
                 {
-                    is_occupied = true;
-                    global_map_->updateVoxelStateFromLiDAR(global_idx, is_occupied);
-                    if(global_map_->isPointInFrustum(global_idx))
+                    // 只有从UNKNOWN或OCCUPIED转换为FREE时才更新全局地图
+                    if(from_type == GridType::UNKNOWN || from_type == GridType::OCCUPIED)
                     {
-                        global_map_->updateVoxelStateFromCamera(global_idx, true);
+                        global_map_->updateVoxelStateFromLiDAR(global_idx, false);
                     }
-                } 
-                else if (to_type == GridType::KNOWN_FREE) 
+                }
+                else if (to_type == GridType::OCCUPIED) 
                 {
-                    is_occupied = false;
-                    global_map_->updateVoxelStateFromLiDAR(global_idx, is_occupied);
+                    // miss操作不太可能使体素变为OCCUPIED，但为了完整性保留
+                    global_map_->updateVoxelStateFromLiDAR(global_idx, true);
                 }
             }
         }
