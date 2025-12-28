@@ -53,16 +53,40 @@ void ExplorationFSM::init(ros::NodeHandle& nh, ROGMap::Ptr rog_map, GlobalMap::P
     
     // 创建视点生成器
     ViewpointGeneratorConfig vp_config;
-    nh_.param("exploration/sensor_range_min", vp_config.sensor_range_min, 0.3f);
+    
+    // 传感器参数（用于评估视点覆盖能力）
+    nh_.param("exploration/sensor_range_min", vp_config.sensor_range_min, 0.5f);
     nh_.param("exploration/sensor_range_max", vp_config.sensor_range_max, 5.0f);
-    nh_.param("exploration/sensor_fov_h", vp_config.sensor_fov_h, 1.57f);
-    nh_.param("exploration/sensor_fov_v", vp_config.sensor_fov_v, 1.22f);
-    nh_.param("exploration/optimal_viewing_distance", vp_config.optimal_viewing_distance, 3.0f);
+    nh_.param("exploration/sensor_fov_h", vp_config.sensor_fov_h, 1.57f);  // ~90度
+    nh_.param("exploration/sensor_fov_v", vp_config.sensor_fov_v, 1.22f);  // ~70度
+    
+    // 视点采样参数
+    float takeoff_height = 1.0f;
+    nh_.param("fsm/takeoff_height", takeoff_height, 1.0f);
+    nh_.param("exploration/viewpoint_height", vp_config.viewpoint_height, takeoff_height);
+    nh_.param("exploration/candidate_rmin", vp_config.candidate_rmin, 1.5f);
+    nh_.param("exploration/candidate_rmax", vp_config.candidate_rmax, 4.5f);
+    nh_.param("exploration/candidate_rnum", vp_config.candidate_rnum, 3);
+    nh_.param("exploration/candidate_dphi", vp_config.candidate_dphi, 0.5f);
+    nh_.param("exploration/optimal_distance", vp_config.optimal_distance, 3.0f);
+    
+    // 前沿簇参数
+    nh_.param("exploration/cluster_eps", vp_config.cluster_eps, 1.0f);
+    nh_.param("exploration/min_cluster_size", vp_config.min_cluster_size, 10);
+    nh_.param("exploration/cluster_split_threshold", vp_config.cluster_split_threshold, 3.0f);
+    nh_.param("exploration/max_clusters", vp_config.max_clusters, 20);
+    
+    // 安全参数
     nh_.param("exploration/uav_radius", vp_config.uav_radius, 0.35f);
     nh_.param("exploration/safety_margin", vp_config.safety_margin, 0.2f);
-    nh_.param("exploration/min_cluster_size", vp_config.min_cluster_size, 10);
-    nh_.param("exploration/max_viewpoints_per_region", vp_config.max_viewpoints_per_region, 20);
-    nh_.param("exploration/planning_horizon", vp_config.planning_horizon, 7.5f);
+    
+    // 滤波参数
+    nh_.param("exploration/min_viewpoint_distance", vp_config.min_viewpoint_distance, 0.8f);
+    nh_.param("exploration/min_coverage_score", vp_config.min_coverage_score, 0.3f);
+    
+    ROS_INFO("[ExplorationFSM] Viewpoint config: height=%.2f, r=[%.1f, %.1f], sensor=[%.1f, %.1f], fov_h=%.2f",
+             vp_config.viewpoint_height, vp_config.candidate_rmin, vp_config.candidate_rmax,
+             vp_config.sensor_range_min, vp_config.sensor_range_max, vp_config.sensor_fov_h);
     
     viewpoint_generator_ = std::make_shared<FrontierViewpointGenerator>(global_map_, vp_config);
     
@@ -347,41 +371,37 @@ void ExplorationFSM::frontierCallback(const ros::TimerEvent& e) {
         {
             std::lock_guard<std::mutex> lock(odom_mutex_);
             uav_state.position = odom_pos_.cast<float>();
-            uav_state.velocity = odom_vel_.cast<float>();
             uav_state.yaw = static_cast<float>(odom_yaw_);
         }
         viewpoint_generator_->updateUAVState(uav_state);
         
-        // 生成探索规划（仅用于可视化，不执行）
         std::lock_guard<std::mutex> lock(data_mutex_);
-        bool success = viewpoint_generator_->generateExplorationPlan(
-            frontier_subgrids,
-            expl_data_.regions,
-            expl_data_.region_route);
         
-        if (success && !expl_data_.regions.empty()) {
-            // 收集所有区域的视点
-            expl_data_.current_viewpoints.clear();
-            for (const auto& region : expl_data_.regions) {
-                for (const auto& vp : region.viewpoints) {
-                    if (vp.is_valid) {
-                        expl_data_.current_viewpoints.push_back(vp);
-                    }
-                }
-            }
-            
+        // 使用新的简化接口生成视点
+        bool success = viewpoint_generator_->generate(
+            frontier_clusters_,
+            expl_data_.current_viewpoints);
+        
+        if (success) {
             // 选择第一个视点作为下一个目标（仅用于高亮显示）
             if (!expl_data_.current_viewpoints.empty()) {
                 expl_data_.next_viewpoint = expl_data_.current_viewpoints[0];
             }
             
-            ROS_INFO_THROTTLE(5.0, "[ExplorationFSM] Passive mode: %lu regions, %lu viewpoints generated",
-                             expl_data_.regions.size(), expl_data_.current_viewpoints.size());
+            ROS_INFO_THROTTLE(2.0, "[ExplorationFSM] Passive mode: %lu clusters, %lu viewpoints",
+                             frontier_clusters_.size(), expl_data_.current_viewpoints.size());
+        } else {
+            ROS_DEBUG_THROTTLE(2.0, "[ExplorationFSM] No viewpoints generated");
         }
         
         // 更新上次状态
         last_frontier_subgrids_ = frontier_subgrids;
         last_total_frontiers_ = total_frontiers;
+    }
+    
+    // 首次无前沿时也打印信息
+    if (!has_frontier_ && frontier_subgrids.empty()) {
+        ROS_INFO_THROTTLE(5.0, "[ExplorationFSM] No frontiers detected yet");
     }
 }
 
@@ -400,7 +420,6 @@ bool ExplorationFSM::updateFrontierInfo() {
     {
         std::lock_guard<std::mutex> lock(odom_mutex_);
         uav_state.position = odom_pos_.cast<float>();
-        uav_state.velocity = odom_vel_.cast<float>();
         uav_state.yaw = static_cast<float>(odom_yaw_);
     }
     viewpoint_generator_->updateUAVState(uav_state);
@@ -455,80 +474,41 @@ int ExplorationFSM::countTotalFrontiers() const {
 
 // ==================== 视点规划 ====================
 bool ExplorationFSM::planExplorationViewpoints() {
-    std::vector<int> frontier_subgrids;
-    global_map_->getFrontierSubGrids(frontier_subgrids);
-    
-    if (frontier_subgrids.empty()) {
-        return false;
-    }
-    
     std::lock_guard<std::mutex> lock(data_mutex_);
     
-    // 调用视点生成器
-    bool success = viewpoint_generator_->generateExplorationPlan(
-        frontier_subgrids,
-        expl_data_.regions,
-        expl_data_.region_route);
+    // 使用新的简化接口生成视点
+    bool success = viewpoint_generator_->generate(
+        frontier_clusters_,
+        expl_data_.current_viewpoints);
     
-    if (!success || expl_data_.regions.empty()) {
+    if (!success || expl_data_.current_viewpoints.empty()) {
         return false;
     }
     
     // 重置索引
-    expl_data_.current_region_idx = 0;
     expl_data_.current_viewpoint_idx = 0;
     
-    // 获取当前区域的视点
-    if (!expl_data_.region_route.empty()) {
-        int first_region_id = expl_data_.region_route[0];
-        for (const auto& region : expl_data_.regions) {
-            if (region.region_id == first_region_id) {
-                expl_data_.current_viewpoints = region.viewpoints;
-                break;
-            }
-        }
-    }
+    ROS_INFO("[ExplorationFSM] Planned %lu clusters, %lu viewpoints",
+             frontier_clusters_.size(), expl_data_.current_viewpoints.size());
     
-    ROS_INFO("[ExplorationFSM] Planned %lu regions, %lu viewpoints in first region",
-             expl_data_.regions.size(), expl_data_.current_viewpoints.size());
-    
-    return !expl_data_.current_viewpoints.empty();
+    return true;
 }
 
 bool ExplorationFSM::selectNextViewpoint() {
     std::lock_guard<std::mutex> lock(data_mutex_);
     
-    // 检查当前区域是否还有视点
-    while (expl_data_.current_viewpoint_idx >= static_cast<int>(expl_data_.current_viewpoints.size())) {
-        // 切换到下一个区域
-        expl_data_.current_region_idx++;
-        expl_data_.current_viewpoint_idx = 0;
-        
-        if (expl_data_.current_region_idx >= static_cast<int>(expl_data_.region_route.size())) {
-            // 所有区域探索完成
-            return false;
-        }
-        
-        // 获取下一个区域的视点
-        int next_region_id = expl_data_.region_route[expl_data_.current_region_idx];
-        expl_data_.current_viewpoints.clear();
-        
-        for (const auto& region : expl_data_.regions) {
-            if (region.region_id == next_region_id) {
-                expl_data_.current_viewpoints = region.viewpoints;
-                break;
-            }
-        }
-        
-        ROS_INFO("[ExplorationFSM] Switched to region %d with %lu viewpoints",
-                 next_region_id, expl_data_.current_viewpoints.size());
+    // 检查是否还有视点
+    if (expl_data_.current_viewpoint_idx >= static_cast<int>(expl_data_.current_viewpoints.size())) {
+        // 所有视点探索完成，需要重新规划
+        return false;
     }
     
     // 选择当前视点
     expl_data_.next_viewpoint = expl_data_.current_viewpoints[expl_data_.current_viewpoint_idx];
     
-    ROS_INFO("[ExplorationFSM] Selected viewpoint %d: (%.2f, %.2f, %.2f) yaw=%.2f",
-             expl_data_.current_viewpoint_idx,
+    ROS_INFO("[ExplorationFSM] Selected viewpoint %d/%lu: (%.2f, %.2f, %.2f) yaw=%.2f",
+             expl_data_.current_viewpoint_idx + 1,
+             expl_data_.current_viewpoints.size(),
              expl_data_.next_viewpoint.position.x(),
              expl_data_.next_viewpoint.position.y(),
              expl_data_.next_viewpoint.position.z(),
@@ -617,81 +597,122 @@ void ExplorationFSM::visualizeFrontierClusters() {
     visualization_msgs::MarkerArray markers;
     int marker_id = 0;
     
-    // 为每个区域的每个簇创建不同颜色的marker
-    std::vector<std::array<float, 4>> colors = {
-        {1.0f, 0.0f, 0.0f, 0.6f},  // Red
-        {0.0f, 1.0f, 0.0f, 0.6f},  // Green
-        {0.0f, 0.0f, 1.0f, 0.6f},  // Blue
-        {1.0f, 1.0f, 0.0f, 0.6f},  // Yellow
-        {1.0f, 0.0f, 1.0f, 0.6f},  // Magenta
-        {0.0f, 1.0f, 1.0f, 0.6f},  // Cyan
-        {1.0f, 0.5f, 0.0f, 0.6f},  // Orange
-        {0.5f, 0.0f, 1.0f, 0.6f},  // Purple
-    };
-    
-    for (const auto& region : expl_data_.regions) {
-        for (const auto& cluster : region.clusters) {
-            if (cluster.voxel_indices.empty()) continue;
-            
-            visualization_msgs::Marker marker;
-            marker.header.frame_id = "map";
-            marker.header.stamp = ros::Time::now();
-            marker.ns = "frontier_clusters";
-            marker.id = marker_id++;
-            marker.type = visualization_msgs::Marker::CUBE_LIST;
-            marker.action = visualization_msgs::Marker::ADD;
-            
-            float voxel_size = global_map_->global_resolution_;
-            marker.scale.x = voxel_size * 0.8;
-            marker.scale.y = voxel_size * 0.8;
-            marker.scale.z = voxel_size * 0.8;
-            
-            auto& color = colors[cluster.cluster_id % colors.size()];
-            marker.color.r = color[0];
-            marker.color.g = color[1];
-            marker.color.b = color[2];
-            marker.color.a = color[3];
-            
-            for (const auto& idx : cluster.voxel_indices) {
-                Eigen::Vector3f pos;
-                global_map_->indexToPos(idx, pos);
-                
-                geometry_msgs::Point p;
-                p.x = pos.x();
-                p.y = pos.y();
-                p.z = pos.z();
-                marker.points.push_back(p);
-            }
-            
-            markers.markers.push_back(marker);
-            
-            // 添加簇中心和法向量
-            visualization_msgs::Marker center_marker;
-            center_marker.header.frame_id = "map";
-            center_marker.header.stamp = ros::Time::now();
-            center_marker.ns = "cluster_centers";
-            center_marker.id = marker_id++;
-            center_marker.type = visualization_msgs::Marker::SPHERE;
-            center_marker.action = visualization_msgs::Marker::ADD;
-            center_marker.pose.position.x = cluster.centroid.x();
-            center_marker.pose.position.y = cluster.centroid.y();
-            center_marker.pose.position.z = cluster.centroid.z();
-            center_marker.scale.x = 0.3;
-            center_marker.scale.y = 0.3;
-            center_marker.scale.z = 0.3;
-            center_marker.color.r = 1.0;
-            center_marker.color.g = 1.0;
-            center_marker.color.b = 1.0;
-            center_marker.color.a = 1.0;
-            markers.markers.push_back(center_marker);
-        }
-    }
-    
-    // 清除旧marker
+    // 先清除旧marker
     visualization_msgs::Marker delete_marker;
     delete_marker.header.frame_id = "map";
     delete_marker.header.stamp = ros::Time::now();
+    delete_marker.ns = "";
     delete_marker.action = visualization_msgs::Marker::DELETEALL;
+    markers.markers.push_back(delete_marker);
+    
+    // 颜色列表
+    std::vector<std::array<float, 4>> colors = {
+        {1.0f, 0.0f, 0.0f, 0.8f},  // Red
+        {0.0f, 1.0f, 0.0f, 0.8f},  // Green
+        {0.0f, 0.0f, 1.0f, 0.8f},  // Blue
+        {1.0f, 1.0f, 0.0f, 0.8f},  // Yellow
+        {1.0f, 0.0f, 1.0f, 0.8f},  // Magenta
+        {0.0f, 1.0f, 1.0f, 0.8f},  // Cyan
+        {1.0f, 0.5f, 0.0f, 0.8f},  // Orange
+        {0.5f, 0.0f, 1.0f, 0.8f},  // Purple
+    };
+    
+    // 使用直接聚类的前沿簇（与前沿点云一致）
+    for (size_t i = 0; i < frontier_clusters_.size(); ++i) {
+        const auto& cluster = frontier_clusters_[i];
+        auto& color = colors[i % colors.size()];
+        
+        // ========== 1. 簇范围（透明球体，表示覆盖区域） ==========
+        visualization_msgs::Marker extent_marker;
+        extent_marker.header.frame_id = "map";
+        extent_marker.header.stamp = ros::Time::now();
+        extent_marker.ns = "cluster_extent";
+        extent_marker.id = marker_id++;
+        extent_marker.type = visualization_msgs::Marker::SPHERE;
+        extent_marker.action = visualization_msgs::Marker::ADD;
+        extent_marker.pose.position.x = cluster.centroid.x();
+        extent_marker.pose.position.y = cluster.centroid.y();
+        extent_marker.pose.position.z = cluster.centroid.z();
+        // 使用 extent 作为直径（如果 extent 太小则设为最小值）
+        float diameter = std::max(cluster.extent * 2.0f, 0.5f);
+        extent_marker.scale.x = diameter;
+        extent_marker.scale.y = diameter;
+        extent_marker.scale.z = diameter;
+        extent_marker.color.r = color[0];
+        extent_marker.color.g = color[1];
+        extent_marker.color.b = color[2];
+        extent_marker.color.a = 0.25f;  // 透明度较低，方便看到内部
+        markers.markers.push_back(extent_marker);
+        
+        // ========== 2. 簇中心（小实心球体） ==========
+        visualization_msgs::Marker center_marker;
+        center_marker.header.frame_id = "map";
+        center_marker.header.stamp = ros::Time::now();
+        center_marker.ns = "cluster_centers";
+        center_marker.id = marker_id++;
+        center_marker.type = visualization_msgs::Marker::SPHERE;
+        center_marker.action = visualization_msgs::Marker::ADD;
+        center_marker.pose.position.x = cluster.centroid.x();
+        center_marker.pose.position.y = cluster.centroid.y();
+        center_marker.pose.position.z = cluster.centroid.z();
+        center_marker.scale.x = 0.3;
+        center_marker.scale.y = 0.3;
+        center_marker.scale.z = 0.3;
+        center_marker.color.r = color[0];
+        center_marker.color.g = color[1];
+        center_marker.color.b = color[2];
+        center_marker.color.a = 1.0f;  // 完全不透明
+        markers.markers.push_back(center_marker);
+        
+        // ========== 3. 簇ID文字标签 ==========
+        visualization_msgs::Marker text_marker;
+        text_marker.header.frame_id = "map";
+        text_marker.header.stamp = ros::Time::now();
+        text_marker.ns = "cluster_labels";
+        text_marker.id = marker_id++;
+        text_marker.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
+        text_marker.action = visualization_msgs::Marker::ADD;
+        text_marker.pose.position.x = cluster.centroid.x();
+        text_marker.pose.position.y = cluster.centroid.y();
+        text_marker.pose.position.z = cluster.centroid.z() + diameter * 0.5f + 0.3f;
+        text_marker.scale.z = 0.4;
+        text_marker.color.r = 1.0;
+        text_marker.color.g = 1.0;
+        text_marker.color.b = 1.0;
+        text_marker.color.a = 1.0;
+        // 显示簇ID和点数
+        text_marker.text = "C" + std::to_string(i) + " (" + std::to_string(cluster.point_count) + ")";
+        markers.markers.push_back(text_marker);
+        
+        // ========== 4. 前沿点（小立方体，不同簇不同颜色） ==========
+        if (!cluster.points.empty()) {
+            visualization_msgs::Marker points_marker;
+            points_marker.header.frame_id = "map";
+            points_marker.header.stamp = ros::Time::now();
+            points_marker.ns = "frontier_points";
+            points_marker.id = marker_id++;
+            points_marker.type = visualization_msgs::Marker::CUBE_LIST;
+            points_marker.action = visualization_msgs::Marker::ADD;
+            points_marker.scale.x = 0.1;  // 10cm 立方体
+            points_marker.scale.y = 0.1;
+            points_marker.scale.z = 0.1;
+            points_marker.color.r = color[0];
+            points_marker.color.g = color[1];
+            points_marker.color.b = color[2];
+            points_marker.color.a = 0.9f;  // 较高不透明度
+            
+            points_marker.points.reserve(cluster.points.size());
+            for (const auto& pt : cluster.points) {
+                geometry_msgs::Point p;
+                p.x = pt.x();
+                p.y = pt.y();
+                p.z = pt.z();
+                points_marker.points.push_back(p);
+            }
+            
+            markers.markers.push_back(points_marker);
+        }
+    }
     
     frontier_cluster_pub_.publish(markers);
 }
@@ -702,8 +723,16 @@ void ExplorationFSM::visualizeViewpoints() {
     visualization_msgs::MarkerArray markers;
     int marker_id = 0;
     
-    for (const auto& region : expl_data_.regions) {
-        for (const auto& vp : region.viewpoints) {
+    // 先清除旧marker
+    visualization_msgs::Marker delete_marker;
+    delete_marker.header.frame_id = "map";
+    delete_marker.header.stamp = ros::Time::now();
+    delete_marker.ns = "";
+    delete_marker.action = visualization_msgs::Marker::DELETEALL;
+    markers.markers.push_back(delete_marker);
+    
+    // 使用直接生成的视点
+    for (const auto& vp : expl_data_.current_viewpoints) {
             if (!vp.is_valid) continue;
             
             // 视点位置（球体）
@@ -722,8 +751,7 @@ void ExplorationFSM::visualizeViewpoints() {
             sphere.scale.z = config_.viewpoint_sphere_radius * 2;
             
             // 当前目标视点用绿色，其他用蓝色
-            bool is_current = (vp.region_id == expl_data_.next_viewpoint.region_id &&
-                              vp.cluster_id == expl_data_.next_viewpoint.cluster_id);
+            bool is_current = (vp.cluster_id == expl_data_.next_viewpoint.cluster_id);
             if (is_current) {
                 sphere.color.r = 0.0;
                 sphere.color.g = 1.0;
@@ -767,7 +795,6 @@ void ExplorationFSM::visualizeViewpoints() {
             arrow.color.a = 1.0;
             
             markers.markers.push_back(arrow);
-        }
     }
     
     viewpoint_marker_pub_.publish(markers);
@@ -778,26 +805,25 @@ void ExplorationFSM::visualizeFrustums() {
     
     visualization_msgs::MarkerArray markers;
     int marker_id = 0;
-    for (const auto& region : expl_data_.regions) {
-        for (const auto& vp : region.viewpoints) {
-            if (!vp.is_valid) continue;
-            
-            bool is_current = (vp.region_id == expl_data_.next_viewpoint.region_id &&
-                              vp.cluster_id == expl_data_.next_viewpoint.cluster_id);
-            
-            std::array<float, 4> color;
-            if (is_current) {
-                color = {0.0f, 1.0f, 0.0f, 1.0f};
-            } else {
-                color = {0.0f, 0.5f, 1.0f, 1.0f};
-            }
-            
-            createFrustumMarker(vp.position, vp.yaw, vp.pitch,
-                               config_.frustum_length,
-                               config_.frustum_fov_h, config_.frustum_fov_v,
-                               marker_id, color, markers);
-            marker_id += 5;  // 每个视锥体使用5个marker
+    
+    // 使用直接生成的视点
+    for (size_t i = 0; i < expl_data_.current_viewpoints.size(); ++i) {
+        const auto& vp = expl_data_.current_viewpoints[i];
+        if (!vp.is_valid) continue;
+        
+        // 第一个视点用绿色，其他用蓝色
+        std::array<float, 4> color;
+        if (i == 0) {
+            color = {0.0f, 1.0f, 0.0f, 0.6f};
+        } else {
+            color = {0.0f, 0.5f, 1.0f, 0.4f};
         }
+        
+        createFrustumMarker(vp.position, vp.yaw, vp.pitch,
+                           config_.frustum_length,
+                           config_.frustum_fov_h, config_.frustum_fov_v,
+                           marker_id, color, markers);
+        marker_id += 5;  // 每个视锥体使用5个marker
     }
     
     frustum_marker_pub_.publish(markers);
@@ -881,72 +907,8 @@ void ExplorationFSM::createFrustumMarker(
 }
 
 void ExplorationFSM::visualizeRegionRoute() {
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    
+    // 简化后不再使用区域路由，发布空marker
     visualization_msgs::MarkerArray markers;
-    
-    if (expl_data_.region_route.size() < 2) {
-        route_marker_pub_.publish(markers);
-        return;
-    }
-    
-    // 路由线
-    visualization_msgs::Marker line;
-    line.header.frame_id = "map";
-    line.header.stamp = ros::Time::now();
-    line.ns = "region_route";
-    line.id = 0;
-    line.type = visualization_msgs::Marker::LINE_STRIP;
-    line.action = visualization_msgs::Marker::ADD;
-    line.scale.x = 0.1;
-    line.color.r = 1.0;
-    line.color.g = 0.5;
-    line.color.b = 0.0;
-    line.color.a = 0.8;
-    
-    for (int region_id : expl_data_.region_route) {
-        for (const auto& region : expl_data_.regions) {
-            if (region.region_id == region_id) {
-                geometry_msgs::Point p;
-                p.x = region.centroid.x();
-                p.y = region.centroid.y();
-                p.z = region.centroid.z();
-                line.points.push_back(p);
-                break;
-            }
-        }
-    }
-    
-    markers.markers.push_back(line);
-    
-    // 区域编号
-    int marker_id = 1;
-    for (size_t i = 0; i < expl_data_.region_route.size(); ++i) {
-        int region_id = expl_data_.region_route[i];
-        for (const auto& region : expl_data_.regions) {
-            if (region.region_id == region_id) {
-                visualization_msgs::Marker text;
-                text.header.frame_id = "map";
-                text.header.stamp = ros::Time::now();
-                text.ns = "region_ids";
-                text.id = marker_id++;
-                text.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
-                text.action = visualization_msgs::Marker::ADD;
-                text.pose.position.x = region.centroid.x();
-                text.pose.position.y = region.centroid.y();
-                text.pose.position.z = region.centroid.z() + 0.5;
-                text.scale.z = 0.5;
-                text.color.r = 1.0;
-                text.color.g = 1.0;
-                text.color.b = 1.0;
-                text.color.a = 1.0;
-                text.text = std::to_string(i + 1);
-                markers.markers.push_back(text);
-                break;
-            }
-        }
-    }
-    
     route_marker_pub_.publish(markers);
 }
 
@@ -973,8 +935,7 @@ void ExplorationFSM::visualizeExplorationInfo() {
     
     std::stringstream ss;
     ss << "State: " << getStateString() << "\n";
-    ss << "Regions: " << expl_data_.regions.size() << "\n";
-    ss << "Current Region: " << expl_data_.current_region_idx + 1 << "/" << expl_data_.region_route.size() << "\n";
+    ss << "Clusters: " << frontier_clusters_.size() << "\n";
     ss << "Viewpoints: " << expl_data_.current_viewpoint_idx + 1 << "/" << expl_data_.current_viewpoints.size() << "\n";
     ss << "Total Visited: " << expl_data_.total_viewpoints_visited;
     

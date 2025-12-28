@@ -225,9 +225,9 @@ namespace ego_planner
       const bool flag_randomPolyTraj, const bool touch_goal)
   {
 
-    static int count = 0;
-    printf("\033[47;30m\n[replan %d]==============================================\033[0m\n",
-           count++);
+    // static int count = 0;
+    // printf("\033[47;30m\n[replan %d]==============================================\033[0m\n",
+    //        count++);
 
     ploy_traj_opt_->setIfTouchGoal(touch_goal);
 
@@ -280,7 +280,7 @@ namespace ego_planner
     t_opt = ros::WallTime::now() - t_start;
 
     // save and display planned results
-    ROS_INFO("plan_success=%d", flag_success);
+    // ROS_INFO("plan_success=%d", flag_success);
     if (!flag_success)
     {
       continous_failures_count_++;
@@ -291,8 +291,8 @@ namespace ego_planner
     static int count_success = 0;
     sum_time += (t_init + t_opt).toSec();
     count_success++;
-    ROS_INFO("total time: %.3f, init: %.3f, optimize: %.3f, avg_time=%.3f",
-             (t_init + t_opt).toSec(), t_init.toSec(), t_opt.toSec(), sum_time / count_success);
+    // ROS_INFO("total time: %.3f, init: %.3f, optimize: %.3f, avg_time=%.3f",
+    //          (t_init + t_opt).toSec(), t_init.toSec(), t_opt.toSec(), sum_time / count_success);
 
     setLocalTrajFromOpt(best_MJO, touch_goal);
 

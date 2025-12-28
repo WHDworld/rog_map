@@ -123,13 +123,13 @@ rog_map/
 │  │  ┌───────────────────────────────────────────────────────────┐ │    │
 │  │  │       FrontierViewpointGenerator (视点生成器)              │ │    │
 │  │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐       │ │    │
-│  │  │  │ 前沿聚类     │→ │ 区域划分     │→ │ 视点生成     │       │ │    │
-│  │  │  │ (DBSCAN)    │  │ (层次聚类)   │  │ (几何采样)   │       │ │    │
+│  │  │  │ 子网格分区   │→ │ 前沿聚类     │→ │ 簇分裂      │       │ │    │
+│  │  │  │ (SubGrid)   │  │ (BFS增长)   │  │ (超阈值分割) │       │ │    │
 │  │  │  └─────────────┘  └─────────────┘  └─────────────┘       │ │    │
 │  │  │                                            │              │ │    │
 │  │  │  ┌─────────────┐  ┌─────────────┐         │              │ │    │
-│  │  │  │ 视点评估     │← │ TSP路由      │←────────┘              │ │    │
-│  │  │  │ (收益计算)   │  │ (MST优化)    │                        │ │    │
+│  │  │  │ 去重滤波     │← │ 圆周采样     │←────────┘              │ │    │
+│  │  │  │ (距离过滤)   │  │ (固定高度)   │                        │ │    │
 │  │  │  └─────────────┘  └─────────────┘                        │ │    │
 │  │  └───────────────────────────────────────────────────────────┘ │    │
 │  └────────────────────────────────────────────────────────────────┘    │
@@ -224,101 +224,186 @@ struct SubGrid {
 
 本系统采用**层级式探索策略**，融合了 EDEN、FLARE、Star-Searcher 等论文的核心思想：
 
-| 层级 | 名称 | 功能 | 参考算法 |
+| 层级 | 名称 | 功能 | 说明 |
 |-----|------|------|---------|
-| L1 | 前沿提取 | 从体素图提取几何前沿 | FLARE |
-| L2 | 前沿聚类 | 将稀疏前沿聚合为簇 | Star-Searcher |
-| L3 | 区域划分 | 基于方向/距离划分区域 | EDEN |
-| L4 | 视点生成 | 为每个簇生成候选视点 | FC-Planner |
-| L5 | TSP路由 | 优化区域/视点访问顺序 | EDEN EOHDT |
-| L6 | 视点评估 | 综合评分选择最佳视点 | Star-Searcher |
+| L1 | 前沿提取 | 从体素图提取几何前沿 | GlobalMap.extractFrontier() |
+| L2 | 子网格分区 | 按SubGrid空间分区前沿点 | 避免前沿连成一片 |
+| L3 | 前沿聚类 | 在每个子网格内聚类 | BFS区域增长 |
+| L4 | 簇分裂 | 分裂过大的簇 | 超阈值二分 |
+| L5 | 圆周采样 | 为每个簇生成候选视点 | 固定高度+多半径 |
+| L6 | 去重滤波 | 移除距离太近的视点 | 按评分保留最佳 |
 
 ### 2. 前沿视点生成器 (FrontierViewpointGenerator)
 
-#### 2.1 前沿聚类 (DBSCAN)
+#### 2.1 数据流
 
 ```
-输入: 前沿体素集合 F = {f₁, f₂, ..., fₙ}
-参数: 邻域半径 ε, 最小点数 minPts
+GlobalMap                           FrontierViewpointGenerator
+    │                                          │
+    │  getFrontierPositionsBySubGrid()         │
+    │  ────────────────────────────────────►   │
+    │  返回: [(sg_id, [点位置列表]), ...]       │
+    │                                          │
+    │                          ┌───────────────┼───────────────┐
+    │                          │  Step 1       │  Step 2       │
+    │                          │ 子网格内聚类   │  分裂大簇     │
+    │                          │ clusterIn     │  splitLarge   │
+    │                          │ Subgrid()     │  Clusters()   │
+    │                          └───────────────┴───────────────┘
+    │                                          │
+    │                          ┌───────────────┼───────────────┐
+    │                          │  Step 3       │  Step 4       │
+    │                          │ 圆周采样视点   │  去重滤波     │
+    │                          │ sampleView    │  filterView   │
+    │                          │ points()      │  points()     │
+    │                          └───────────────┴───────────────┘
+    │                                          │
+    │                                          ▼
+    │                               最终视点列表
+```
+
+#### 2.2 子网格内聚类 (BFS区域增长)
+
+```
+输入: 子网格内的前沿点集合 P = {p₁, p₂, ..., pₙ}
+参数: 聚类半径 ε (cluster_eps), 最小点数 minPts (min_cluster_size)
 
 算法:
-1. 对每个未访问的前沿点 fᵢ:
-   a. 查找 ε-邻域内的所有点
-   b. 如果邻域点数 ≥ minPts:
-      - 创建新簇 C
-      - 递归扩展簇
-   c. 否则标记为噪声
+for each 未访问的点 pᵢ:
+    1. 创建队列Q，将pᵢ加入Q
+    2. BFS扩展:
+       while Q非空:
+           取出当前点 p_curr
+           加入当前簇 C
+           for each 点 pⱼ:
+               if pⱼ未访问 AND ||pⱼ - p_curr|| ≤ ε:
+                   标记pⱼ已访问
+                   将pⱼ加入Q
+    3. if |C| ≥ minPts:
+           保存簇C（计算中心、范围）
 
-输出: 簇集合 C = {C₁, C₂, ..., Cₖ}
+输出: 簇集合 {(centroid, extent, point_count), ...}
 ```
 
-#### 2.2 区域划分 (EDEN风格)
+#### 2.3 簇分裂
 
 基于探索方向和距离的层次聚类：
 
 ```
 核心公式:
 
-1. 方向差异:
-   θ_diff = arccos(d_i · d_j)
-   其中 d_i = (centroid_i - UAV_pos).normalized()
+```
+输入: 簇集合 C = {C₁, C₂, ..., Cₖ}
+参数: 分裂阈值 τ (cluster_split_threshold)
 
-2. 距离差异:
-   dist_diff = |d_i - d_j|
+算法:
+for each 簇 Cᵢ:
+    if Cᵢ.extent > τ:
+        # 沿X方向二分
+        C1.centroid = Cᵢ.centroid - (0.25 * extent, 0, 0)
+        C2.centroid = Cᵢ.centroid + (0.25 * extent, 0, 0)
+        C1.extent = C2.extent = Cᵢ.extent * 0.5
+        替换 Cᵢ 为 {C1, C2}
 
-3. 区域合并条件:
-   merge_if: θ_diff < θ_max AND dist_diff < dist_max
+输出: 分裂后的簇集合
 ```
 
-#### 2.3 视点生成
+#### 2.4 圆周采样视点
 
-采用**球面坐标采样**策略：
-
-```
-视点位置计算:
-P_vp = P_centroid + R · [cos(pitch)cos(yaw), cos(pitch)sin(yaw), -sin(pitch)]
-
-其中:
-- R: 最优观测距离 (默认3m)
-- pitch: 俯仰角 (从-30°到30°采样)
-- yaw: 偏航角 (360°均匀采样)
-
-约束条件:
-1. 安全约束: ESDF(P_vp) > r_uav + margin
-2. 可达约束: 射线追踪无碰撞
-3. 覆盖约束: 视锥体覆盖前沿
-```
-
-#### 2.4 TSP路由优化 (EDEN EOHDT)
+采用**固定高度+圆周采样**策略（适合无人机水平飞行）：
 
 ```
-EOHDT算法流程:
+                    ← candidate_rmax →
+                    ← candidate_rmin →
+                         ____
+                     ___/    \___
+                    /      C      \    ← 簇中心 (centroid)
+                   |    .*   *.    |   ← 采样点
+                    \___      ___/
+                        \____/
 
-1. 构建区域距离图:
-   Weight(Ri, Rj) = path_distance(centroid_i, centroid_j)
+参数:
+- viewpoint_height: 视点高度（固定为起飞高度）
+- candidate_rmin/rmax: 采样半径范围
+- candidate_dphi: 角度采样间隔
 
-2. Prim算法构建MST:
-   - 从UAV位置最近的区域开始
-   - 每次添加距离最近的未访问区域
+视点位置:
+P_vp = (Cx + r·cos(φ), Cy + r·sin(φ), viewpoint_height)
 
-3. 最远分支后置:
-   - 识别最远叶节点所在分支
-   - 将该分支移至路由末尾
-   - 节省返回起点的距离
+视点朝向:
+yaw = atan2(Cy - Py, Cx - Px)  # 朝向簇中心
+pitch = 0  # 无人机水平飞行
 
-4. 多子节点选择:
-   R_next = argmin_{Rj ∈ Children(Ri)} d(Ri, Rj)
+安全检查:
+1. isInGlobalMapRange(P_vp) == true
+2. VoxelState(P_vp) == FREE
+3. 周围无障碍物 (uav_radius + safety_margin)
+
+评分:
+score = 1 - |dist - optimal_distance| / sensor_range_max
 ```
 
-#### 2.5 视点评估函数
+#### 2.5 覆盖评分
 
 ```
-综合评分:
-Score(vp) = w_cov · S_coverage + w_dist · S_distance + w_safe · S_safety
+                      sensor_fov_h
+                    ←────────────→
+                         /│\
+                        / │ \
+                       /  │  \
+                      /   │   \
+                     /    │    \
+              视点 ●──────┼──────→ 簇中心
+                     \    │    /
+                      \   │   /
+                       \  │  /
+                        \ │ /
+                         \│/
 
-各项计算:
-1. 覆盖得分: S_coverage = num_covered_frontiers / total_cluster_frontiers
-2. 距离得分: S_distance = exp(-λ_d · distance_to_uav)
+评分公式:
+Score = 0.3 × S_dist + 0.3 × S_angle_h + 0.2 × S_angle_v + 0.2 × S_extent
+
+1. 距离评分 (S_dist):
+   - 检查是否在 [sensor_range_min, sensor_range_max] 范围内
+   - 使用高斯分布评估与最优距离的偏差
+   - S_dist = exp(-0.5 × ((dist - optimal_distance) / (range_max × 0.3))²)
+
+2. 水平角度评分 (S_angle_h):
+   - 检查簇中心是否在水平FOV内
+   - S_angle_h = 1 - (angle_diff / half_fov_h)
+
+3. 垂直角度评分 (S_angle_v):
+   - 检查簇中心是否在垂直FOV内
+   - S_angle_v = 1 - (|vertical_angle| / half_fov_v)
+
+4. 覆盖评分 (S_extent):
+   - 评估簇范围是否能被视锥体覆盖
+   - coverage_width = 2 × dist × tan(half_fov_h)
+   - S_extent = exp(-cluster.extent / min(coverage_width, coverage_height))
+
+过滤条件:
+- 评分 < min_coverage_score 的视点被过滤
+```
+
+#### 2.6 去重滤波
+
+```
+输入: 候选视点集合 V = {v₁, v₂, ..., vₙ}
+参数: 最小视点间距 d_min (min_viewpoint_distance)
+
+算法:
+1. 按评分降序排序 V
+2. filtered = []
+3. for each vᵢ in V:
+       is_close = false
+       for each vⱼ in filtered:
+           if ||vᵢ.pos - vⱼ.pos|| < d_min:
+               is_close = true
+               break
+       if not is_close:
+           filtered.append(vᵢ)
+
+输出: 去重后的视点集合 filtered
 3. 安全得分: S_safety = min(1, ESDF(vp) / safety_margin)
 
 默认权重: w_cov=0.6, w_dist=0.3, w_safe=0.1
@@ -654,14 +739,27 @@ exploration:
   
   # 传感器参数
   sensor_range_max: 5.0             # 最大感知距离 [m]
-  sensor_fov_h: 1.57                # 水平FOV [rad] (90°)
-  sensor_fov_v: 1.22                # 垂直FOV [rad] (70°)
   
-  # 视点生成参数
-  optimal_viewing_distance: 3.0     # 最优观测距离 [m]
-  uav_radius: 0.35                  # 无人机半径 [m]
+  # 视点采样参数
+  viewpoint_height: 1.0             # 视点高度（起飞高度）[m]
+  candidate_rmin: 1.5               # 最小采样半径 [m]
+  candidate_rmax: 4.5               # 最大采样半径 [m]
+  candidate_rnum: 3                 # 半径采样数量
+  candidate_dphi: 0.5               # 角度采样间隔 [rad]
+  
+  # 前沿簇参数
+  cluster_eps: 1.0                  # 聚类半径 [m]
   min_cluster_size: 10              # 最小簇大小
-  max_viewpoints_per_region: 20     # 每区域最大视点数
+  cluster_split_threshold: 3.0      # 簇分裂阈值 [m]
+  max_clusters: 20                  # 最大簇数
+  
+  # 安全参数
+  uav_radius: 0.35                  # 无人机半径 [m]
+  safety_margin: 0.2                # 安全边距 [m]
+  optimal_distance: 3.0             # 最优观测距离 [m]
+  
+  # 滤波参数
+  min_viewpoint_distance: 0.8       # 视点最小间距 [m]
   
   # 可视化参数
   viewpoint_sphere_radius: 0.2      # 视点球体半径 [m]

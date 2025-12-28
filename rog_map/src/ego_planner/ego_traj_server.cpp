@@ -113,17 +113,17 @@ void polyTrajCallback(rog_map::PolyTrajPtr msg)
   receive_traj_ = true;
   task_finished_ = false;
 
-  if (std::isnan(end_yaw_))
-  {
-    ROS_INFO("[EGOTrajServer] Received trajectory, id: %d, duration: %.2f s, yaw: following velocity direction", 
-             traj_id_, traj_duration_);
-  }
-  else
-  {
-    ROS_INFO("[EGOTrajServer] Received trajectory, id: %d, duration: %.2f s, yaw: %.2f -> %.2f %s", 
-             traj_id_, traj_duration_, start_yaw_, end_yaw_,
-             use_target_yaw_ ? "(interpolating)" : "(small diff, following velocity)");
-  }
+  // if (std::isnan(end_yaw_))
+  // {
+  //   ROS_INFO("[EGOTrajServer] Received trajectory, id: %d, duration: %.2f s, yaw: following velocity direction", 
+  //            traj_id_, traj_duration_);
+  // }
+  // else
+  // {
+  //   ROS_INFO("[EGOTrajServer] Received trajectory, id: %d, duration: %.2f s, yaw: %.2f -> %.2f %s", 
+  //            traj_id_, traj_duration_, start_yaw_, end_yaw_,
+  //            use_target_yaw_ ? "(interpolating)" : "(small diff, following velocity)");
+  // }
 }
 
 void odomCallback(const nav_msgs::OdometryConstPtr &msg)

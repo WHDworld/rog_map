@@ -312,11 +312,11 @@ namespace ego_planner
     static std::string state_str[8] = {"INIT", "PRE_ARM", "TAKEOFF", "WAIT_TARGET",
                                        "GEN_NEW_TRAJ", "REPLAN_TRAJ", "EXEC_TRAJ", "EMERGENCY_STOP"};
     
-    int pre_s = static_cast<int>(exec_state_);
+    // int pre_s = static_cast<int>(exec_state_);
     exec_state_ = new_state;
     
-    ROS_INFO("[EGOReplanFSM] State: %s -> %s (by %s)",
-             state_str[pre_s].c_str(), state_str[static_cast<int>(new_state)].c_str(), pos_call.c_str());
+    // ROS_INFO("[EGOReplanFSM] State: %s -> %s (by %s)",
+    //          state_str[pre_s].c_str(), state_str[static_cast<int>(new_state)].c_str(), pos_call.c_str());
   }
 
   void EGOReplanFSM::printFSMExecState()

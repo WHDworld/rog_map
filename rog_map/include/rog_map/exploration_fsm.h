@@ -51,12 +51,9 @@ struct ExplorationData {
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     
     // 当前探索状态
-    std::vector<ExplorationRegion> regions;
-    std::vector<int> region_route;
     std::vector<ExplorationViewpoint> current_viewpoints;
     
     // 当前目标
-    int current_region_idx;
     int current_viewpoint_idx;
     ExplorationViewpoint next_viewpoint;
     
@@ -71,8 +68,7 @@ struct ExplorationData {
     float exploration_progress;  // [0, 1]
     
     ExplorationData()
-        : current_region_idx(0)
-        , current_viewpoint_idx(0)
+        : current_viewpoint_idx(0)
         , total_distance(0.0)
         , total_viewpoints_visited(0)
         , total_frontiers_explored(0)
@@ -80,10 +76,7 @@ struct ExplorationData {
     {}
     
     void reset() {
-        regions.clear();
-        region_route.clear();
         current_viewpoints.clear();
-        current_region_idx = 0;
         current_viewpoint_idx = 0;
         total_distance = 0.0;
         total_viewpoints_visited = 0;
@@ -175,6 +168,7 @@ private:
     void visualizationCallback(const ros::TimerEvent& e);
     void odometryCallback(const nav_msgs::OdometryConstPtr& msg);
     void triggerCallback(const geometry_msgs::PoseStampedConstPtr& msg);
+    
     
     // ==================== 状态处理函数 ====================
     void processInit();
@@ -268,6 +262,9 @@ private:
     std::vector<int> last_frontier_subgrids_;
     int last_total_frontiers_ = 0;
     bool frontier_changed_ = false;
+    
+    // 前沿簇缓存（直接从共享的GlobalMap获取）
+    std::vector<FrontierCluster> frontier_clusters_;
     
     // 互斥锁
     mutable std::mutex state_mutex_;

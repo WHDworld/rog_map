@@ -476,6 +476,68 @@ public:
         }
     }
     
+    /**
+     * @brief 【新增】获取所有前沿体素的位置列表
+     * 
+     * 直接返回 frontier_voxels_ 对应的位置，与 RViz 可视化的前沿点云完全一致
+     */
+    void getFrontierPositions(std::vector<Eigen::Vector3f>& positions) const {
+        std::lock_guard<std::mutex> lock(map_mutex_);
+        positions.clear();
+        positions.reserve(frontier_voxels_.size());
+        for (const auto& f_idx : frontier_voxels_) {
+            // 直接计算位置，不调用非const的indexToPos
+            Eigen::Vector3f pos(
+                (f_idx.x + 0.5f) * global_resolution_ + global_map_min_.x(),
+                (f_idx.y + 0.5f) * global_resolution_ + global_map_min_.y(),
+                (f_idx.z + 0.5f) * global_resolution_ + global_map_min_.z()
+            );
+            positions.push_back(pos);
+        }
+    }
+    
+    // 获取前沿体素总数
+    size_t getFrontierCount() const {
+        std::lock_guard<std::mutex> lock(map_mutex_);
+        return frontier_voxels_.size();
+    }
+    
+    /**
+     * @brief 获取按子网格分组的前沿点位置
+     * 
+     * 返回每个包含前沿的子网格的前沿点位置列表
+     * 这样可以在每个子网格内独立进行聚类，避免前沿点连成一片
+     */
+    void getFrontierPositionsBySubGrid(
+        std::vector<std::pair<int, std::vector<Eigen::Vector3f>>>& subgrid_frontiers) const 
+    {
+        std::lock_guard<std::mutex> lock(map_mutex_);
+        subgrid_frontiers.clear();
+        
+        for (int sg_id : current_frontier_subgrids_) {
+            if (sg_id < 0 || sg_id >= static_cast<int>(sub_grids_.size())) continue;
+            
+            const SubGrid& sg = sub_grids_[sg_id];
+            if (sg.sub_grid_frontier_voxels_.empty()) continue;
+            
+            std::vector<Eigen::Vector3f> positions;
+            positions.reserve(sg.sub_grid_frontier_voxels_.size());
+            
+            for (const auto& f_idx : sg.sub_grid_frontier_voxels_) {
+                Eigen::Vector3f pos(
+                    (static_cast<float>(f_idx.x) + 0.5f) * global_resolution_ + global_map_min_.x(),
+                    (static_cast<float>(f_idx.y) + 0.5f) * global_resolution_ + global_map_min_.y(),
+                    (static_cast<float>(f_idx.z) + 0.5f) * global_resolution_ + global_map_min_.z()
+                );
+                positions.push_back(pos);
+            }
+            
+            if (!positions.empty()) {
+                subgrid_frontiers.emplace_back(sg_id, std::move(positions));
+            }
+        }
+    }
+    
     // 获取子网格总数
     int getSubGridCount() const {
         return static_cast<int>(sub_grids_.size());

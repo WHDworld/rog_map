@@ -191,7 +191,287 @@ else if (to_type == GridType::OCCUPIED)
 4. 局部地图仍然保持高频率更新，实时避障不受影响
 
 ---
+
+# 前沿簇与探索视点生成策略
+
+## 架构设计
+
+### 统一节点架构
+
+为保证数据同步，采用统一的探索规划节点 (`exploration_planner_node`)：
+
+```
+exploration_planner_node
+├── ROG-Map (唯一实例)
+│   ├── ProbMap (概率占据地图)
+│   └── GlobalMap (全局地图 + 前沿提取)
+├── EGO-Planner FSM (轨迹规划)
+└── Exploration FSM (探索策略)
+    └── FrontierViewpointGenerator (视点生成)
+```
+
+**优势**：
+- 规划器与探索器共享同一个地图实例
+- 数据同步，无延迟
+- 减少内存占用
+
+## 前沿簇生成策略
+
+### 问题：360度LiDAR导致前沿连成一片
+
+使用360度LiDAR时，无人机起飞后前沿会围成一圈。如果直接对全局前沿点聚类，
+所有前沿点会因为距离较近而连成一个大簇，无法有效分割不同方向的探索区域。
+
+### 解决方案：基于角度的扇区分区
+
+将360度空间分成8个扇区（每个45°），在每个扇区内独立聚类：
+
+```
+                    N (90°)
+                     ↑
+           NW (135°) | NE (45°)
+                  \  |  /
+         W (180°) ─ UAV ─ E (0°)
+                  /  |  \
+           SW (225°) | SE (315°)
+                     ↓
+                   S (270°)
+```
+
+### 数据流
+
+```
+GlobalMap.frontier_voxels_  →  getFrontierPositions()  →  前沿点云
+                                       ↓
+                            partitionBySector()  →  8个扇区的点集
+                                       ↓
+                    for each sector: clusterFrontierPoints()  →  扇区内簇
+                                       ↓
+                        sampleViewpointsForClusterSimple()  →  视点列表
+```
+
+### 扇区分区算法
+
+```cpp
+void partitionBySector(points, sector_points):
+    num_sectors = 8  // 每个扇区45°
+    sector_angle = 2π / num_sectors
+    
+    for each point:
+        // 计算相对于无人机的方向
+        diff = point_2d - uav_pos_2d
+        angle = atan2(diff.y, diff.x)  // [-π, π)
+        
+        // 映射到 [0, 2π) 并确定扇区
+        if angle < 0: angle += 2π
+        sector_idx = int(angle / sector_angle)
+        
+        sector_points[sector_idx].push_back(point)
+```
+
+### 聚类算法（Region Growing）
+
+在每个扇区内独立进行区域增长聚类：
+
+```cpp
+// 参数
+cluster_eps = min(config_.cluster_split_threshold, 1.0f)  // 聚类半径 [m]
+min_pts = max(5, config_.min_cluster_size / 10)           // 最小簇大小
+
+// BFS 区域增长
+for each unvisited point in sector:
+    1. 创建新簇，将当前点加入队列
+    2. BFS 搜索：
+       - 对于队列中每个点，查找 eps 范围内的邻居
+       - 将未访问的邻居加入队列和簇
+    3. 如果簇大小 >= min_pts，保留该簇
+```
+
+### 优势
+
+1. **避免连成一片**：即使前沿点在空间上连通，不同方向的前沿会被分到不同扇区
+2. **均匀覆盖**：每个方向都会生成独立的前沿簇和视点
+3. **适合360°LiDAR**：自然地将环绕无人机的前沿分成多个区域
+
+### 簇属性
+
+```cpp
+struct FrontierCluster {
+    int cluster_id;           // 簇ID
+    Eigen::Vector3f centroid; // 簇中心（用于采样视点）
+    Eigen::Vector3f normal;   // 法向量（默认Z轴向上）
+    int size;                 // 簇包含的前沿点数量
+};
+```
+
+## 探索视点生成策略
+
+### 圆周采样（参考 falcon_planner）
+
+```
+                  ← candidate_rmax →
+                  ← candidate_rmin →
+                       ____
+                   ___/    \___
+                  /      C      \    ← 簇中心
+                 |    .*   *.    |   ← 采样点
+                  \___      ___/
+                      \____/
+```
+
+**采样参数**：
+- `viewpoint_height`: 视点固定高度（= 起飞高度）
+- `candidate_rmin`: 最小采样半径（距簇中心）
+- `candidate_rmax`: 最大采样半径
+- `candidate_rnum`: 半径采样数量
+- `candidate_dphi`: 角度采样间隔 [rad]
+
+### 采样流程
+
+```cpp
+for each cluster:
+    1. 在 [rmin, rmax] 范围内选取 rnum 个半径
+    2. 对于每个半径 rc:
+       - 在 [-π, π) 以 dphi 间隔采样角度
+       - 计算候选位置: (cx + rc*cos(φ), cy + rc*sin(φ), viewpoint_height)
+    
+    3. 对每个候选位置检查:
+       - 是否在地图范围内
+       - 是否为自由空间（FREE）
+       - 周围是否有障碍物（安全检查）
+    
+    4. 计算视点朝向: yaw = atan2(cy - py, cx - px)  // 朝向簇中心
+       pitch = 0.0  // 无人机水平飞行
+    
+    5. 评分并选择最佳视点
+```
+
+### 安全检查
+
+```cpp
+bool isPositionSafeSimple(pos):
+    1. 检查 pos 是否在地图范围内
+    2. 检查 pos 是否为 FREE 状态
+    3. 检查 pos 周围 (uav_radius + safety_margin) 范围内是否有障碍物
+```
+
+### 视点属性
+
+```cpp
+struct ExplorationViewpoint {
+    Eigen::Vector3f position;  // 3D位置
+    float yaw;                 // 偏航角（朝向簇中心）
+    float pitch;               // 俯仰角（固定为0）
+    int cluster_id;            // 对应的簇ID
+    float total_score;         // 评分
+    bool is_valid;             // 是否有效
+};
+```
+
+## 视点生成策略（基于子网格分区）
+
+### 核心流程
+
+```
+GlobalMap                           FrontierViewpointGenerator
+    │                                          │
+    │  getFrontierPositionsBySubGrid()         │
+    │  ────────────────────────────────────►   │
+    │  返回: [(sg_id, [点位置列表]), ...]       │
+    │                                          │
+    │                          ┌───────────────┼───────────────┐
+    │                          │  Step 1       │  Step 2       │
+    │                          │ 子网格内聚类   │  分裂大簇     │
+    │                          │ clusterIn     │  splitLarge   │
+    │                          │ Subgrid()     │  Clusters()   │
+    │                          └───────────────┴───────────────┘
+    │                                          │
+    │                          ┌───────────────┼───────────────┐
+    │                          │  Step 3       │  Step 4       │
+    │                          │ 圆周采样视点   │  去重滤波     │
+    │                          │ sampleView    │  filterView   │
+    │                          │ points()      │  points()     │
+    │                          └───────────────┴───────────────┘
+    │                                          │
+    │                                          ▼
+    │                               最终视点列表
+```
+
+### 基于子网格的优势
+
+1. **空间隔离**：利用GlobalMap已有的SubGrid空间划分，自然分离远距离的前沿点
+2. **避免连片**：即使360度LiDAR初期前沿形成环状，不同SubGrid的前沿也不会聚成一个簇
+3. **局部聚类**：在每个SubGrid内独立进行BFS区域增长聚类
+
+### 聚类算法（BFS区域增长）
+
+```
+for each 子网格 sg in subgrid_frontiers:
+    if sg.points.size < min_cluster_size:
+        continue
+    
+    for each 未访问点 p in sg.points:
+        BFS扩展:
+            queue.push(p)
+            while queue非空:
+                curr = queue.pop()
+                cluster.add(curr)
+                for each 点 q:
+                    if ||q - curr|| <= cluster_eps && q未访问:
+                        queue.push(q)
+        
+        if cluster.size >= min_cluster_size:
+            计算中心、范围
+            保存簇
+```
+
+## 配置参数
+
+```yaml
+exploration:
+  # 视点采样参数
+  viewpoint_height: 1.0       # 固定高度（起飞高度）[m]
+  candidate_rmin: 1.5         # 最小采样半径 [m]
+  candidate_rmax: 4.5         # 最大采样半径 [m]
+  candidate_rnum: 3           # 半径采样数量
+  candidate_dphi: 0.5         # 角度间隔 [rad]
+  
+  # 前沿簇参数
+  cluster_eps: 1.0            # 聚类半径 [m]
+  min_cluster_size: 10        # 最小簇大小
+  cluster_split_threshold: 3.0 # 簇分裂阈值 [m]
+  max_clusters: 20            # 最大簇数
+  
+  # 安全参数
+  uav_radius: 0.35            # 无人机半径 [m]
+  safety_margin: 0.2          # 安全边距 [m]
+  sensor_range_max: 5.0       # 最大感知距离 [m]
+  optimal_distance: 3.0       # 最优观测距离 [m]
+  
+  # 滤波参数
+  min_viewpoint_distance: 0.8 # 视点最小间距 [m]
+```
+
+## 调试信息
+
+启动 `exploration_planner.launch` 后，可观察以下日志：
+
+```
+[ViewpointGen] Processing 5 subgrids with frontiers
+[ViewpointGen] Formed 8 clusters
+[ViewpointGen] After split: 10 clusters
+[ViewpointGen] Generated 10 candidate viewpoints
+[ViewpointGen] Final: 8 viewpoints from 10 clusters
+```
+
+## RViz 可视化
+
+- `/exploration/frontier_clusters`: 前沿簇（球体 + 标签）
+- `/exploration/viewpoints`: 探索视点（球体 + 方向箭头）
+- `/exploration/frustums`: 视点视锥体
+
+---
 **修复日期**：2025-01-XX  
-**影响范围**：全局地图更新逻辑  
-**向后兼容性**：完全兼容，仅改进更新策略  
+**影响范围**：全局地图更新逻辑 + 探索视点生成  
+**策略**：基于SubGrid空间分区 + BFS聚类 + 圆周采样 + 去重滤波
 

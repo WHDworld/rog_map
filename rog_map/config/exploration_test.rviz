@@ -257,7 +257,7 @@ Visualization Manager:
           Size (Pixels): 3
           Size (m): 0.10000000149011612
           Style: Boxes
-          Topic: /ego_planner_node/rog_map/esdf
+          Topic: /exploration_planner_node/rog_map/esdf
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
@@ -285,7 +285,7 @@ Visualization Manager:
           Size (Pixels): 3
           Size (m): 0.10000000149011612
           Style: Boxes
-          Topic: /ego_planner_node/rog_map/occ
+          Topic: /exploration_planner_node/rog_map/occ
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
@@ -313,7 +313,7 @@ Visualization Manager:
           Size (Pixels): 3
           Size (m): 0.10000000149011612
           Style: Boxes
-          Topic: /ego_planner_node/rog_map/frontier
+          Topic: /exploration_planner_node/rog_map/frontier
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
@@ -341,7 +341,7 @@ Visualization Manager:
           Size (Pixels): 3
           Size (m): 0.30000001192092896
           Style: Boxes
-          Topic: /ego_planner_node/rog_map/inf_occ
+          Topic: /exploration_planner_node/rog_map/inf_occ
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
@@ -369,7 +369,7 @@ Visualization Manager:
           Size (Pixels): 3
           Size (m): 0.10000000149011612
           Style: Boxes
-          Topic: /ego_planner_node/rog_map/unk
+          Topic: /exploration_planner_node/rog_map/unk
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
@@ -378,7 +378,7 @@ Visualization Manager:
       Name: ROGMap
     - Class: rviz/MarkerArray
       Enabled: false
-      Marker Topic: /ego_planner_node/rog_map/map_bound
+      Marker Topic: /exploration_planner_node/rog_map/map_bound
       Name: MarkerArray
       Namespaces:
         {}
@@ -388,7 +388,7 @@ Visualization Manager:
       Displays:
         - Class: rviz/MarkerArray
           Enabled: true
-          Marker Topic: /ego_planner_node/global_map/range
+          Marker Topic: /exploration_planner_node/global_map/range
           Name: MarkerArray
           Namespaces:
             global_map_explored_text: true
@@ -419,7 +419,7 @@ Visualization Manager:
           Size (Pixels): 3
           Size (m): 0.20000000298023224
           Style: Boxes
-          Topic: /ego_planner_node/global_map/voxels
+          Topic: /exploration_planner_node/global_map/voxels
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
@@ -447,7 +447,7 @@ Visualization Manager:
           Size (Pixels): 3
           Size (m): 0.10000000149011612
           Style: Boxes
-          Topic: /ego_planner_node/global_map/occupied
+          Topic: /exploration_planner_node/global_map/occupied
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
@@ -475,7 +475,7 @@ Visualization Manager:
           Size (Pixels): 3
           Size (m): 0.20000000298023224
           Style: Boxes
-          Topic: /ego_planner_node/global_map/free
+          Topic: /exploration_planner_node/global_map/free
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
@@ -503,14 +503,14 @@ Visualization Manager:
           Size (Pixels): 3
           Size (m): 0.20000000298023224
           Style: Boxes
-          Topic: /ego_planner_node/global_map/frontier
+          Topic: /exploration_planner_node/global_map/frontier
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
           Value: true
         - Class: rviz/MarkerArray
           Enabled: true
-          Marker Topic: /ego_planner_node/global_map/sub_grid_range
+          Marker Topic: /exploration_planner_node/global_map/sub_grid_range
           Name: sub_grids
           Namespaces:
             frontier_subgrid_range: true
@@ -518,7 +518,7 @@ Visualization Manager:
           Value: true
         - Class: rviz/MarkerArray
           Enabled: true
-          Marker Topic: /ego_planner_node/global_map/camera_frustum
+          Marker Topic: /exploration_planner_node/global_map/camera_frustum
           Name: MarkerArray
           Namespaces:
             camera_frustum: true
@@ -547,7 +547,7 @@ Visualization Manager:
           Size (Pixels): 3
           Size (m): 0.20000000298023224
           Style: Boxes
-          Topic: /ego_planner_node/global_map/visited_voxels
+          Topic: /exploration_planner_node/global_map/visited_voxels
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
@@ -640,7 +640,7 @@ Visualization Manager:
           Color: 255; 255; 0
           Color Transformer: FlatColor
           Decay Time: 0
-          Enabled: true
+          Enabled: false
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -655,7 +655,7 @@ Visualization Manager:
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
-          Value: true
+          Value: false
         - Class: rviz/MarkerArray
           Enabled: true
           Marker Topic: /exploration/frontier_clusters
@@ -731,7 +731,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/XYOrbit
-      Distance: 26.812503814697266
+      Distance: 32.0274772644043
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -739,17 +739,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 8.979567527770996
-        Y: -6.00417947769165
-        Z: 2.7524401957634836e-06
+        X: -4.373419284820557
+        Y: -5.659011363983154
+        Z: 8.450915629509836e-07
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.6497982740402222
+      Pitch: 0.5747981667518616
       Target Frame: perfect_drone
-      Yaw: 2.283470630645752
+      Yaw: 0.9834712743759155
     Saved:
       - Class: rviz/ThirdPersonFollower
         Distance: 17.48538589477539

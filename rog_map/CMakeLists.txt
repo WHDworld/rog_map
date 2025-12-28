@@ -172,3 +172,15 @@ target_link_libraries(exploration_node
         ${THIRD_PARTY}
         ${catkin_LIBRARIES}
 )
+
+# ===========================================================
+# 统一探索规划节点 (EGO-Planner + Exploration FSM, 共享ROG-Map)
+# ===========================================================
+add_executable(exploration_planner_node src/rog_map/exploration_planner_node.cpp)
+add_dependencies(exploration_planner_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+target_link_libraries(exploration_planner_node 
+        ego_planner_lib
+        rog_map
+        ${THIRD_PARTY}
+        ${catkin_LIBRARIES}
+)

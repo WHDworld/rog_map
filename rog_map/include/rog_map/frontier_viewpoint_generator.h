@@ -1,135 +1,74 @@
-// frontier_viewpoint_generator.h
-// 前端视点生成器 - 基于EDEN的EROI视点生成算法
-// 功能：从输入的前沿子区域生成探索视点，并规划区域探索顺序
+/**
+ * @file frontier_viewpoint_generator.h
+ * @brief 前沿视点生成器 - 基于子网格的前沿簇聚类与视点采样
+ * 
+ * 核心流程：
+ * 1. 基于子网格分区获取前沿点
+ * 2. 在每个子网格内聚类生成前沿簇
+ * 3. 对大簇进行分裂
+ * 4. 圆周采样生成探索视点
+ * 5. 去重滤波得到最终视点集
+ */
 
 #ifndef FRONTIER_VIEWPOINT_GENERATOR_H
 #define FRONTIER_VIEWPOINT_GENERATOR_H
 
 #include <ros/ros.h>
 #include <Eigen/Dense>
-#include <Eigen/Eigenvalues>
 #include <vector>
-#include <unordered_map>
-#include <unordered_set>
-#include <queue>
-#include <cmath>
-#include <algorithm>
 #include <mutex>
-#include <list>
+#include <algorithm>
 
 #include "rog_map/global_map.h"
 
 namespace rog_map {
 
-// ==================== 常量定义 ====================
 constexpr float PI = 3.14159265358979323846f;
-constexpr float TWO_PI = 2.0f * PI;
 
-// ==================== 核心数据结构 ====================
+// ==================== 数据结构 ====================
 
 /**
- * @brief 前视簇结构
- * 
- * 前视簇是对前视体素的聚类结果，可能需要分裂
+ * @brief 前沿簇
  */
 struct FrontierCluster {
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     
-    std::vector<GlobalVoxelIndex> voxel_indices;  // 簇内体素索引
-    Eigen::Vector3f centroid;            // 簇中心位置
-    Eigen::Vector3f normal;              // 簇法向量（指向已知区域）
-    Eigen::Vector3f principal_axis;      // 主轴方向（PCA最大特征值方向）
-    float extent;                        // 簇的范围（最大特征值的平方根）
     int cluster_id;                      // 簇ID
-    int parent_region_id;                // 所属探索区域ID
-    bool needs_split;                    // 是否需要分裂
+    int subgrid_id;                      // 所属子网格ID
+    Eigen::Vector3f centroid;            // 簇中心
+    Eigen::Vector3f normal;              // 法向量
+    int point_count;                     // 点数
+    float extent;                        // 范围（用于判断是否需要分裂）
+    
+    // 前沿点位置列表（用于可视化）
+    std::vector<Eigen::Vector3f> points;
     
     FrontierCluster()
-        : centroid(Eigen::Vector3f::Zero())
+        : cluster_id(-1), subgrid_id(-1)
+        , centroid(Eigen::Vector3f::Zero())
         , normal(Eigen::Vector3f::UnitZ())
-        , principal_axis(Eigen::Vector3f::UnitX())
-        , extent(0.0f)
-        , cluster_id(-1)
-        , parent_region_id(-1)
-        , needs_split(false)
-    {}
+        , point_count(0), extent(0.0f) {}
     
-    int size() const { return static_cast<int>(voxel_indices.size()); }
+    int size() const { return point_count; }
 };
 
 /**
- * @brief 5-DOF探索视点结构
+ * @brief 探索视点（5-DOF: x, y, z, yaw, pitch）
  */
 struct ExplorationViewpoint {
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     
-    Eigen::Vector3f position;           // 3D位置
-    float yaw;                          // 偏航角 [-π, π)
-    float pitch;                        // 俯仰角 [-π/2, π/2]
-    
-    int region_id;                      // 所属探索区域ID
-    int cluster_id;                     // 目标前视簇ID
-    
-    // 评分
-    float total_score;                  // 综合评分
-    int visible_frontier_count;         // 可见前视体素数
-    
-    // 覆盖信息（用于集合覆盖）
-    std::vector<int> covered_cluster_ids;  // 可覆盖的簇ID列表
-    
+    Eigen::Vector3f position;            // 位置
+    float yaw;                           // 偏航角
+    float pitch;                         // 俯仰角（通常为0）
+    int cluster_id;                      // 目标簇ID
+    float score;                         // 评分
     bool is_valid;
     
-    ExplorationViewpoint() 
+    ExplorationViewpoint()
         : position(Eigen::Vector3f::Zero())
         , yaw(0.0f), pitch(0.0f)
-        , region_id(-1), cluster_id(-1)
-        , total_score(0.0f)
-        , visible_frontier_count(0)
-        , is_valid(false)
-    {}
-};
-
-/**
- * @brief 探索区域块（由一个或多个子网格合并而成）
- */
-struct ExplorationRegion {
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-    
-    int region_id;                                    // 区域ID
-    std::vector<int> subgrid_ids;                     // 包含的子网格ID
-    Eigen::Vector3f centroid;                         // 区域中心
-    
-    std::vector<FrontierCluster> clusters;            // 区域内的前视簇
-    std::vector<ExplorationViewpoint> viewpoints;     // 区域内的探索视点
-    
-    float total_frontier_area;                        // 总前视面积
-    float exploration_priority;                       // 探索优先级
-    
-    ExplorationRegion()
-        : region_id(-1)
-        , centroid(Eigen::Vector3f::Zero())
-        , total_frontier_area(0.0f)
-        , exploration_priority(0.0f)
-    {}
-};
-
-/**
- * @brief 区域路由节点
- */
-struct RegionRouteNode {
-    int region_id;                  // 区域ID
-    float distance_from_uav;        // 距离UAV当前位置的路径长度
-    float exploration_gain;         // 探索收益
-    float route_score;              // 路由评分
-    int visit_order;                // 访问顺序（-1表示未分配）
-    
-    RegionRouteNode()
-        : region_id(-1)
-        , distance_from_uav(std::numeric_limits<float>::max())
-        , exploration_gain(0.0f)
-        , route_score(0.0f)
-        , visit_order(-1)
-    {}
+        , cluster_id(-1), score(0.0f), is_valid(false) {}
 };
 
 /**
@@ -137,72 +76,46 @@ struct RegionRouteNode {
  */
 struct UAVState {
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-    
     Eigen::Vector3f position;
-    Eigen::Vector3f velocity;
     float yaw;
-    
-    UAVState()
-        : position(Eigen::Vector3f::Zero())
-        , velocity(Eigen::Vector3f::Zero())
-        , yaw(0.0f)
-    {}
+    UAVState() : position(Eigen::Vector3f::Zero()), yaw(0.0f) {}
 };
 
 /**
- * @brief 视点生成器配置参数
+ * @brief 配置参数
  */
 struct ViewpointGeneratorConfig {
-    // 传感器参数
-    float sensor_range_min = 0.3f;
-    float sensor_range_max = 5.0f;
-    float sensor_fov_h = 1.57f;           // 90°
-    float sensor_fov_v = 1.22f;           // 70°
-    float optimal_viewing_distance = 3.0f;
+    // ========== 传感器参数 ==========
+    float sensor_range_min = 0.5f;       // 最小感知距离 [m]
+    float sensor_range_max = 5.0f;       // 最大感知距离 [m]
+    float sensor_fov_h = 1.57f;          // 水平FOV [rad] (~90°)
+    float sensor_fov_v = 1.22f;          // 垂直FOV [rad] (~70°)
     
-    // 无人机参数
+    // ========== 视点采样参数 ==========
+    float viewpoint_height = 1.0f;       // 视点高度（起飞高度）
+    float candidate_rmin = 1.5f;         // 最小采样半径
+    float candidate_rmax = 4.5f;         // 最大采样半径
+    int candidate_rnum = 3;              // 半径采样数量
+    float candidate_dphi = 0.5f;         // 角度采样间隔 [rad]
+    float optimal_distance = 3.0f;       // 最优观测距离
+    
+    // ========== 前沿簇参数 ==========
+    float cluster_eps = 1.0f;            // 聚类半径
+    int min_cluster_size = 10;           // 最小簇大小
+    float cluster_split_threshold = 3.0f;// 簇分裂阈值
+    int max_clusters = 20;               // 最大簇数
+    
+    // ========== 安全参数 ==========
     float uav_radius = 0.35f;
     float safety_margin = 0.2f;
-    float max_velocity = 2.0f;
     
-    // 采样参数
-    int sampling_step = 4;
-    int max_viewpoints_per_region = 20;
-    float min_viewpoint_distance = 0.5f;
-    
-    // 前视簇参数
-    int min_cluster_size = 10;
-    int max_clusters_per_region = 15;
-    float cluster_split_threshold = 3.0f;  // 超过此距离需要分裂(m)
-    int absolute_noise_threshold = 5;
-    float obstacle_ratio_threshold = 0.7f;
-    
-    // 覆盖评分参数
-    float min_coverage_score = 0.1f;
-    float max_viewing_angle = 0.785f;     // 45°
-    
-    // 路由参数
-    float exploration_weight = 0.6f;      // 探索收益权重
-    float distance_weight = 0.4f;         // 距离权重
-    
-    // 区域划分参数
-    float planning_horizon = 7.5f;        // 规划视野（用于限制区域大小）
-    float max_region_diameter_factor = 2.5f;  // 最大区域直径 = planning_horizon * factor
-    float max_direction_diff = 1.88f;     // 最大方向差异（~108°）
-    float max_region_area = 5000.0f;      // 最大区域前沿面积（体素数）
+    // ========== 滤波参数 ==========
+    float min_viewpoint_distance = 0.8f; // 视点最小间距
+    float min_coverage_score = 0.3f;     // 最小覆盖评分（低于此值的视点被过滤）
 };
 
-// ==================== 主类定义 ====================
+// ==================== 主类 ====================
 
-/**
- * @brief 前端视点生成器
- * 
- * 主要功能：
- * 1. 从输入的前沿子区域ID生成探索区域块
- * 2. 对每个区域进行前视簇聚类和分裂
- * 3. 生成覆盖所有前视簇的最小视点集
- * 4. 规划区域探索顺序
- */
 class FrontierViewpointGenerator {
 public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -214,34 +127,20 @@ public:
     
     // ==================== 核心接口 ====================
     
-    /**
-     * @brief 更新UAV状态
-     */
     void updateUAVState(const UAVState& state);
     
     /**
-     * @brief 主入口：从子区域ID生成探索视点和区域路由
+     * @brief 主接口：生成探索视点
      * 
-     * @param subgrid_ids 前沿子区域ID列表
-     * @param regions 输出的探索区域（含视点）
-     * @param route 输出的区域访问顺序
+     * 流程：子网格分区 → 聚类 → 分裂 → 采样 → 滤波
+     * 
+     * @param clusters 输出的前沿簇
+     * @param viewpoints 输出的探索视点
      * @return 是否成功
      */
-    bool generateExplorationPlan(
-        const std::vector<int>& subgrid_ids,
-        std::vector<ExplorationRegion>& regions,
-        std::vector<int>& route);
+    bool generate(std::vector<FrontierCluster>& clusters,
+                  std::vector<ExplorationViewpoint>& viewpoints);
     
-    /**
-     * @brief 获取首个区域的探索视点（用于立即执行）
-     */
-    bool getFirstRegionViewpoints(
-        std::vector<ExplorationViewpoint>& viewpoints);
-    
-    // ==================== 查询接口 ====================
-    
-    const std::vector<ExplorationRegion>& getRegions() const { return regions_; }
-    const std::vector<int>& getRoute() const { return route_; }
     const ViewpointGeneratorConfig& getConfig() const { return config_; }
     void setConfig(const ViewpointGeneratorConfig& config) { config_ = config; }
 
@@ -249,99 +148,82 @@ private:
     // ==================== 核心算法 ====================
     
     /**
-     * @brief Step 1: 将子区域划分为探索区域块
-     * 
-     * 使用受限连通性合并策略：
-     * - 基于空间邻接性合并相邻子网格
-     * - 距离约束：合并后区域直径不超过 planning_horizon * 2.5
-     * - 方向约束：前沿方向差异不超过 ~108°
-     * - 面积约束：合并后面积不超过阈值
+     * @brief Step 1: 在子网格内聚类前沿点
      */
-    void partitionIntoRegions(
-        const std::vector<int>& subgrid_ids,
-        std::vector<ExplorationRegion>& regions);
+    void clusterInSubgrid(const std::vector<Eigen::Vector3f>& points,
+                          int subgrid_id,
+                          std::vector<FrontierCluster>& clusters);
     
     /**
-     * @brief 计算区域的探索优先级
+     * @brief Step 2: 分裂大簇
      */
-    void computeRegionPriorities(std::vector<ExplorationRegion>& regions);
+    void splitLargeClusters(std::vector<FrontierCluster>& clusters);
     
     /**
-     * @brief Step 2: 对区域内的前视体素进行聚类
+     * @brief Step 3: 为簇采样视点（圆周采样）
      */
-    void clusterFrontiersInRegion(ExplorationRegion& region);
+    void sampleViewpoints(const FrontierCluster& cluster,
+                          std::vector<ExplorationViewpoint>& viewpoints);
     
     /**
-     * @brief Step 3: 对大簇进行PCA分裂
-     * @return 是否进行了分裂
+     * @brief Step 4: 去重滤波
      */
-    bool splitLargeClusters(std::vector<FrontierCluster>& clusters);
-    
-    /**
-     * @brief 递归分裂单个簇（水平方向）
-     */
-    bool splitClusterHorizontally(
-        const FrontierCluster& cluster,
-        std::list<FrontierCluster>& splits);
-    
-    /**
-     * @brief Step 4: 为区域生成覆盖所有簇的视点
-     */
-    void generateViewpointsForRegion(ExplorationRegion& region);
-    
-    /**
-     * @brief Step 5: 贪心选择最小视点集
-     */
-    void greedySelectViewpoints(
-        const std::vector<Eigen::Vector3f>& candidates,
-        const std::vector<FrontierCluster>& clusters,
-        std::vector<ExplorationViewpoint>& selected);
-    
-    /**
-     * @brief Step 6: 规划区域访问顺序
-     */
-    void planRegionRoute(std::vector<ExplorationRegion>& regions,
-                         std::vector<int>& route);
+    void filterViewpoints(std::vector<ExplorationViewpoint>& viewpoints);
     
     // ==================== 辅助函数 ====================
     
-    // 聚类相关
-    void computeClusterPCA(FrontierCluster& cluster);
-    bool checkClusterNeedsSplit(const FrontierCluster& cluster);
-    
-    // 采样相关
-    void sampleFreeSpaceInRegion(
-        const ExplorationRegion& region,
-        std::vector<Eigen::Vector3f>& samples);
-    
-    // 评分相关
-    float computeCoverageScore(
-        const Eigen::Vector3f& position,
-        const FrontierCluster& cluster,
-        float& best_yaw, float& best_pitch);
-    
-    int countVisibleFrontierVoxels(
-        const Eigen::Vector3f& pos, float yaw, float pitch,
-        const FrontierCluster& cluster);
-    
-    // 安全检查
     bool isPositionSafe(const Eigen::Vector3f& pos);
-    bool isLineVisible(const Eigen::Vector3f& from, const Eigen::Vector3f& to);
+    bool isPositionFree(const Eigen::Vector3f& pos);
     
-    // 工具函数
-    float normalizeAngle(float angle);
-    float distance(const Eigen::Vector3f& a, const Eigen::Vector3f& b);
+    /**
+     * @brief 计算视点的覆盖评分
+     * 
+     * 评估视点能否有效观测到指定簇：
+     * 1. 距离评分 - 是否在最优观测距离
+     * 2. 可见性评分 - 射线是否被障碍物遮挡
+     * 3. 水平角度评分 - 簇中心是否在水平FOV内
+     * 4. 垂直角度评分 - 簇中心是否在垂直FOV内
+     * 5. 覆盖评分 - 簇范围是否能被视锥体覆盖
+     */
+    float computeCoverageScore(const Eigen::Vector3f& viewpoint,
+                               float yaw,
+                               const FrontierCluster& cluster);
+    
+    /**
+     * @brief 计算可见性评分
+     * 
+     * 从视点向簇中心发射射线，检查是否有障碍物遮挡
+     * @return 可见性评分 [0, 1]，0表示完全遮挡，1表示完全可见
+     */
+    float computeVisibilityScore(const Eigen::Vector3f& viewpoint,
+                                 const FrontierCluster& cluster);
+    
+    /**
+     * @brief 检查射线可见性
+     * 
+     * 从起点到终点发射射线，检查是否有障碍物
+     * @return true 如果可见（无遮挡），false 如果被遮挡
+     */
+    bool checkRayVisibility(const Eigen::Vector3f& start,
+                            const Eigen::Vector3f& end);
+    
+    /**
+     * @brief 检查沿指定方向的射线是否畅通
+     * 
+     * @param start 起点
+     * @param direction 方向（单位向量）
+     * @param max_dist 最大检测距离
+     * @return true 如果畅通，false 如果被障碍物阻挡
+     */
+    bool checkRayClear(const Eigen::Vector3f& start,
+                       const Eigen::Vector3f& direction,
+                       float max_dist);
 
 private:
     GlobalMap::Ptr global_map_;
     ViewpointGeneratorConfig config_;
-    
     UAVState uav_state_;
     std::mutex state_mutex_;
-    
-    // 缓存
-    std::vector<ExplorationRegion> regions_;
-    std::vector<int> route_;
 };
 
 } // namespace rog_map

@@ -64,7 +64,7 @@ namespace ego_planner
 
       t2 = ros::WallTime::now();
       double time_ms = (t2 - t1).toSec() * 1000;
-      double total_time_ms = (t2 - t0).toSec() * 1000;
+      // double total_time_ms = (t2 - t0).toSec() * 1000;
 
       /* ---------- get result and check collision ---------- */
       if (result == lbfgs::LBFGS_CONVERGENCE ||
@@ -79,20 +79,20 @@ namespace ego_planner
         if (finelyCheckAndSetConstraintPoints(segments_nouse, jerkOpt_, false) == CHK_RET::OBS_FREE)
         {
           flag_success = true;
-          printf("\033[32miter=%d,time(ms)=%5.3f,total_t(ms)=%5.3f,cost=%5.3f\n\033[0m", iter_num_, time_ms, total_time_ms, final_cost);
+          // printf("\033[32miter=%d,time(ms)=%5.3f,total_t(ms)=%5.3f,cost=%5.3f\n\033[0m", iter_num_, time_ms, total_time_ms, final_cost);
         }
         else
         {
           flag_still_occ = true;
           restart_nums++;
-          printf("\033[32miter=%d,time(ms)=%5.3f, fine check collided, keep optimizing\n\033[0m", iter_num_, time_ms);
+          // printf("\033[32miter=%d,time(ms)=%5.3f, fine check collided, keep optimizing\n\033[0m", iter_num_, time_ms);
         }
       }
       else if (result == lbfgs::LBFGSERR_CANCELED)
       {
         flag_force_return = true;
         rebound_times++;
-        cout << "iter=" << iter_num_ << ",time(ms)=" << time_ms << ",rebound." << endl;
+        // cout << "iter=" << iter_num_ << ",time(ms)=" << time_ms << ",rebound." << endl;
       }
       else
       {

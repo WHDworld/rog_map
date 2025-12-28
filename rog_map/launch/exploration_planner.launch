@@ -1,0 +1,74 @@
+<!--
+  统一探索规划 Launch 文件
+  
+  特点：
+  1. 单一 ROG-Map 实例（EGO-Planner 和 探索FSM 共享）
+  2. 数据同步，无延迟
+  3. 减少内存占用
+  
+  功能:
+  1. EGO-Planner 控制无人机按预设路径点飞行
+  2. 探索模块实时可视化前沿簇和探索视点
+  3. 前沿簇与可视化的前沿点云完全一致
+  
+  使用方法:
+  roslaunch rog_map exploration_planner.launch
+-->
+<launch>
+    <!-- ========== 参数配置 ========== -->
+    <arg name="config_file" default="$(find rog_map)/config/exploration_config.yaml"/>
+    <arg name="odom_topic" default="/ground_truth/odom"/>
+    <arg name="cloud_topic" default="/cloud_registered"/>
+    
+    <!-- 飞行模式: 1=手动目标(RViz), 2=预设路径点 -->
+    <arg name="flight_type" default="2"/>
+    <!-- 起飞后自动开始预设路径 -->
+    <arg name="auto_start" default="true"/>
+    
+    <!-- ========== RViz 可视化 ========== -->
+    <node name="rviz_exploration" pkg="rviz" type="rviz" output="screen"
+        args="-d $(find rog_map)/config/exploration_test.rviz"/>
+
+    <!-- ========================================================== -->
+    <!--         统一探索规划节点（共享ROG-Map实例）                    -->
+    <!-- ========================================================== -->
+    
+    <node pkg="rog_map" type="exploration_planner_node" name="exploration_planner_node" output="screen">
+        <!-- 加载配置文件 -->
+        <rosparam command="load" file="$(arg config_file)"/>
+        
+        <!-- 话题重映射 -->
+        <remap from="~odom" to="$(arg odom_topic)"/>
+        <remap from="~mandatory_stop" to="/mandatory_stop_to_planner"/>
+        <remap from="~planning/trajectory" to="/planning/trajectory"/>
+        <remap from="~planning/heartbeat" to="/traj_server/heartbeat"/>
+        
+        <!-- FSM 参数覆盖 -->
+        <param name="fsm/flight_type" value="$(arg flight_type)"/>
+        <param name="fsm/auto_start_preset" value="$(arg auto_start)"/>
+        
+        <!-- ROG-Map 话题重映射 -->
+        <param name="rog_map/ros_callback/odom_topic" value="$(arg odom_topic)"/>
+        <param name="rog_map/ros_callback/cloud_topic" value="$(arg cloud_topic)"/>
+        
+        <!-- 探索参数（被动可视化模式） -->
+        <param name="exploration/auto_start" value="false"/>
+        <param name="exploration/enable_visualization" value="true"/>
+    </node>
+    
+    <!-- 轨迹服务器（发布控制命令） -->
+    <node pkg="rog_map" type="ego_traj_server" name="ego_traj_server" output="screen">
+        <!-- 加载配置文件 -->
+        <rosparam command="load" file="$(arg config_file)"/>
+        
+        <!-- 话题重映射 -->
+        <remap from="~odom" to="$(arg odom_topic)"/>
+        <remap from="position_cmd" to="/planning/pos_cmd"/>
+        <remap from="~planning/trajectory" to="/planning/trajectory"/>
+        <remap from="~planning/heartbeat" to="/traj_server/heartbeat"/>
+        
+        <param name="traj_server/time_forward" value="1.0" type="double"/>
+    </node>
+
+</launch>
+

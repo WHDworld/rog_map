@@ -799,7 +799,7 @@ void GlobalMap::visualizeGlobalMapFrontier()
         point.b = 0;
         frontier_cloud.push_back(point);
     }
-    ROS_INFO("Frontier voxels: %d", frontier_cloud.size());
+    // ROS_INFO("Frontier voxels: %d", frontier_cloud.size());
     sensor_msgs::PointCloud2 frontier_cloud_msg;
     pcl::toROSMsg(frontier_cloud, frontier_cloud_msg);
     frontier_cloud_msg.header.stamp = ros::Time::now();
