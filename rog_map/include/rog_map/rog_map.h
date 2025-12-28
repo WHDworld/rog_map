@@ -49,6 +49,12 @@ namespace rog_map {
         ~ROGMap() = default;
         Eigen::Vector3f getGlobalMapMin() const { return global_map_->getGlobalMapMin(); }
         Eigen::Vector3f getGlobalMapMax() const { return global_map_->getGlobalMapMax(); }
+        
+        /**
+         * @brief 获取 GlobalMap 指针，用于探索模块
+         * @return GlobalMap::Ptr
+         */
+        GlobalMap::Ptr getGlobalMap() const { return global_map_; }
 
         bool isLineFree(const Vec3f &start_pt, const Vec3f &end_pt,
                         const double &max_dis = 999999,

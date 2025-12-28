@@ -3,6 +3,7 @@
 
 #include "rog_map/frontier_viewpoint_generator.h"
 #include <numeric>
+#include <functional>
 
 namespace rog_map {
 
@@ -829,10 +830,24 @@ void FrontierViewpointGenerator::sampleFreeSpaceInRegion(
         }
     }
     
-    // 随机下采样
+    // 确定性下采样（按空间位置排序，避免随机性导致视点不稳定）
     if (samples.size() > static_cast<size_t>(config_.max_viewpoints_per_region * 5)) {
-        std::random_shuffle(samples.begin(), samples.end());
-        samples.resize(config_.max_viewpoints_per_region * 5);
+        // 按照空间位置排序，保证结果稳定
+        std::sort(samples.begin(), samples.end(), 
+            [](const Eigen::Vector3f& a, const Eigen::Vector3f& b) {
+                if (std::abs(a.x() - b.x()) > 0.01f) return a.x() < b.x();
+                if (std::abs(a.y() - b.y()) > 0.01f) return a.y() < b.y();
+                return a.z() < b.z();
+            });
+        // 均匀下采样，而不是随机选择
+        size_t target_size = config_.max_viewpoints_per_region * 5;
+        size_t step = samples.size() / target_size;
+        std::vector<Eigen::Vector3f> downsampled;
+        downsampled.reserve(target_size);
+        for (size_t i = 0; i < samples.size() && downsampled.size() < target_size; i += step) {
+            downsampled.push_back(samples[i]);
+        }
+        samples = std::move(downsampled);
     }
 }
 
@@ -1082,7 +1097,32 @@ int FrontierViewpointGenerator::countVisibleFrontierVoxels(
     return count;
 }
 
-// ==================== Step 5: 区域路由规划 ====================
+// ==================== Step 5: 区域路由规划 (EDEN风格MST) ====================
+
+/**
+ * @brief MST边结构
+ */
+struct MSTEdge {
+    int from, to;
+    float weight;
+    
+    bool operator<(const MSTEdge& other) const {
+        return weight < other.weight;
+    }
+};
+
+/**
+ * @brief MST树节点结构
+ */
+struct MSTNode {
+    int region_idx;
+    int parent;
+    std::vector<int> children;
+    float distance_to_root;
+    bool is_leaf;
+    
+    MSTNode() : region_idx(-1), parent(-1), distance_to_root(0.0f), is_leaf(true) {}
+};
 
 void FrontierViewpointGenerator::planRegionRoute(
     std::vector<ExplorationRegion>& regions,
@@ -1094,60 +1134,211 @@ void FrontierViewpointGenerator::planRegionRoute(
         return;
     }
     
+    int n = static_cast<int>(regions.size());
+    
+    // 只有一个区域，直接返回
+    if (n == 1) {
+        route.push_back(regions[0].region_id);
+        return;
+    }
+    
     UAVState current_state;
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
         current_state = uav_state_;
     }
     
-    // 计算每个区域的路由评分
-    std::vector<RegionRouteNode> nodes(regions.size());
+    // ========== Step 1: 计算距离矩阵 ==========
+    std::vector<std::vector<float>> dist_matrix(n, std::vector<float>(n, 0.0f));
     
-    for (size_t i = 0; i < regions.size(); ++i) {
-        nodes[i].region_id = regions[i].region_id;
-        nodes[i].distance_from_uav = distance(current_state.position, regions[i].centroid);
-        nodes[i].exploration_gain = regions[i].total_frontier_area;
-        
-        // 路由评分 = 探索收益 / 距离
-        if (nodes[i].distance_from_uav > 0.1f) {
-            nodes[i].route_score = config_.exploration_weight * nodes[i].exploration_gain / 
-                                   (config_.distance_weight * nodes[i].distance_from_uav);
-        } else {
-            nodes[i].route_score = nodes[i].exploration_gain * 100.0f;
+    for (int i = 0; i < n; ++i) {
+        for (int j = i + 1; j < n; ++j) {
+            float d = distance(regions[i].centroid, regions[j].centroid);
+            dist_matrix[i][j] = d;
+            dist_matrix[j][i] = d;
         }
     }
     
-    // 贪心选择：每次选择未访问区域中评分最高的
-    // 并更新后续区域的距离（从当前区域出发）
-    std::vector<bool> visited(regions.size(), false);
-    Eigen::Vector3f current_pos = current_state.position;
+    // ========== Step 2: 找到离UAV最近的区域作为根节点 ==========
+    int root_idx = 0;
+    float min_dist = std::numeric_limits<float>::max();
     
-    for (size_t round = 0; round < regions.size(); ++round) {
-        int best_idx = -1;
-        float best_score = -std::numeric_limits<float>::max();
+    for (int i = 0; i < n; ++i) {
+        float d = distance(current_state.position, regions[i].centroid);
+        if (d < min_dist) {
+            min_dist = d;
+            root_idx = i;
+        }
+    }
+    
+    // ========== Step 3: Prim算法构建MST ==========
+    std::vector<MSTNode> mst_nodes(n);
+    std::vector<bool> in_mst(n, false);
+    std::vector<float> min_edge(n, std::numeric_limits<float>::max());
+    std::vector<int> parent(n, -1);
+    
+    // 从根节点开始
+    min_edge[root_idx] = 0.0f;
+    
+    for (int count = 0; count < n; ++count) {
+        // 找到不在MST中且边权最小的节点
+        int u = -1;
+        float min_w = std::numeric_limits<float>::max();
         
-        for (size_t i = 0; i < regions.size(); ++i) {
-            if (visited[i]) continue;
-            
-            // 更新距离
-            float dist = distance(current_pos, regions[i].centroid);
-            float score = config_.exploration_weight * nodes[i].exploration_gain /
-                         (config_.distance_weight * dist + 0.1f);
-            
-            if (score > best_score) {
-                best_score = score;
-                best_idx = static_cast<int>(i);
+        for (int i = 0; i < n; ++i) {
+            if (!in_mst[i] && min_edge[i] < min_w) {
+                min_w = min_edge[i];
+                u = i;
             }
         }
         
-        if (best_idx < 0) {
-            break;
+        if (u == -1) break;
+        
+        in_mst[u] = true;
+        mst_nodes[u].region_idx = u;
+        mst_nodes[u].parent = parent[u];
+        
+        if (parent[u] >= 0) {
+            mst_nodes[parent[u]].children.push_back(u);
+            mst_nodes[parent[u]].is_leaf = false;
+            mst_nodes[u].distance_to_root = mst_nodes[parent[u]].distance_to_root + 
+                                            dist_matrix[parent[u]][u];
         }
         
-        visited[best_idx] = true;
-        route.push_back(regions[best_idx].region_id);
-        current_pos = regions[best_idx].centroid;
+        // 更新相邻节点的边权
+        for (int v = 0; v < n; ++v) {
+            if (!in_mst[v] && dist_matrix[u][v] < min_edge[v]) {
+                min_edge[v] = dist_matrix[u][v];
+                parent[v] = u;
+            }
+        }
     }
+    
+    // 更新叶节点标记
+    for (int i = 0; i < n; ++i) {
+        mst_nodes[i].is_leaf = mst_nodes[i].children.empty();
+    }
+    
+    // ========== Step 4: EOHDT优化 - 找到最远叶节点分支 ==========
+    int farthest_leaf = -1;
+    float max_dist_to_root = -1.0f;
+    
+    for (int i = 0; i < n; ++i) {
+        if (mst_nodes[i].is_leaf && mst_nodes[i].distance_to_root > max_dist_to_root) {
+            max_dist_to_root = mst_nodes[i].distance_to_root;
+            farthest_leaf = i;
+        }
+    }
+    
+    // 找到最远分支的起点（从根到最远叶节点路径上的第一个分叉点的子节点）
+    int farthest_branch_start = -1;
+    if (farthest_leaf >= 0) {
+        int current = farthest_leaf;
+        while (current >= 0) {
+            int p = mst_nodes[current].parent;
+            if (p == root_idx) {
+                farthest_branch_start = current;
+                break;
+            }
+            current = p;
+        }
+    }
+    
+    // ========== Step 5: DFS遍历生成路由（最远分支后置） ==========
+    std::vector<int> traversal_order;
+    std::vector<bool> dfs_visited(n, false);
+    
+    // DFS遍历函数（lambda）
+    std::function<void(int)> dfs = [&](int node) {
+        dfs_visited[node] = true;
+        traversal_order.push_back(node);
+        
+        // 对子节点按距离排序（最近优先）
+        std::vector<std::pair<float, int>> sorted_children;
+        for (int child : mst_nodes[node].children) {
+            // 最远分支的起点最后处理
+            if (child == farthest_branch_start) {
+                sorted_children.push_back({std::numeric_limits<float>::max(), child});
+        } else {
+                sorted_children.push_back({dist_matrix[node][child], child});
+            }
+        }
+        std::sort(sorted_children.begin(), sorted_children.end());
+        
+        for (const auto& p : sorted_children) {
+            if (!dfs_visited[p.second]) {
+                dfs(p.second);
+            }
+        }
+    };
+    
+    dfs(root_idx);
+    
+    // ========== Step 6: 转换为区域ID ==========
+    for (int idx : traversal_order) {
+        route.push_back(regions[idx].region_id);
+    }
+    
+    // ========== 可达性检查与不可达区域后置 ==========
+    // 检查每个区域是否可达（通过检查是否有安全路径）
+    std::vector<int> reachable_route;
+    std::vector<int> unreachable_route;
+    
+    Eigen::Vector3f check_pos = current_state.position;
+    
+    for (int region_id : route) {
+        // 查找对应的区域
+        bool is_reachable = true;
+        Eigen::Vector3f target_pos;
+        
+        for (const auto& region : regions) {
+            if (region.region_id == region_id) {
+                target_pos = region.centroid;
+                
+                // 简单可达性检查：检查直线路径是否被完全阻挡
+                // （完整的可达性检查应使用A*或其他路径规划）
+                int obstacle_count = 0;
+                int check_count = 0;
+                float step = global_map_->global_resolution_ * 2;
+                Eigen::Vector3f dir = target_pos - check_pos;
+                float length = dir.norm();
+            
+                if (length > step) {
+                    dir /= length;
+                    for (float t = step; t < length - step; t += step) {
+                        Eigen::Vector3f p = check_pos + t * dir;
+                        if (global_map_->isOccupied(p)) {
+                            obstacle_count++;
+                        }
+                        check_count++;
+                        if (check_count > 50) break;  // 限制检查数量
+                    }
+                    
+                    // 如果超过30%的检查点被占据，认为不可达
+                    if (check_count > 0 && 
+                        static_cast<float>(obstacle_count) / check_count > 0.3f) {
+                        is_reachable = false;
+                    }
+                }
+            break;
+        }
+        }
+        
+        if (is_reachable) {
+            reachable_route.push_back(region_id);
+            check_pos = target_pos;
+        } else {
+            unreachable_route.push_back(region_id);
+        }
+    }
+    
+    // 合并路由：可达区域在前，不可达区域在后
+    route.clear();
+    route.insert(route.end(), reachable_route.begin(), reachable_route.end());
+    route.insert(route.end(), unreachable_route.begin(), unreachable_route.end());
+    
+    ROS_DEBUG("[FrontierViewpointGenerator] MST route: %lu regions (%lu reachable, %lu deferred)",
+              route.size(), reachable_route.size(), unreachable_route.size());
 }
 
 // ==================== 辅助函数 ====================

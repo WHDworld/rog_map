@@ -621,7 +621,7 @@ void ProbMap::hitPointUpdate(const Vec3f& pos, const int& hash_id, const int& hi
                     {
                         global_map_->updateVoxelStateFromCamera(global_idx, true);
                     }
-                }
+                } 
             }
         }
         if (cfg_.frontier_extraction_en && from_type == KNOWN_FREE) {
@@ -690,7 +690,7 @@ void ProbMap::missPointUpdate(const Vec3f& pos, const int& hash_id, const int& h
                     {
                         global_map_->updateVoxelStateFromLiDAR(global_idx, false);
                     }
-                }
+                } 
                 else if (to_type == GridType::OCCUPIED) 
                 {
                     // miss操作不太可能使体素变为OCCUPIED，但为了完整性保留

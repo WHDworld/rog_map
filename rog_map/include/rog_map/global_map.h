@@ -465,6 +465,21 @@ public:
 
     void getFrontierPointCloud(sensor_msgs::PointCloud2& pc_frontier);
     void getAllKnownPointCloud(sensor_msgs::PointCloud2& pc_all_known);
+    
+    // 获取包含前沿的子网格ID列表
+    void getFrontierSubGrids(std::vector<int>& frontier_subgrid_ids) const {
+        std::lock_guard<std::mutex> lock(map_mutex_);
+        frontier_subgrid_ids.clear();
+        frontier_subgrid_ids.reserve(current_frontier_subgrids_.size());
+        for (int sg_id : current_frontier_subgrids_) {
+            frontier_subgrid_ids.push_back(sg_id);
+        }
+    }
+    
+    // 获取子网格总数
+    int getSubGridCount() const {
+        return static_cast<int>(sub_grids_.size());
+    }
 
     void clearMap();
     void posToIndex(const Eigen::Vector3f& pos, GlobalVoxelIndex& idx);

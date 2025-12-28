@@ -1,0 +1,277 @@
+# ============================================================
+#     探索系统统一配置文件 (Unified Exploration Configuration)
+# ============================================================
+# 
+# 包含内容:
+#   1. ROG-Map 地图配置
+#   2. EGO-Planner 规划器配置
+#   3. 探索状态机配置
+#   4. 视点生成器配置
+#   5. 可视化配置
+#
+# 使用方法:
+#   roslaunch rog_map exploration_test.launch
+#
+# ============================================================
+
+# ============================================================
+#                    ROG-Map 地图配置
+# ============================================================
+rog_map:
+  # ---------- 基础地图参数 ----------
+  resolution: 0.2                   # 体素分辨率 [m]
+  map_size: [20, 20, 6]             # 局部地图尺寸 [m]
+  fix_map_origin: [0, 0, 0]         # 固定地图原点
+  
+  # ---------- 膨胀地图 ----------
+  inflation_resolution: 0.2         # 膨胀分辨率 [m]
+  inflation_step: 1                 # 膨胀步长
+  unk_inflation_en: false           # 未知区域膨胀是否启用
+  unk_inflation_step: 1             # 未知区域膨胀步长
+  
+  # ---------- 前沿提取 ----------
+  frontier_extraction_en: true      # 启用前沿提取
+  
+  # ---------- 虚拟边界 ----------
+  virtual_ceil_height: 9999          # 虚拟天花板高度 [m]
+  virtual_ground_height: -9999       # 虚拟地面高度 [m]
+  
+  # ---------- 其他选项 ----------
+  block_inf_pt: false
+  kd_tree_en: false
+  load_pcd_en: false
+  intensity_thresh: -10
+  point_filt_num: 1
+  
+  # ---------- 滑动窗口 ----------
+  map_sliding:
+    enable: true
+    threshold: 1.0                  # 滑动触发阈值 [m]
+  
+  # ---------- ESDF地图 ----------
+  esdf:
+    enable: false                   # 是否启用ESDF
+    resolution: 0.1                 # ESDF分辨率 [m]
+    local_update_box: [10, 10, 6]   # 局部更新范围 [m]
+  
+  # ---------- 射线追踪 ----------
+  raycasting:
+    enable: true
+    blind_filter_en: false
+    blind_filter_dis: 1.0
+    batch_update_size: 1
+    local_update_box: [20, 20, 6]
+    ray_range: [0.0, 10]            # 有效射线范围 [m]
+    # 概率更新参数
+    p_min: 0.12                     # 最小占用概率
+    p_miss: 0.35                    # 未命中更新概率
+    p_free: 0.499                   # 自由空间阈值
+    p_occ: 0.80                     # 占用阈值
+    p_hit: 0.65                     # 命中更新概率
+    p_max: 0.90                     # 最大占用概率
+    unk_thresh: 1.0                 # 未知阈值
+  
+  # ---------- 全局地图 ----------
+  global_map:
+    enable: true
+    map_size: [100, 100, 2.0]       # 全局地图尺寸 [m]
+    map_model: 0
+    ground_height: -0.01             # 地面高度 [m]
+    ceil_height: 9990                # 天花板高度 [m]
+    sub_grid_xy: 0.1               # 子网格比例因子
+  
+  # ---------- 相机视锥体 ----------
+  camera_map:
+    enable: true
+    fov_h_deg: 90                   # 水平FOV [度]
+    fov_v_deg: 60                   # 垂直FOV [度]
+    max_dist: 5.0                   # 最大感知距离 [m]
+    min_dist: 0.3                   # 最小感知距离 [m]
+  
+  # ---------- ROS回调 ----------
+  ros_callback:
+    enable: true
+    cloud_topic: "/cloud_registered"
+    odom_topic: "/ground_truth/odom"
+    odom_timeout: 2.0               # 里程计超时 [s]
+  
+  # ---------- 可视化 ----------
+  visualization:
+    enable: true
+    use_dynamic_reconfigure: false
+    time_rate: 10
+    frame_rate: 0
+    range: [20, 20, 6]
+    frame_id: "map"
+    pub_unknown_map_en: true
+
+
+# ============================================================
+#                EGO-Planner 规划器配置
+# ============================================================
+
+# ---------- 规划状态机 FSM ----------
+fsm:
+  # 飞行模式: 1=手动目标(RViz点击), 2=预设路径点自动飞行
+  flight_type: 2
+  
+  # 起飞参数
+  takeoff_height: 1.0               # 起飞高度 [m]
+  takeoff_accel_time: 1.0           # 起飞加速时间 [s]
+  
+  # 预设模式：起飞后自动开始
+  auto_start_preset: true
+  
+  # 重规划参数
+  thresh_replan_time: 1.0           # 剩余时间重规划阈值 [s]
+  thresh_no_replan_meter: 1.0       # 接近目标不重规划距离 [m]
+  planning_horizon: 7.5             # 规划视野 [m]
+  replan_duration: 0.05             # 重规划轨迹起始时间偏移 [s]
+  
+  # 安全参数
+  fail_safe: true                   # 启用故障保护
+  emergency_time: 1.0               # 紧急制动时间 [s]
+  
+  # 预设路径点（flight_type=2 时使用）
+  # 无人机起飞后会按顺序飞往这些点
+  waypoint_num: 4
+  waypoint0_x: 3.0
+  waypoint0_y: 3.0
+  waypoint0_z: 1.0
+  waypoint1_x: 0.0
+  waypoint1_y: 0.0
+  waypoint1_z: 1.0
+  waypoint2_x: -3.0
+  waypoint2_y: -3.0
+  waypoint2_z: 1.0
+  waypoint3_x: 3.0
+  waypoint3_y: -3.0
+  waypoint3_z: 1.0
+
+# ---------- 规划管理器 ----------
+manager:
+  max_vel: 1.5                      # 最大速度 [m/s]
+  max_acc: 1.0                      # 最大加速度 [m/s²]
+  feasibility_tolerance: 0.05      # 可行性容差
+  polyTraj_piece_length: 1.5       # 多项式轨迹段长度 [m]
+  planning_horizon: 7.5            # 规划视野 [m]
+  use_distinctive_trajs: false     # 是否使用多拓扑轨迹搜索
+
+# ---------- 轨迹优化 (MINCO) ----------
+optimization:
+  # 约束点
+  constraint_points_perPiece: 5     # 每段轨迹的约束点数
+  
+  # 优化权重
+  weight_obstacle: 10000.0          # 障碍物代价权重
+  weight_obstacle_soft: 5000.0      # 软约束障碍物权重
+  weight_feasibility: 10000.0       # 可行性约束权重
+  weight_sqrvariance: 10000.0       # 段长度方差权重
+  weight_time: 10.0                 # 时间优化权重
+  
+  # 安全距离
+  obstacle_clearance: 0.1           # 硬约束安全距离 [m]
+  obstacle_clearance_soft: 0.1      # 软约束安全距离 [m]
+  
+  # 动力学约束
+  max_vel: 1.5                      # 最大速度 [m/s]
+  max_acc: 3.0                      # 最大加速度 [m/s²]
+  
+  # 高度保持（用于室内/走廊场景）
+  enable_height_keeping: true       # 是否启用高度保持
+  weight_height: 10000.0            # 高度保持权重
+  height_tolerance: 0.05            # 高度容差 [m]
+
+# ---------- 轨迹服务器 ----------
+traj_server:
+  time_forward: 1.0                 # Yaw规划前向时间 [s]
+
+
+# ============================================================
+#                   探索状态机配置
+# ============================================================
+exploration:
+  # ---------- FSM频率设置 ----------
+  fsm_frequency: 100.0              # FSM主循环频率 [Hz]
+  frontier_update_frequency: 3.0    # 前沿更新频率 [Hz]
+  safety_check_frequency: 20.0      # 安全检查频率 [Hz]
+  visualization_frequency: 10.0     # 可视化频率 [Hz]
+  
+  # ---------- 重规划阈值 ----------
+  replan_thresh_reached: 0.5        # 到达视点位置阈值 [m]
+  replan_thresh_yaw: 0.15           # 到达视点偏航阈值 [rad] (~8.6°)
+  replan_thresh_time: 3.0           # 周期性重规划时间 [s]
+  replan_thresh_frontier: 1.0       # 前沿被覆盖后等待时间 [s]
+  
+  # ---------- 探索参数 ----------
+  auto_start: false                 # 是否自动开始探索（false=被动可视化模式）
+  init_wait_time: 2.0               # 初始化等待时间 [s]
+  min_frontier_cluster_size: 50     # 最小前沿簇大小（体素数）
+  
+  # ---------- 可视化参数 ----------
+  enable_visualization: true        # 启用可视化
+  viewpoint_sphere_radius: 0.2      # 视点球体半径 [m]
+  frustum_length: 1.0               # 视锥体长度 [m]
+  frustum_fov_h: 1.57               # 水平视场角 [rad] (90°)
+  frustum_fov_v: 1.22               # 垂直视场角 [rad] (70°)
+  
+  # ---------- 传感器参数 ----------
+  sensor_range_min: 0.3             # 最小感知距离 [m]
+  sensor_range_max: 5.0             # 最大感知距离 [m]
+  sensor_fov_h: 1.57                # 水平FOV [rad] (90°)
+  sensor_fov_v: 1.22                # 垂直FOV [rad] (70°)
+  optimal_viewing_distance: 3.0     # 最优观测距离 [m]
+  
+  # ---------- 无人机参数 ----------
+  uav_radius: 0.35                  # 无人机半径 [m]
+  safety_margin: 0.2                # 安全边距 [m]
+  max_velocity: 1.5                 # 最大速度 [m/s] (与规划器一致)
+  
+  # ---------- 采样参数 ----------
+  sampling_step: 4                  # 采样步长（每N个体素采样1个）
+  max_viewpoints_per_region: 20     # 每个区域最大视点数
+  min_viewpoint_distance: 0.5       # 视点间最小距离 [m]
+  
+  # ---------- 前沿簇参数 ----------
+  min_cluster_size: 10              # 最小簇大小（体素数）
+  max_clusters_per_region: 15       # 每个区域最大簇数
+  cluster_split_threshold: 3.0      # 簇分裂阈值 [m]
+  absolute_noise_threshold: 5       # 绝对噪声阈值（体素数）
+  obstacle_ratio_threshold: 0.7     # 障碍物比例阈值
+  
+  # ---------- 覆盖评分参数 ----------
+  min_coverage_score: 0.1           # 最小覆盖评分
+  max_viewing_angle: 0.785          # 最大观测角度 [rad] (45°)
+  
+  # ---------- 路由参数 ----------
+  exploration_weight: 0.6           # 探索收益权重
+  distance_weight: 0.4              # 距离权重
+  
+  # ---------- 区域划分参数 ----------
+  planning_horizon: 7.5             # 规划视野 [m] (与规划器一致)
+  max_region_diameter_factor: 2.5   # 最大区域直径因子
+  max_direction_diff: 1.88          # 最大方向差异 [rad] (~108°)
+  max_region_area: 5000.0           # 最大区域前沿面积（体素数）
+
+
+# ============================================================
+#                     可视化颜色配置
+# ============================================================
+visualization:
+  # 前沿簇颜色（自动循环）
+  cluster_colors:
+    - [1.0, 0.0, 0.0, 0.6]          # Red
+    - [0.0, 1.0, 0.0, 0.6]          # Green
+    - [0.0, 0.0, 1.0, 0.6]          # Blue
+    - [1.0, 1.0, 0.0, 0.6]          # Yellow
+    - [1.0, 0.0, 1.0, 0.6]          # Magenta
+    - [0.0, 1.0, 1.0, 0.6]          # Cyan
+    
+  # 视点颜色
+  current_viewpoint_color: [0.0, 1.0, 0.0, 0.8]    # 当前目标（绿色）
+  pending_viewpoint_color: [0.2, 0.4, 1.0, 0.8]    # 待访问（蓝色）
+  visited_viewpoint_color: [0.5, 0.5, 0.5, 0.5]    # 已访问（灰色）
+  
+  # 路由颜色
+  route_line_color: [1.0, 0.5, 0.0, 0.8]           # 橙色
+  route_text_color: [1.0, 1.0, 1.0, 1.0]           # 白色

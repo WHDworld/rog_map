@@ -161,3 +161,14 @@ target_link_libraries(ego_traj_server
         ${THIRD_PARTY}
         ${catkin_LIBRARIES}
 )
+
+# ===========================================================
+# 探索测试节点 (Exploration FSM with Visualization)
+# ===========================================================
+add_executable(exploration_node src/rog_map/exploration_node.cpp)
+add_dependencies(exploration_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+target_link_libraries(exploration_node 
+        rog_map
+        ${THIRD_PARTY}
+        ${catkin_LIBRARIES}
+)

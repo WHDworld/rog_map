@@ -127,7 +127,7 @@ fsm:
 #####################################################
 manager:
   max_vel: 1.5                  # 最大速度 [m/s]
-  max_acc: 3.0                  # 最大加速度 [m/s²]
+  max_acc: 1.0                  # 最大加速度 [m/s²]
   feasibility_tolerance: 0.05  # 可行性容差
   polyTraj_piece_length: 1.5   # 多项式轨迹段长度 [m]
   planning_horizon: 7.5        # 规划视野 [m]
