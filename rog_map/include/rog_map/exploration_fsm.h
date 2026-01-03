@@ -195,6 +195,7 @@ private:
     void visualizeFrustums();
     void visualizeRegionRoute();
     void visualizeExplorationInfo();
+    void visualizeHistoryNodes();
     void clearVisualization();
     
     // ==================== 辅助函数 ====================

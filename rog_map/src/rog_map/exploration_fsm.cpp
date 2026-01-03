@@ -83,10 +83,32 @@ void ExplorationFSM::init(ros::NodeHandle& nh, ROGMap::Ptr rog_map, GlobalMap::P
     // 滤波参数
     nh_.param("exploration/min_viewpoint_distance", vp_config.min_viewpoint_distance, 0.8f);
     nh_.param("exploration/min_coverage_score", vp_config.min_coverage_score, 0.3f);
+    nh_.param("exploration/min_visibility_ratio", vp_config.min_visibility_ratio, 0.3f);
+    
+    // 历史节点参数（借鉴EDEN算法）
+    nh_.param("exploration/history_node_distance", vp_config.history_node_distance, 3.0f);
+    nh_.param("exploration/node_frontier_radius", vp_config.node_frontier_radius, 5.0f);
+    
+    // 前沿点过滤参数
+    float ground_height = 0.0f;
+    nh_.param("rog_map/global_map/ground_height", ground_height, 0.0f);
+    vp_config.ground_height = ground_height;
+    nh_.param("exploration/ground_offset", vp_config.ground_offset, 0.1f);
+    nh_.param("exploration/uav_filter_box_xy", vp_config.uav_filter_box_xy, 0.5f);
+    
+    // 获取全局地图高度
+    std::vector<float> map_size;
+    nh_.param("rog_map/global_map/map_size", map_size, std::vector<float>{100.0f, 100.0f, 2.0f});
+    if (map_size.size() >= 3) {
+        vp_config.global_map_height = map_size[2];
+    }
     
     ROS_INFO("[ExplorationFSM] Viewpoint config: height=%.2f, r=[%.1f, %.1f], sensor=[%.1f, %.1f], fov_h=%.2f",
              vp_config.viewpoint_height, vp_config.candidate_rmin, vp_config.candidate_rmax,
              vp_config.sensor_range_min, vp_config.sensor_range_max, vp_config.sensor_fov_h);
+    ROS_INFO("[ExplorationFSM] History node: dist=%.1f, radius=%.1f | Filter: ground=%.2f+%.2f, box_xy=%.2f",
+             vp_config.history_node_distance, vp_config.node_frontier_radius,
+             vp_config.ground_height, vp_config.ground_offset, vp_config.uav_filter_box_xy);
     
     viewpoint_generator_ = std::make_shared<FrontierViewpointGenerator>(global_map_, vp_config);
     
@@ -589,6 +611,7 @@ void ExplorationFSM::visualize() {
     visualizeFrustums();
     visualizeRegionRoute();
     visualizeExplorationInfo();
+    visualizeHistoryNodes();
 }
 
 void ExplorationFSM::visualizeFrontierClusters() {
@@ -943,6 +966,219 @@ void ExplorationFSM::visualizeExplorationInfo() {
     markers.markers.push_back(text);
     
     info_marker_pub_.publish(markers);
+}
+
+void ExplorationFSM::visualizeHistoryNodes() {
+    if (!viewpoint_generator_) return;
+    
+    const auto& history_nodes = viewpoint_generator_->getHistoryNodes();
+    const auto& associated_subgrids = viewpoint_generator_->getAssociatedSubgrids();
+    
+    visualization_msgs::MarkerArray markers;
+    int marker_id = 0;
+    
+    // 清除旧marker
+    visualization_msgs::Marker delete_marker;
+    delete_marker.action = visualization_msgs::Marker::DELETEALL;
+    delete_marker.ns = "history_nodes";
+    markers.markers.push_back(delete_marker);
+    
+    delete_marker.ns = "history_node_ids";
+    markers.markers.push_back(delete_marker);
+    
+    delete_marker.ns = "history_path";
+    markers.markers.push_back(delete_marker);
+    
+    delete_marker.ns = "associated_subgrids";
+    markers.markers.push_back(delete_marker);
+    
+    delete_marker.ns = "node_subgrid_links";
+    markers.markers.push_back(delete_marker);
+    
+    // 颜色表（不同历史节点使用不同颜色）
+    static const std::vector<std::array<float, 4>> node_colors = {
+        {1.0f, 0.2f, 0.2f, 0.4f},   // 红色
+        {0.2f, 1.0f, 0.2f, 0.4f},   // 绿色
+        {0.2f, 0.2f, 1.0f, 0.4f},   // 蓝色
+        {1.0f, 1.0f, 0.2f, 0.4f},   // 黄色
+        {1.0f, 0.2f, 1.0f, 0.4f},   // 品红
+        {0.2f, 1.0f, 1.0f, 0.4f},   // 青色
+        {1.0f, 0.6f, 0.2f, 0.4f},   // 橙色
+        {0.6f, 0.2f, 1.0f, 0.4f},   // 紫色
+    };
+    
+    // 绘制关联的子网格区域（立方体线框）
+    for (const auto& asg : associated_subgrids) {
+        if (asg.history_node_id < 0) continue;  // 跳过未关联的
+        
+        // 获取该节点对应的颜色
+        int color_idx = asg.history_node_id % static_cast<int>(node_colors.size());
+        const auto& color = node_colors[color_idx];
+        
+        // 绘制子网格边界框（使用LINE_LIST绘制立方体线框）
+        visualization_msgs::Marker cube;
+        cube.header.frame_id = "map";
+        cube.header.stamp = ros::Time::now();
+        cube.ns = "associated_subgrids";
+        cube.id = marker_id++;
+        cube.type = visualization_msgs::Marker::LINE_LIST;
+        cube.action = visualization_msgs::Marker::ADD;
+        
+        cube.scale.x = 0.03;  // 线宽
+        cube.color.r = color[0];
+        cube.color.g = color[1];
+        cube.color.b = color[2];
+        cube.color.a = 0.8f;
+        
+        // 立方体的8个顶点
+        Eigen::Vector3f bmin = asg.bbox_min;
+        Eigen::Vector3f bmax = asg.bbox_max;
+        
+        // 稍微扩展边界框以便可视化
+        bmin -= Eigen::Vector3f(0.02f, 0.02f, 0.02f);
+        bmax += Eigen::Vector3f(0.02f, 0.02f, 0.02f);
+        
+        std::vector<geometry_msgs::Point> vertices(8);
+        vertices[0].x = bmin.x(); vertices[0].y = bmin.y(); vertices[0].z = bmin.z();
+        vertices[1].x = bmax.x(); vertices[1].y = bmin.y(); vertices[1].z = bmin.z();
+        vertices[2].x = bmax.x(); vertices[2].y = bmax.y(); vertices[2].z = bmin.z();
+        vertices[3].x = bmin.x(); vertices[3].y = bmax.y(); vertices[3].z = bmin.z();
+        vertices[4].x = bmin.x(); vertices[4].y = bmin.y(); vertices[4].z = bmax.z();
+        vertices[5].x = bmax.x(); vertices[5].y = bmin.y(); vertices[5].z = bmax.z();
+        vertices[6].x = bmax.x(); vertices[6].y = bmax.y(); vertices[6].z = bmax.z();
+        vertices[7].x = bmin.x(); vertices[7].y = bmax.y(); vertices[7].z = bmax.z();
+        
+        // 12条边
+        int edges[12][2] = {
+            {0,1}, {1,2}, {2,3}, {3,0},  // 底面
+            {4,5}, {5,6}, {6,7}, {7,4},  // 顶面
+            {0,4}, {1,5}, {2,6}, {3,7}   // 侧面
+        };
+        
+        for (int i = 0; i < 12; ++i) {
+            cube.points.push_back(vertices[edges[i][0]]);
+            cube.points.push_back(vertices[edges[i][1]]);
+        }
+        
+        markers.markers.push_back(cube);
+        
+        // 绘制从历史节点到子网格中心的连线
+        visualization_msgs::Marker link;
+        link.header.frame_id = "map";
+        link.header.stamp = ros::Time::now();
+        link.ns = "node_subgrid_links";
+        link.id = marker_id++;
+        link.type = visualization_msgs::Marker::LINE_STRIP;
+        link.action = visualization_msgs::Marker::ADD;
+        
+        link.scale.x = 0.02;
+        link.color.r = color[0];
+        link.color.g = color[1];
+        link.color.b = color[2];
+        link.color.a = 0.3f;
+        
+        // 找到对应的历史节点位置
+        for (const auto& node : history_nodes) {
+            if (node.node_id == asg.history_node_id) {
+                geometry_msgs::Point p1, p2;
+                p1.x = node.position.x();
+                p1.y = node.position.y();
+                p1.z = node.position.z();
+                p2.x = asg.center.x();
+                p2.y = asg.center.y();
+                p2.z = asg.center.z();
+                link.points.push_back(p1);
+                link.points.push_back(p2);
+                break;
+            }
+        }
+        
+        if (link.points.size() == 2) {
+            markers.markers.push_back(link);
+        }
+    }
+    
+    // 绘制历史节点（球体，使用与子网格相同的颜色）
+    for (const auto& node : history_nodes) {
+        int color_idx = node.node_id % static_cast<int>(node_colors.size());
+        const auto& color = node_colors[color_idx];
+        
+        visualization_msgs::Marker sphere;
+        sphere.header.frame_id = "map";
+        sphere.header.stamp = ros::Time::now();
+        sphere.ns = "history_nodes";
+        sphere.id = marker_id++;
+        sphere.type = visualization_msgs::Marker::SPHERE;
+        sphere.action = visualization_msgs::Marker::ADD;
+        
+        sphere.pose.position.x = node.position.x();
+        sphere.pose.position.y = node.position.y();
+        sphere.pose.position.z = node.position.z();
+        sphere.pose.orientation.w = 1.0;
+        
+        sphere.scale.x = 0.4;
+        sphere.scale.y = 0.4;
+        sphere.scale.z = 0.4;
+        
+        // 使用与子网格相同的颜色，但更不透明
+        sphere.color.r = color[0];
+        sphere.color.g = color[1];
+        sphere.color.b = color[2];
+        sphere.color.a = 0.9f;
+        
+        markers.markers.push_back(sphere);
+        
+        // 节点ID文本
+        visualization_msgs::Marker text;
+        text.header.frame_id = "map";
+        text.header.stamp = ros::Time::now();
+        text.ns = "history_node_ids";
+        text.id = marker_id++;
+        text.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
+        text.action = visualization_msgs::Marker::ADD;
+        
+        text.pose.position.x = node.position.x();
+        text.pose.position.y = node.position.y();
+        text.pose.position.z = node.position.z() + 0.5;
+        
+        text.scale.z = 0.3;
+        text.color.r = 1.0;
+        text.color.g = 1.0;
+        text.color.b = 1.0;
+        text.color.a = 1.0;
+        text.text = "N" + std::to_string(node.node_id);
+        
+        markers.markers.push_back(text);
+    }
+    
+    // 绘制历史节点之间的连线（轨迹）
+    if (history_nodes.size() > 1) {
+        visualization_msgs::Marker line;
+        line.header.frame_id = "map";
+        line.header.stamp = ros::Time::now();
+        line.ns = "history_path";
+        line.id = marker_id++;
+        line.type = visualization_msgs::Marker::LINE_STRIP;
+        line.action = visualization_msgs::Marker::ADD;
+        
+        line.scale.x = 0.08;
+        line.color.r = 0.8f;
+        line.color.g = 0.8f;
+        line.color.b = 0.8f;
+        line.color.a = 0.6f;
+        
+        for (const auto& node : history_nodes) {
+            geometry_msgs::Point p;
+            p.x = node.position.x();
+            p.y = node.position.y();
+            p.z = node.position.z();
+            line.points.push_back(p);
+        }
+        
+        markers.markers.push_back(line);
+    }
+    
+    route_marker_pub_.publish(markers);  // 复用route_marker_pub
 }
 
 void ExplorationFSM::clearVisualization() {

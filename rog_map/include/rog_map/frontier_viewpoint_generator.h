@@ -1,13 +1,14 @@
 /**
  * @file frontier_viewpoint_generator.h
- * @brief 前沿视点生成器 - 基于子网格的前沿簇聚类与视点采样
+ * @brief 前沿视点生成器 - 基于历史节点的前沿簇聚类与视点采样
  * 
- * 核心流程：
- * 1. 基于子网格分区获取前沿点
- * 2. 在每个子网格内聚类生成前沿簇
- * 3. 对大簇进行分裂
- * 4. 圆周采样生成探索视点
- * 5. 去重滤波得到最终视点集
+ * 核心流程（借鉴EDEN算法）：
+ * 1. 沿无人机轨迹采集历史节点
+ * 2. 将前沿区域（子网格）关联到最近的历史节点
+ * 3. 同一历史节点关联的前沿区域合并聚类
+ * 4. 对大簇进行分裂
+ * 5. 圆周采样生成探索视点
+ * 6. 去重滤波得到最终视点集
  */
 
 #ifndef FRONTIER_VIEWPOINT_GENERATOR_H
@@ -28,6 +29,51 @@ constexpr float PI = 3.14159265358979323846f;
 // ==================== 数据结构 ====================
 
 /**
+ * @brief 关联的子网格区域信息（用于可视化）
+ */
+struct AssociatedSubgrid {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    
+    int subgrid_id;                   // 子网格ID
+    int history_node_id;              // 关联的历史节点ID
+    Eigen::Vector3f center;           // 子网格中心（前沿点的质心）
+    Eigen::Vector3f bbox_min;         // 边界框最小点
+    Eigen::Vector3f bbox_max;         // 边界框最大点
+    int point_count;                  // 前沿点数量
+    
+    AssociatedSubgrid()
+        : subgrid_id(-1), history_node_id(-1)
+        , center(Eigen::Vector3f::Zero())
+        , bbox_min(Eigen::Vector3f::Zero())
+        , bbox_max(Eigen::Vector3f::Zero())
+        , point_count(0) {}
+};
+
+/**
+ * @brief 历史节点（借鉴EDEN算法）
+ * 
+ * 沿无人机轨迹采集的节点，用于：
+ * 1. 将前沿区域关联到最近的历史节点
+ * 2. 合并同一节点关联的相邻前沿区域
+ */
+struct HistoryNode {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    
+    int node_id;                                  // 节点ID
+    Eigen::Vector3f position;                     // 节点位置
+    float timestamp;                              // 创建时间戳
+    std::vector<int> associated_subgrid_ids;      // 关联的子网格ID列表
+    
+    HistoryNode()
+        : node_id(-1)
+        , position(Eigen::Vector3f::Zero())
+        , timestamp(0.0f) {}
+    
+    HistoryNode(int id, const Eigen::Vector3f& pos, float ts)
+        : node_id(id), position(pos), timestamp(ts) {}
+};
+
+/**
  * @brief 前沿簇
  */
 struct FrontierCluster {
@@ -35,6 +81,7 @@ struct FrontierCluster {
     
     int cluster_id;                      // 簇ID
     int subgrid_id;                      // 所属子网格ID
+    int history_node_id;                 // 关联的历史节点ID
     Eigen::Vector3f centroid;            // 簇中心
     Eigen::Vector3f normal;              // 法向量
     int point_count;                     // 点数
@@ -44,7 +91,7 @@ struct FrontierCluster {
     std::vector<Eigen::Vector3f> points;
     
     FrontierCluster()
-        : cluster_id(-1), subgrid_id(-1)
+        : cluster_id(-1), subgrid_id(-1), history_node_id(-1)
         , centroid(Eigen::Vector3f::Zero())
         , normal(Eigen::Vector3f::UnitZ())
         , point_count(0), extent(0.0f) {}
@@ -111,7 +158,18 @@ struct ViewpointGeneratorConfig {
     
     // ========== 滤波参数 ==========
     float min_viewpoint_distance = 0.8f; // 视点最小间距
-    float min_coverage_score = 0.3f;     // 最小覆盖评分（低于此值的视点被过滤）
+    float min_coverage_score = 0.3f;     // 最小覆盖评分（L1快速过滤阈值）
+    float min_visibility_ratio = 0.3f;   // 最小可见性比例（L2可见性过滤阈值）
+    
+    // ========== 历史节点参数（借鉴EDEN） ==========
+    float history_node_distance = 3.0f;  // 历史节点间隔距离 [m]
+    float node_frontier_radius = 5.0f;   // 节点关联前沿区域的半径 [m]
+    
+    // ========== 前沿点过滤参数 ==========
+    float ground_height = 0.0f;          // 地面高度 [m]
+    float ground_offset = 0.1f;          // 地面偏移（过滤地面噪声）[m]
+    float uav_filter_box_xy = 0.5f;      // 无人机周围过滤包围盒XY半径 [m]
+    float global_map_height = 2.0f;      // 全局地图高度范围 [m]
 };
 
 // ==================== 主类 ====================
@@ -132,7 +190,14 @@ public:
     /**
      * @brief 主接口：生成探索视点
      * 
-     * 流程：子网格分区 → 聚类 → 分裂 → 采样 → 滤波
+     * 流程（借鉴EDEN算法）：
+     * 1. 更新历史节点
+     * 2. 获取前沿点并过滤（地面噪声+无人机周围）
+     * 3. 将前沿区域关联到历史节点
+     * 4. 同一节点的前沿区域合并聚类
+     * 5. 分裂大簇
+     * 6. 圆周采样生成视点
+     * 7. 去重滤波
      * 
      * @param clusters 输出的前沿簇
      * @param viewpoints 输出的探索视点
@@ -143,9 +208,59 @@ public:
     
     const ViewpointGeneratorConfig& getConfig() const { return config_; }
     void setConfig(const ViewpointGeneratorConfig& config) { config_ = config; }
+    
+    // 获取历史节点（用于可视化）
+    const std::vector<HistoryNode>& getHistoryNodes() const { return history_nodes_; }
+    
+    // 获取关联的子网格信息（用于可视化）
+    const std::vector<AssociatedSubgrid>& getAssociatedSubgrids() const { return associated_subgrids_; }
 
 private:
+    // ==================== 历史节点管理 ====================
+    
+    /**
+     * @brief 更新历史节点
+     * 
+     * 当无人机移动超过history_node_distance时，添加新的历史节点
+     */
+    void updateHistoryNodes();
+    
+    /**
+     * @brief 将子网格关联到最近的历史节点
+     * 
+     * @param subgrid_center 子网格中心位置
+     * @return 最近历史节点的ID，如果没有则返回-1
+     */
+    int findNearestHistoryNode(const Eigen::Vector3f& subgrid_center);
+    
+    // ==================== 前沿点过滤 ====================
+    
+    /**
+     * @brief 过滤前沿点
+     * 
+     * 过滤条件：
+     * 1. 地面噪声：高度 < ground_height + ground_offset
+     * 2. 无人机周围：在UAV安全包围盒内的点
+     */
+    void filterFrontierPoints(std::vector<Eigen::Vector3f>& points);
+    
+    /**
+     * @brief 检查点是否在无人机安全包围盒内
+     */
+    bool isInUAVSafetyBox(const Eigen::Vector3f& point);
+    
     // ==================== 核心算法 ====================
+    
+    /**
+     * @brief 在历史节点关联的前沿区域内聚类
+     * 
+     * @param points 历史节点关联的所有前沿点
+     * @param node_id 历史节点ID
+     * @param clusters 输出的前沿簇
+     */
+    void clusterByHistoryNode(const std::vector<Eigen::Vector3f>& points,
+                              int node_id,
+                              std::vector<FrontierCluster>& clusters);
     
     /**
      * @brief Step 1: 在子网格内聚类前沿点
@@ -169,6 +284,14 @@ private:
      * @brief Step 4: 去重滤波
      */
     void filterViewpoints(std::vector<ExplorationViewpoint>& viewpoints);
+    
+    /**
+     * @brief Step 5: 视点Yaw优化
+     * 
+     * 对相邻视点进行聚类，优化每个簇内视点的yaw角
+     * 避免相邻视点出现对射情况，确保规划平滑
+     */
+    void optimizeViewpointYaw(std::vector<ExplorationViewpoint>& viewpoints);
     
     // ==================== 辅助函数 ====================
     
@@ -218,12 +341,22 @@ private:
     bool checkRayClear(const Eigen::Vector3f& start,
                        const Eigen::Vector3f& direction,
                        float max_dist);
+    
 
 private:
     GlobalMap::Ptr global_map_;
     ViewpointGeneratorConfig config_;
     UAVState uav_state_;
     std::mutex state_mutex_;
+    
+    // 历史节点系统
+    std::vector<HistoryNode> history_nodes_;
+    int next_node_id_ = 0;
+    Eigen::Vector3f last_node_position_ = Eigen::Vector3f::Zero();
+    bool first_node_created_ = false;
+    
+    // 子网格关联信息（用于可视化）
+    std::vector<AssociatedSubgrid> associated_subgrids_;
 };
 
 } // namespace rog_map

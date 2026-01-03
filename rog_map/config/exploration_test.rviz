@@ -29,7 +29,7 @@ Panels:
   - Class: rviz/Time
     Name: Time
     SyncMode: 0
-    SyncSource: LocalCloud
+    SyncSource: occupied_voxels
 Preferences:
   PromptSaveOnExit: true
 Toolbars:
@@ -170,7 +170,7 @@ Visualization Manager:
           Color: 173; 127; 168
           Color Transformer: FlatColor
           Decay Time: 0
-          Enabled: true
+          Enabled: false
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -185,7 +185,7 @@ Visualization Manager:
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
-          Value: true
+          Value: false
         - Alpha: 1
           Class: rviz/Axes
           Enabled: false
@@ -274,7 +274,7 @@ Visualization Manager:
           Color: 245; 121; 0
           Color Transformer: FlatColor
           Decay Time: 0
-          Enabled: true
+          Enabled: false
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -289,7 +289,7 @@ Visualization Manager:
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
-          Value: true
+          Value: false
         - Alpha: 1
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
@@ -509,13 +509,13 @@ Visualization Manager:
           Use rainbow: true
           Value: true
         - Class: rviz/MarkerArray
-          Enabled: true
+          Enabled: false
           Marker Topic: /exploration_planner_node/global_map/sub_grid_range
           Name: sub_grids
           Namespaces:
-            frontier_subgrid_range: true
+            {}
           Queue Size: 100
-          Value: true
+          Value: false
         - Class: rviz/MarkerArray
           Enabled: true
           Marker Topic: /exploration_planner_node/global_map/camera_frustum
@@ -662,7 +662,9 @@ Visualization Manager:
           Name: FrontierClusters
           Namespaces:
             cluster_centers: true
-            frontier_clusters: true
+            cluster_extent: true
+            cluster_labels: true
+            frontier_points: true
           Queue Size: 100
           Value: true
         - Class: rviz/MarkerArray
@@ -706,6 +708,15 @@ Visualization Manager:
             {}
           Queue Size: 1
           Value: true
+        - Class: rviz/MarkerArray
+          Enabled: true
+          Marker Topic: /exploration/region_route
+          Name: region_route
+          Namespaces:
+            history_node_ids: true
+            history_nodes: true
+          Queue Size: 100
+          Value: true
       Enabled: true
       Name: Exploration
   Enabled: true
@@ -731,7 +742,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/XYOrbit
-      Distance: 32.0274772644043
+      Distance: 34.28337478637695
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -739,17 +750,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: -4.373419284820557
-        Y: -5.659011363983154
-        Z: 8.450915629509836e-07
+        X: 0.0807499885559082
+        Y: -4.04060173034668
+        Z: -9.645325917517766e-06
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.5747981667518616
+      Pitch: 0.6547983288764954
       Target Frame: perfect_drone
-      Yaw: 0.9834712743759155
+      Yaw: 3.559741973876953
     Saved:
       - Class: rviz/ThirdPersonFollower
         Distance: 17.48538589477539

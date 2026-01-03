@@ -78,7 +78,7 @@ rog_map:
     map_model: 0
     ground_height: -0.01             # 地面高度 [m]
     ceil_height: 9990                # 天花板高度 [m]
-    sub_grid_xy: 0.1               # 子网格比例因子
+    sub_grid_xy: 0.03               # 子网格比例因子
   
   # ---------- 相机视锥体 ----------
   camera_map:
@@ -248,16 +248,34 @@ exploration:
   # 聚类使用BFS区域增长，在每个子网格内独立进行
   cluster_eps: 1.0                  # 聚类半径 [m] - 决定点连通阈值
   min_cluster_size: 10              # 最小簇大小 - 低于此值的簇被丢弃
-  cluster_split_threshold: 3.0      # 簇分裂阈值 [m] - extent超过此值则分裂
+  cluster_split_threshold: 6.0      # 簇分裂阈值 [m] - extent超过此值则分裂
   max_clusters: 20                  # 最大簇数 - 限制总簇数量
   
   # ---------- 安全参数 ----------
   uav_radius: 0.35                  # 无人机半径 [m]
-  safety_margin: 0.2                # 安全边距 [m]
+  safety_margin: 0.75                # 安全边距 [m]
   
   # ---------- 滤波参数 ----------
   min_viewpoint_distance: 0.8       # 视点最小间距 [m] - 去重滤波用
-  min_coverage_score: 0.3           # 最小覆盖评分 - 低于此值的视点被过滤
+  min_coverage_score: 0.3           # 最小覆盖评分 [0,1] - L1快速过滤阈值
+  min_visibility_ratio: 0.9         # 最小可见性比例 [0,1] - L2可见性过滤阈值
+                                    # 表示至少有多少比例的射线可见才认为视点有效
+                                    # ↑更严格（如0.5），↓更宽松（如0.1）
+  
+  # ---------- 历史节点参数（借鉴EDEN算法） ----------
+  # 设计说明：
+  #   - 每个子网格只会关联到距离最近的唯一一个历史节点（不会重复关联）
+  #   - 子网格尺寸 = map_size * sub_grid_xy (当前为 100*0.01 = 1m)
+  #   - 建议：node_frontier_radius >= history_node_distance > 子网格尺寸
+  history_node_distance: 3.0        # 历史节点间隔距离 [m] - 沿轨迹采集节点
+  node_frontier_radius: 5.0         # 节点关联前沿区域的最大半径 [m]
+                                    # 子网格中心必须在此半径内才会被关联到该节点
+                                    # 同一节点关联的前沿区域会合并聚类，避免子网格边界分裂
+  
+  # ---------- 前沿点过滤参数 ----------
+  ground_offset: 0.1                # 地面偏移 [m] - 过滤高度 < ground_height + offset 的点
+  uav_filter_box_xy: 0.5            # 无人机周围过滤包围盒XY半径 [m]
+                                    # 过滤无人机头顶等区域的前沿点
 
 
 # ============================================================
