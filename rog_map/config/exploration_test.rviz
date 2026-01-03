@@ -445,7 +445,7 @@ Visualization Manager:
           Queue Size: 10
           Selectable: true
           Size (Pixels): 3
-          Size (m): 0.10000000149011612
+          Size (m): 0.20000000298023224
           Style: Boxes
           Topic: /exploration_planner_node/global_map/occupied
           Unreliable: false
@@ -509,13 +509,13 @@ Visualization Manager:
           Use rainbow: true
           Value: true
         - Class: rviz/MarkerArray
-          Enabled: false
+          Enabled: true
           Marker Topic: /exploration_planner_node/global_map/sub_grid_range
           Name: sub_grids
           Namespaces:
-            {}
+            frontier_subgrid_range: true
           Queue Size: 100
-          Value: false
+          Value: true
         - Class: rviz/MarkerArray
           Enabled: true
           Marker Topic: /exploration_planner_node/global_map/camera_frustum
@@ -573,13 +573,13 @@ Visualization Manager:
           Queue Size: 100
           Value: true
         - Class: rviz/Marker
-          Enabled: true
+          Enabled: false
           Marker Topic: /planning/set_target_point
           Name: set_target_point
           Namespaces:
-            goal: true
+            {}
           Queue Size: 100
-          Value: true
+          Value: false
         - Class: rviz/Marker
           Enabled: true
           Marker Topic: /planning/travel_traj
@@ -686,14 +686,6 @@ Visualization Manager:
           Value: true
         - Class: rviz/MarkerArray
           Enabled: false
-          Marker Topic: /exploration/region_route
-          Name: RegionRoute
-          Namespaces:
-            {}
-          Queue Size: 100
-          Value: false
-        - Class: rviz/MarkerArray
-          Enabled: false
           Marker Topic: /exploration/info
           Name: ExplorationInfo
           Namespaces:
@@ -713,8 +705,11 @@ Visualization Manager:
           Marker Topic: /exploration/region_route
           Name: region_route
           Namespaces:
+            associated_subgrids: true
             history_node_ids: true
             history_nodes: true
+            history_path: true
+            node_subgrid_links: true
           Queue Size: 100
           Value: true
       Enabled: true
@@ -742,7 +737,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/XYOrbit
-      Distance: 34.28337478637695
+      Distance: 23.303993225097656
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -750,17 +745,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 0.0807499885559082
-        Y: -4.04060173034668
-        Z: -9.645325917517766e-06
+        X: 3.0010929107666016
+        Y: 1.9630650281906128
+        Z: 1.6722588043194264e-06
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.6547983288764954
+      Pitch: 0.5147973299026489
       Target Frame: perfect_drone
-      Yaw: 3.559741973876953
+      Yaw: 0.2878713011741638
     Saved:
       - Class: rviz/ThirdPersonFollower
         Distance: 17.48538589477539

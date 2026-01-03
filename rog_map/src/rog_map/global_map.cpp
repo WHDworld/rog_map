@@ -82,7 +82,8 @@ void GlobalMap::updateVoxelStateFromLiDAR(const GlobalVoxelIndex& idx, bool is_o
         sg.free_count++;
         sg.explored_voxels_.insert(idx);
         sg.unexplored_voxels_.erase(idx);
-        sg.frontier_dirty = true;
+        // 标记当前子网格及其邻居为 dirty（因为前沿检测使用全局边界）
+        markSubGridDirty(subGridToLinearIndex(sg_idx));
         updateExploredBounds(idx);
     }
     else if(VoxelStateBits::isOccupied(new_state) && VoxelStateBits::isUnknown(old_state))
@@ -90,7 +91,8 @@ void GlobalMap::updateVoxelStateFromLiDAR(const GlobalVoxelIndex& idx, bool is_o
         sg.occupied_count++;
         sg.explored_voxels_.insert(idx);
         sg.unexplored_voxels_.erase(idx);
-        sg.frontier_dirty = true;
+        // 标记当前子网格及其邻居为 dirty（因为前沿检测使用全局边界）
+        markSubGridDirty(subGridToLinearIndex(sg_idx));
         updateExploredBounds(idx);
     }
     else if(VoxelStateBits::isFree(new_state) && VoxelStateBits::isOccupied(old_state))
@@ -323,7 +325,8 @@ void GlobalMap::extractGlobalFrontierIncremental()
         SubGrid& sg = sub_grids_[linear_idx];
         if(sg.frontier_dirty)
         {
-            sg.extractFrontier(voxels_, frontier_voxels_);
+            // 传入全局地图边界，确保能正确检测跨子网格边界的前沿点
+            sg.extractFrontier(voxels_, frontier_voxels_, global_min_idx_, global_max_idx_);
         }
         else
         {
@@ -362,7 +365,21 @@ void GlobalMap::updateFrontierSubGridCache()
 
 void GlobalMap::markSubGridDirty(int linear_idx)
 {
-
+    if (linear_idx < 0 || linear_idx >= sub_grid_total_) return;
+    
+    SubGrid& sg = sub_grids_[linear_idx];
+    sg.frontier_dirty = true;
+    
+    // 同时标记邻居子网格为 dirty
+    // 这是因为前沿检测使用全局边界，邻居子网格边界处的前沿可能受到影响
+    std::vector<SubGridIndex> neighbors;
+    getNeighborSubGrids4(sg.grid_idx, neighbors);
+    for (const auto& nei_idx : neighbors) {
+        int nei_linear = subGridToLinearIndex(nei_idx);
+        if (nei_linear >= 0 && nei_linear < sub_grid_total_) {
+            sub_grids_[nei_linear].frontier_dirty = true;
+        }
+    }
 }
 
 int GlobalMap::subGridToLinearIndex(const SubGridIndex& idx)

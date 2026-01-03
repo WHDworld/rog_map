@@ -267,8 +267,8 @@ exploration:
   #   - 每个子网格只会关联到距离最近的唯一一个历史节点（不会重复关联）
   #   - 子网格尺寸 = map_size * sub_grid_xy (当前为 100*0.01 = 1m)
   #   - 建议：node_frontier_radius >= history_node_distance > 子网格尺寸
-  history_node_distance: 3.0        # 历史节点间隔距离 [m] - 沿轨迹采集节点
-  node_frontier_radius: 5.0         # 节点关联前沿区域的最大半径 [m]
+  history_node_distance: 2.0        # 历史节点间隔距离 [m] - 沿轨迹采集节点
+  node_frontier_radius: 8.0         # 节点关联前沿区域的最大半径 [m]
                                     # 子网格中心必须在此半径内才会被关联到该节点
                                     # 同一节点关联的前沿区域会合并聚类，避免子网格边界分裂
   

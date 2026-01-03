@@ -253,9 +253,16 @@ struct SubGrid
     }
 
     void extractFrontier(const std::unordered_map<GlobalVoxelIndex, GlobalVoxelState, GlobalVoxelIndexHash>& voxels,
-    std::vector<GlobalVoxelIndex>& frontier_voxels)
+    std::vector<GlobalVoxelIndex>& frontier_voxels,
+    const GlobalVoxelIndex& map_min_idx = GlobalVoxelIndex(0,0,0),
+    const GlobalVoxelIndex& map_max_idx = GlobalVoxelIndex(0,0,0))
     {
         sub_grid_frontier_voxels_.clear();
+        
+        // 使用全局地图边界（如果提供），否则使用子网格边界
+        // 这样可以正确检测跨子网格边界的前沿点
+        GlobalVoxelIndex check_min = (map_min_idx.x == 0 && map_max_idx.x == 0) ? global_min_idx : map_min_idx;
+        GlobalVoxelIndex check_max = (map_min_idx.x == 0 && map_max_idx.x == 0) ? global_max_idx : map_max_idx;
 
         if(should_iterate_explored())
         {
@@ -267,19 +274,18 @@ struct SubGrid
                     continue;
                 }
 
-                bool is_frontier = false;
                 for(int d = 0; d < 6; d++)
                 {
                     GlobalVoxelIndex nei_idx = explored_idx + neighbor_offsets_6[d];
-                    if(!isInRange(nei_idx)) continue;
+                    // 使用全局地图边界检查，而不是子网格边界
+                    if(!isInGlobalRange(nei_idx, check_min, check_max)) continue;
 
                     auto nei_it = voxels.find(nei_idx);
                     if(nei_it == voxels.end() || VoxelStateBits::isUnknown(nei_it->second))
                     {
                         // 🔥 过滤掉紧贴地图上下边界的frontier点
-                        // 只要frontier点本身接近边界，就不应被标记为有效frontier
-                        if(nei_idx.z >= global_max_idx.z - 1) continue;  // 距上边界<=1层
-                        if(nei_idx.z <= global_min_idx.z) continue;      // 距下边界<=0层
+                        if(nei_idx.z >= check_max.z - 1) continue;  // 距上边界<=1层
+                        if(nei_idx.z <= check_min.z) continue;      // 距下边界<=0层
                         
                         sub_grid_frontier_voxels_.insert(nei_idx);
                         frontier_voxels.push_back(nei_idx);
@@ -291,16 +297,16 @@ struct SubGrid
         {
             for(const auto& unexplored_idx : unexplored_voxels_)
             {
-                // 🔥 关键修复：过滤掉紧贴地图上下边界的未探索体素
-                // 这些体素的上方/下方已超出地图，不应作为有效frontier
-                if(unexplored_idx.z >= global_max_idx.z - 1) continue;  // 距上边界<=1层
-                if(unexplored_idx.z <= global_min_idx.z) continue;      // 距下边界<=0层
+                // 🔥 过滤掉紧贴地图上下边界的未探索体素
+                if(unexplored_idx.z >= check_max.z - 1) continue;  // 距上边界<=1层
+                if(unexplored_idx.z <= check_min.z) continue;      // 距下边界<=0层
                 
                 bool is_frontier = false;
                 for(int d = 0; d < 6; d++)
                 {
                     GlobalVoxelIndex nei_idx = unexplored_idx + neighbor_offsets_6[d];
-                    if(!isInRange(nei_idx)) continue;
+                    // 使用全局地图边界检查，而不是子网格边界
+                    if(!isInGlobalRange(nei_idx, check_min, check_max)) continue;
                     auto nei_it = voxels.find(nei_idx);
                     if(nei_it != voxels.end() && !VoxelStateBits::isUnknown(nei_it->second))
                     {
@@ -345,6 +351,16 @@ struct SubGrid
         return idx.x >= global_min_idx.x && idx.x < global_max_idx.x &&
                idx.y >= global_min_idx.y && idx.y < global_max_idx.y &&
                idx.z >= global_min_idx.z && idx.z < global_max_idx.z;
+    }
+    
+    // 使用指定的全局边界检查（用于跨子网格边界的前沿检测）
+    bool isInGlobalRange(const GlobalVoxelIndex& idx, 
+                         const GlobalVoxelIndex& min_idx,
+                         const GlobalVoxelIndex& max_idx) const
+    {
+        return idx.x >= min_idx.x && idx.x < max_idx.x &&
+               idx.y >= min_idx.y && idx.y < max_idx.y &&
+               idx.z >= min_idx.z && idx.z < max_idx.z;
     }
 
 };
@@ -503,13 +519,24 @@ public:
     }
     
     /**
-     * @brief 获取按子网格分组的前沿点位置
+     * @brief 子网格前沿信息结构体
+     */
+    struct SubGridFrontierInfo {
+        EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+        int subgrid_id;
+        Eigen::Vector3f subgrid_center;  // 子网格的几何中心
+        Eigen::Vector3f subgrid_min;     // 子网格边界最小值
+        Eigen::Vector3f subgrid_max;     // 子网格边界最大值
+        std::vector<Eigen::Vector3f> frontier_points;  // 前沿点列表
+    };
+    
+    /**
+     * @brief 获取按子网格分组的前沿点位置（包含子网格几何信息）
      * 
-     * 返回每个包含前沿的子网格的前沿点位置列表
-     * 这样可以在每个子网格内独立进行聚类，避免前沿点连成一片
+     * 返回每个包含前沿的子网格的信息和前沿点位置列表
      */
     void getFrontierPositionsBySubGrid(
-        std::vector<std::pair<int, std::vector<Eigen::Vector3f>>>& subgrid_frontiers) const 
+        std::vector<SubGridFrontierInfo>& subgrid_frontiers) const 
     {
         std::lock_guard<std::mutex> lock(map_mutex_);
         subgrid_frontiers.clear();
@@ -520,8 +547,12 @@ public:
             const SubGrid& sg = sub_grids_[sg_id];
             if (sg.sub_grid_frontier_voxels_.empty()) continue;
             
-            std::vector<Eigen::Vector3f> positions;
-            positions.reserve(sg.sub_grid_frontier_voxels_.size());
+            SubGridFrontierInfo info;
+            info.subgrid_id = sg_id;
+            info.subgrid_center = sg.center;    // 子网格几何中心
+            info.subgrid_min = sg.world_min;    // 子网格边界
+            info.subgrid_max = sg.world_max;
+            info.frontier_points.reserve(sg.sub_grid_frontier_voxels_.size());
             
             for (const auto& f_idx : sg.sub_grid_frontier_voxels_) {
                 Eigen::Vector3f pos(
@@ -529,11 +560,11 @@ public:
                     (static_cast<float>(f_idx.y) + 0.5f) * global_resolution_ + global_map_min_.y(),
                     (static_cast<float>(f_idx.z) + 0.5f) * global_resolution_ + global_map_min_.z()
                 );
-                positions.push_back(pos);
+                info.frontier_points.push_back(pos);
             }
             
-            if (!positions.empty()) {
-                subgrid_frontiers.emplace_back(sg_id, std::move(positions));
+            if (!info.frontier_points.empty()) {
+                subgrid_frontiers.push_back(std::move(info));
             }
         }
     }

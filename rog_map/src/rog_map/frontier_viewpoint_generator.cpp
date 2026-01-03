@@ -50,8 +50,8 @@ bool FrontierViewpointGenerator::generate(
     // Step 0: 更新历史节点（沿无人机轨迹采集）
     updateHistoryNodes();
     
-    // Step 1: 获取按子网格分组的前沿点
-    std::vector<std::pair<int, std::vector<Eigen::Vector3f>>> subgrid_frontiers;
+    // Step 1: 获取按子网格分组的前沿点（包含子网格几何信息）
+    std::vector<rog_map::GlobalMap::SubGridFrontierInfo> subgrid_frontiers;
     global_map_->getFrontierPositionsBySubGrid(subgrid_frontiers);
     
     if (subgrid_frontiers.empty()) {
@@ -68,9 +68,9 @@ bool FrontierViewpointGenerator::generate(
     // 清除旧的子网格关联信息
     associated_subgrids_.clear();
     
-    for (auto& sg_pair : subgrid_frontiers) {
-        int sg_id = sg_pair.first;
-        auto& points = sg_pair.second;
+    for (auto& sg_info : subgrid_frontiers) {
+        int sg_id = sg_info.subgrid_id;
+        auto& points = sg_info.frontier_points;
         total_points_before += points.size();
         
         // 过滤前沿点
@@ -79,16 +79,9 @@ bool FrontierViewpointGenerator::generate(
         
         if (points.empty()) continue;
         
-        // 计算子网格中心和边界框
-        Eigen::Vector3f sg_center = Eigen::Vector3f::Zero();
-        Eigen::Vector3f bbox_min = points[0];
-        Eigen::Vector3f bbox_max = points[0];
-        for (const auto& p : points) {
-            sg_center += p;
-            bbox_min = bbox_min.cwiseMin(p);
-            bbox_max = bbox_max.cwiseMax(p);
-        }
-        sg_center /= static_cast<float>(points.size());
+        // 使用子网格的几何中心（而不是前沿点中心）来关联历史节点
+        // 这样可视化时历史节点指向的是子网格区域中心
+        Eigen::Vector3f sg_center = sg_info.subgrid_center;
         
         // 关联到最近的历史节点
         int node_id = findNearestHistoryNode(sg_center);
@@ -99,30 +92,18 @@ bool FrontierViewpointGenerator::generate(
                 points.begin(), points.end());
             
             // 保存子网格关联信息（用于可视化）
+            // 使用子网格的几何中心和边界，而不是前沿点的范围
             AssociatedSubgrid asg;
             asg.subgrid_id = sg_id;
             asg.history_node_id = node_id;
-            asg.center = sg_center;
-            asg.bbox_min = bbox_min;
-            asg.bbox_max = bbox_max;
-            asg.point_count = static_cast<int>(points.size());
-            associated_subgrids_.push_back(asg);
-        } else {
-            // 如果没有历史节点，使用子网格ID作为临时分组
-            node_frontiers[-sg_id - 1].insert(
-                node_frontiers[-sg_id - 1].end(),
-                points.begin(), points.end());
-            
-            // 也保存这些子网格的信息
-            AssociatedSubgrid asg;
-            asg.subgrid_id = sg_id;
-            asg.history_node_id = -1;  // 未关联
-            asg.center = sg_center;
-            asg.bbox_min = bbox_min;
-            asg.bbox_max = bbox_max;
+            asg.center = sg_info.subgrid_center;    // 子网格几何中心
+            asg.bbox_min = sg_info.subgrid_min;     // 子网格边界
+            asg.bbox_max = sg_info.subgrid_max;
             asg.point_count = static_cast<int>(points.size());
             associated_subgrids_.push_back(asg);
         }
+        // 注意：未关联到历史节点的子网格不再生成探索视点
+        // 这些区域会在无人机移动并创建新历史节点后被关联
     }
     
     ROS_INFO("[ViewpointGen] Filtered frontier points: %lu -> %lu (removed %lu)",
@@ -207,21 +188,30 @@ void FrontierViewpointGenerator::updateHistoryNodes()
     if (!first_node_created_) {
         HistoryNode node(next_node_id_++, current_pos, ros::Time::now().toSec());
         history_nodes_.push_back(node);
-        last_node_position_ = current_pos;
         first_node_created_ = true;
         ROS_INFO("[ViewpointGen] Created first history node at (%.2f, %.2f, %.2f)",
                  current_pos.x(), current_pos.y(), current_pos.z());
         return;
     }
     
-    // 检查是否需要添加新节点（距离超过阈值）
-    float dist = (current_pos - last_node_position_).norm();
-    if (dist >= config_.history_node_distance) {
+    // 检查是否需要添加新节点
+    // 改进：与所有已采样历史节点的最短距离超过阈值时才采样
+    // 而不是只与上一个节点比较
+    float min_dist_to_existing = std::numeric_limits<float>::max();
+    for (const auto& node : history_nodes_) {
+        float dist = (current_pos - node.position).head<2>().norm();  // 只考虑XY距离
+        if (dist < min_dist_to_existing) {
+            min_dist_to_existing = dist;
+        }
+    }
+    
+    // 只有当与所有现有节点的距离都超过阈值时，才创建新节点
+    if (min_dist_to_existing >= config_.history_node_distance) {
         HistoryNode node(next_node_id_++, current_pos, ros::Time::now().toSec());
         history_nodes_.push_back(node);
-        last_node_position_ = current_pos;
-        ROS_DEBUG("[ViewpointGen] Created history node %d at (%.2f, %.2f, %.2f)",
-                  node.node_id, current_pos.x(), current_pos.y(), current_pos.z());
+        ROS_INFO("[ViewpointGen] Created history node %d at (%.2f, %.2f, %.2f), min_dist=%.2f",
+                 node.node_id, current_pos.x(), current_pos.y(), current_pos.z(),
+                 min_dist_to_existing);
     }
 }
 
