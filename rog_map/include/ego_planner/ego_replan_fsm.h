@@ -114,7 +114,7 @@ namespace ego_planner
     /* ROS utils */
     ros::NodeHandle node_;
     ros::Timer exec_timer_, safety_timer_;
-    ros::Subscriber waypoint_sub_, viewpoint_sub_, odom_sub_, trigger_sub_, mandatory_stop_sub_, state_sub_;
+    ros::Subscriber waypoint_sub_, viewpoint_sub_, viewpoint_path_sub_, odom_sub_, trigger_sub_, mandatory_stop_sub_, state_sub_;
     ros::Publisher poly_traj_pub_, pos_cmd_pub_, replan_pub_;
     ros::ServiceClient arming_client_, set_mode_client_;
     ros::Publisher set_target_point_pub_;
@@ -136,6 +136,7 @@ namespace ego_planner
     /* global trajectory */
     void waypointCallback(const geometry_msgs::PoseStampedPtr &msg);
     void viewpointCallback(const quadrotor_msgs::PositionCommandConstPtr &msg);  // Full viewpoint with pos, yaw, vel
+    void viewpointPathCallback(const nav_msgs::PathConstPtr &msg);  // Path with intermediate waypoints
     void readGivenWpsAndPlan();
     void planNextWaypoint(const Waypoint& next_wp, const Waypoint& previous_wp);
 

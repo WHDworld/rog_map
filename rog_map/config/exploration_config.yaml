@@ -74,7 +74,7 @@ rog_map:
   # ---------- 全局地图 ----------
   global_map:
     enable: true
-    map_size: [100, 100, 2.0]       # 全局地图尺寸 [m]
+    map_size: [50, 50, 2.0]       # 全局地图尺寸 [m]
     map_model: 0
     ground_height: -0.01            # 地面高度 [m]
     ceil_height: 9990               # 天花板高度 [m]
@@ -164,20 +164,21 @@ optimization:
   constraint_points_perPiece: 5     # 每段轨迹的约束点数
   
   # 优化权重
-  weight_obstacle: 10000.0          # 障碍物代价权重
+  weight_obstacle: 20000.0          # 障碍物代价权重
   weight_obstacle_soft: 5000.0      # 软约束障碍物权重
   weight_feasibility: 10000.0       # 可行性约束权重
   weight_sqrvariance: 10000.0       # 段长度方差权重
   weight_time: 10.0                 # 时间优化权重
   
   # 安全距离
-  obstacle_clearance: 0.1           # 硬约束安全距离 [m]
-  obstacle_clearance_soft: 0.1      # 软约束安全距离 [m]
+  obstacle_clearance: 1.25           # 硬约束安全距离 [m]
+  obstacle_clearance_soft: 0.75      # 软约束安全距离 [m]
   
   # 高度保持（用于室内/走廊场景）
+  # 注意：为防止无人机飞高越墙，需要强约束高度
   enable_height_keeping: true       # 是否启用高度保持
-  weight_height: 20000.0            # 高度保持权重
-  height_tolerance: 0.05            # 高度容差 [m]
+  weight_height: 500000.0           # 高度保持权重（增大10x，强力约束）
+  height_tolerance: 0.1             # 高度容差 [m]（减小，只允许±0.1m波动）
 
 # ---------- 轨迹服务器 ----------
 traj_server:
@@ -217,33 +218,39 @@ exploration:
   frustum_fov_v: 1.22               # 垂直视场角 [rad] (70°)
   
   # ---------- 传感器参数（视点评估用） ----------
-  sensor_range_min: 0.5             # 最小感知距离 [m]
+  sensor_range_min: 2.0             # 最小感知距离 [m]
   sensor_range_max: 5.0             # 最大感知距离 [m]
   sensor_fov_h: 1.57                # 水平FOV [rad] (~90°)
   sensor_fov_v: 1.22                # 垂直FOV [rad] (~70°)
-  optimal_distance: 3.0             # 最优观测距离 [m]
+  optimal_distance: 4.0             # 最优观测距离 [m]
   
-  # ---------- 无人机参数 ----------
-  uav_radius: 0.3                  # 无人机半径 [m]
-  safety_margin: 0.25               # 安全边距 [m]
-  # 注意: max_velocity 等动力学参数已统一移至 dynamics 部分
+
   
   # ---------- 视点采样参数 ----------
-  viewpoint_height: 1.0             # 视点高度 = 起飞高度 [m]
-  candidate_rmin: 1.5               # 最小采样半径 [m]
+  viewpoint_height: 1.0             # 视点基准高度 [m]（用于起飞检测）
+  viewpoint_height_min: 0.9         # 视点最小采样高度 [m]
+  viewpoint_height_max: 1.1         # 视点最大采样高度 [m]
+  viewpoint_height_num: 3           # 高度采样数量（1=仅基准高度）
+  candidate_rmin: 2.0               # 最小采样半径 [m]
   candidate_rmax: 5.0               # 最大采样半径 [m]
   candidate_rnum: 5                 # 半径采样数量
-  candidate_dphi: 0.25               # 角度采样间隔 [rad] (~14°)
+  candidate_dphi: 0.25              # 角度采样间隔 [rad] (~14°)
   
   # ---------- 前沿簇参数 ----------
   # 聚类使用BFS区域增长，在每个子网格内独立进行
-  cluster_eps: 0.75                  # 聚类半径 [m] - 点连通阈值
-  min_cluster_size: 10              # 最小簇大小 - 低于此值的簇被丢弃
+  cluster_eps: 0.25                  # 聚类半径 [m] - 点连通阈值
+  min_cluster_size: 20              # 最小簇大小 - 低于此值的簇被丢弃
   cluster_split_threshold: 4.0      # 簇分裂阈值 [m] - extent超过此值则分裂
   max_clusters: 30                  # 最大簇数（增大以覆盖更多方向）
   
+  # ---------- 安全性参数 ----------
+  # 视点安全半径 = uav_radius + safety_margin
+  # 在此范围内不能有障碍物或未知区域
+  uav_radius: 0.3                  # 无人机机身半径 [m]
+  safety_margin: 0.5                # 额外安全边距 [m]
+  
   # ---------- 滤波参数 ----------
-  min_viewpoint_distance: 0.5       # 视点最小间距 [m]
+  min_viewpoint_distance: 1.5       # 视点最小间距 [m]
   min_coverage_score: 0.3           # 最小覆盖评分 [0,1]
   min_visibility_ratio: 0.75          # 最小可见性比例 [0,1] (建议0.3-0.5，太高会导致没有候选视点)
   

@@ -17,6 +17,7 @@
 #include <std_msgs/Int8.h>
 #include <std_msgs/Bool.h>
 #include <nav_msgs/Odometry.h>
+#include <nav_msgs/Path.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <visualization_msgs/MarkerArray.h>
 #include <sensor_msgs/PointCloud2.h>
@@ -239,6 +240,7 @@ private:
     ros::Subscriber trigger_sub_;
     
     ros::Publisher viewpoint_pub_;           // 发布目标视点给EGO-Planner
+    ros::Publisher viewpoint_path_pub_;      // 发布带中间航点的路径给EGO-Planner
     ros::Publisher frontier_cloud_pub_;      // 前沿点云
     ros::Publisher frontier_cluster_pub_;    // 前沿簇可视化
     ros::Publisher viewpoint_marker_pub_;    // 视点可视化

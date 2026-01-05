@@ -1,5 +1,6 @@
 #include "ego_planner/ego_replan_fsm.h"
 #include <cmath>
+#include <tf/transform_datatypes.h>
 
 namespace ego_planner
 {
@@ -71,6 +72,8 @@ namespace ego_planner
       waypoint_sub_ = nh.subscribe("/goal", 1, &EGOReplanFSM::waypointCallback, this);
       // Exploration viewpoint with full state (pos, yaw, vel)
       viewpoint_sub_ = nh.subscribe("/exploration/viewpoint", 1, &EGOReplanFSM::viewpointCallback, this);
+      // Exploration viewpoint path with intermediate waypoints (for obstacle avoidance)
+      viewpoint_path_sub_ = nh.subscribe("/exploration/viewpoint_path", 1, &EGOReplanFSM::viewpointPathCallback, this);
     }
     else if (target_type_ == TARGET_TYPE::PRESET_TARGET)
     {
@@ -601,6 +604,94 @@ namespace ego_planner
     if (exec_state_ == EXEC_TRAJ || exec_state_ == REPLAN_TRAJ)
     {
       changeFSMExecState(GEN_NEW_TRAJ, "VIEWPOINT");
+    }
+  }
+
+  void EGOReplanFSM::viewpointPathCallback(const nav_msgs::PathConstPtr &msg)
+  {
+    // 接收带中间航点的路径（用于绕过障碍物）
+    if (msg->poses.empty()) {
+      ROS_WARN("[EGOReplanFSM] Received empty viewpoint path");
+      return;
+    }
+    
+    // 解析所有航点
+    wps_.clear();
+    for (size_t i = 0; i < msg->poses.size(); ++i) {
+      const auto& pose = msg->poses[i].pose;
+      Eigen::Vector3d pos(pose.position.x, pose.position.y, pose.position.z);
+      
+      // 从 quaternion 提取 yaw
+      double yaw = 0.0;
+      tf::Quaternion q(pose.orientation.x, pose.orientation.y, 
+                       pose.orientation.z, pose.orientation.w);
+      tf::Matrix3x3 m(q);
+      double roll, pitch;
+      m.getRPY(roll, pitch, yaw);
+      
+      // 对于中间航点，不强制 yaw（设为 NaN 表示跟随速度方向）
+      // 只有最后一个航点使用精确 yaw
+      Eigen::Vector3d vel = Eigen::Vector3d::Zero();
+      if (i == msg->poses.size() - 1) {
+        // 最后一个航点：使用精确 yaw，终端速度为 0
+        wps_.push_back(Waypoint(pos, yaw, vel));
+      } else {
+        // 中间航点：yaw 跟随速度方向
+        wps_.push_back(Waypoint(pos, std::nan(""), vel));
+      }
+    }
+    
+    wpt_id_ = 0;
+    
+    // 获取最终目标
+    end_pt_ = wps_.back().pos;
+    end_yaw_ = wps_.back().yaw;
+    end_vel_ = wps_.back().vel;
+    
+    // 记录规划开始时间
+    double t_plan_start = ros::Time::now().toSec();
+    
+    // 确定起点状态
+    Eigen::Vector3d start_pos, start_vel, start_acc;
+    if (exec_state_ == EXEC_TRAJ && planner_manager_->traj_.local_traj.traj_id > 0)
+    {
+      LocalTrajData *info = &planner_manager_->traj_.local_traj;
+      double t_cur = t_plan_start - info->start_time;
+      double t_predict = t_cur + replan_duration_;
+      t_predict = std::max(0.0, std::min(t_predict, info->traj.getTotalDuration()));
+      start_pos = info->traj.getPos(t_predict);
+      start_vel = info->traj.getVel(t_predict);
+      start_acc = info->traj.getAcc(t_predict);
+    }
+    else
+    {
+      start_pos = odom_pos_ + odom_vel_ * replan_duration_;
+      start_vel = odom_vel_;
+      start_acc = Eigen::Vector3d::Zero();
+    }
+    
+    planner_manager_->setReplanStartTime(t_plan_start + replan_duration_);
+    
+    // 构建所有航点位置列表
+    std::vector<Eigen::Vector3d> waypoints;
+    for (const auto& wp : wps_) {
+      waypoints.push_back(wp.pos);
+    }
+    
+    // 使用多航点规划全局轨迹
+    planner_manager_->planGlobalTrajWaypoints(start_pos, start_vel, start_acc,
+                                               waypoints, end_vel_, Eigen::Vector3d::Zero());
+    
+    have_target_ = true;
+    have_trigger_ = true;
+    have_new_target_ = true;
+    
+    ROS_INFO("[EGOReplanFSM] Received viewpoint path with %zu waypoints, target=(%.2f, %.2f, %.2f), yaw=%.2f",
+             wps_.size(), end_pt_.x(), end_pt_.y(), end_pt_.z(), end_yaw_);
+    
+    if (exec_state_ == EXEC_TRAJ || exec_state_ == REPLAN_TRAJ)
+    {
+      changeFSMExecState(GEN_NEW_TRAJ, "VIEWPOINT_PATH");
     }
   }
 

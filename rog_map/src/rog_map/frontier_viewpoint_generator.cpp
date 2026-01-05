@@ -14,6 +14,7 @@
 
 #include "rog_map/frontier_viewpoint_generator.h"
 #include <queue>
+#include <unordered_map>
 
 namespace rog_map {
 
@@ -652,8 +653,11 @@ void FrontierViewpointGenerator::sampleViewpoints(
     const FrontierCluster& cluster,
     std::vector<ExplorationViewpoint>& viewpoints)
 {
-    // 固定视点高度
-    float viewpoint_z = config_.viewpoint_height;
+    // 高度采样范围
+    float h_min = config_.viewpoint_height_min;
+    float h_max = config_.viewpoint_height_max;
+    int h_num = std::max(1, config_.viewpoint_height_num);
+    float dh = (h_num > 1) ? (h_max - h_min) / static_cast<float>(h_num - 1) : 0.0f;
     
     // 采样半径范围
     float dr = (config_.candidate_rmax - config_.candidate_rmin) / 
@@ -664,13 +668,17 @@ void FrontierViewpointGenerator::sampleViewpoints(
     
     // ========== 第1层：快速过滤（计算量小） ==========
     // 检查：位置安全、距离范围、FOV角度
-    for (float rc = config_.candidate_rmin; rc <= config_.candidate_rmax + 1e-3f; rc += dr) {
-        for (float phi = -PI; phi < PI; phi += config_.candidate_dphi) {
-            Eigen::Vector3f sample_pos(
-                cluster.centroid.x() + rc * std::cos(phi),
-                cluster.centroid.y() + rc * std::sin(phi),
-                viewpoint_z
-            );
+    // 三重循环：高度 × 半径 × 角度
+    for (int ih = 0; ih < h_num; ++ih) {
+        float viewpoint_z = (h_num > 1) ? (h_min + ih * dh) : config_.viewpoint_height;
+        
+        for (float rc = config_.candidate_rmin; rc <= config_.candidate_rmax + 1e-3f; rc += dr) {
+            for (float phi = -PI; phi < PI; phi += config_.candidate_dphi) {
+                Eigen::Vector3f sample_pos(
+                    cluster.centroid.x() + rc * std::cos(phi),
+                    cluster.centroid.y() + rc * std::sin(phi),
+                    viewpoint_z
+                );
             
             // 1.1 位置安全检查
             if (!isPositionSafe(sample_pos)) {
@@ -717,6 +725,7 @@ void FrontierViewpointGenerator::sampleViewpoints(
             vp.is_valid = true;
             
             layer1_passed.push_back(vp);
+            }
         }
     }
     
@@ -1098,6 +1107,194 @@ bool FrontierViewpointGenerator::isPositionFree(const Eigen::Vector3f& pos)
     if (!global_map_) return true;
     GlobalVoxelState state = global_map_->getVoxelState(pos);
     return VoxelStateBits::isFree(state);
+}
+
+// ==================== 路径规划函数 ====================
+
+bool FrontierViewpointGenerator::hasObstacleBetween(const Eigen::Vector3f& start, 
+                                                     const Eigen::Vector3f& end)
+{
+    if (!global_map_) return false;
+    
+    Eigen::Vector3f dir = end - start;
+    float dist = dir.norm();
+    if (dist < 0.1f) return false;  // 距离太近，无需检查
+    
+    dir.normalize();
+    float step = 0.2f;  // 步长
+    
+    // 沿射线检查障碍物
+    for (float t = step; t < dist - step; t += step) {
+        Eigen::Vector3f check_pos = start + dir * t;
+        
+        if (!global_map_->isInGlobalMapRange(check_pos)) {
+            continue;
+        }
+        
+        if (global_map_->isOccupied(check_pos)) {
+            return true;  // 有障碍物
+        }
+    }
+    
+    return false;  // 无障碍物
+}
+
+bool FrontierViewpointGenerator::findPathViaHistoryNodes(
+    const Eigen::Vector3f& start,
+    const Eigen::Vector3f& end,
+    std::vector<Eigen::Vector3f>& waypoints)
+{
+    waypoints.clear();
+    
+    if (history_nodes_.empty()) {
+        ROS_WARN("[ViewpointGen] No history nodes available for path finding");
+        return false;
+    }
+    
+    // 步骤1：找到距离起点最近的历史节点
+    int start_node_id = -1;
+    float min_start_dist = std::numeric_limits<float>::max();
+    for (const auto& node : history_nodes_) {
+        float dist = (node.position - start).norm();
+        if (dist < min_start_dist) {
+            min_start_dist = dist;
+            start_node_id = node.node_id;
+        }
+    }
+    
+    // 步骤2：找到距离终点最近的历史节点
+    int end_node_id = -1;
+    float min_end_dist = std::numeric_limits<float>::max();
+    for (const auto& node : history_nodes_) {
+        float dist = (node.position - end).norm();
+        if (dist < min_end_dist) {
+            min_end_dist = dist;
+            end_node_id = node.node_id;
+        }
+    }
+    
+    if (start_node_id < 0 || end_node_id < 0) {
+        ROS_WARN("[ViewpointGen] Could not find start/end nodes");
+        return false;
+    }
+    
+    // 如果起点和终点关联到同一个节点，不需要中间航点
+    if (start_node_id == end_node_id) {
+        return true;  // 成功，但没有中间航点
+    }
+    
+    // 步骤3：构建节点索引映射
+    std::unordered_map<int, int> node_id_to_idx;
+    for (size_t i = 0; i < history_nodes_.size(); ++i) {
+        node_id_to_idx[history_nodes_[i].node_id] = static_cast<int>(i);
+    }
+    
+    // 步骤4：BFS 搜索路径
+    // 由于历史节点是沿轨迹顺序创建的，相邻节点天然连通
+    std::vector<int> parent(history_nodes_.size(), -1);
+    std::vector<bool> visited(history_nodes_.size(), false);
+    std::queue<int> queue;
+    
+    int start_idx = node_id_to_idx[start_node_id];
+    int end_idx = node_id_to_idx[end_node_id];
+    
+    queue.push(start_idx);
+    visited[start_idx] = true;
+    
+    // BFS：历史节点按时间顺序存储，相邻节点自然连通
+    // 连通性：与前后节点连接，以及距离小于阈值的节点
+    float connect_dist = config_.history_node_distance * 2.0f;
+    
+    while (!queue.empty()) {
+        int curr_idx = queue.front();
+        queue.pop();
+        
+        if (curr_idx == end_idx) break;  // 找到目标
+        
+        // 检查所有可能的邻居
+        for (size_t i = 0; i < history_nodes_.size(); ++i) {
+            if (visited[i]) continue;
+            
+            // 连通条件：
+            // 1. 相邻节点（索引差1）
+            // 2. 或距离小于阈值
+            bool connected = false;
+            if (std::abs(static_cast<int>(i) - curr_idx) == 1) {
+                connected = true;  // 相邻节点
+            } else {
+                float dist = (history_nodes_[i].position - 
+                              history_nodes_[curr_idx].position).norm();
+                if (dist < connect_dist) {
+                    // 额外检查：两点之间无障碍物
+                    if (!hasObstacleBetween(history_nodes_[curr_idx].position,
+                                            history_nodes_[i].position)) {
+                        connected = true;
+                    }
+                }
+            }
+            
+            if (connected) {
+                visited[i] = true;
+                parent[i] = curr_idx;
+                queue.push(static_cast<int>(i));
+            }
+        }
+    }
+    
+    // 步骤5：回溯路径
+    if (!visited[end_idx]) {
+        ROS_WARN("[ViewpointGen] Could not find path between history nodes");
+        return false;
+    }
+    
+    std::vector<int> path_indices;
+    int curr = end_idx;
+    while (curr != -1) {
+        path_indices.push_back(curr);
+        curr = parent[curr];
+    }
+    std::reverse(path_indices.begin(), path_indices.end());
+    
+    // 步骤6：简化路径 - 移除不必要的中间点
+    // 策略：如果从节点 A 可以直接看到节点 C（无障碍），则移除中间的 B
+    std::vector<int> simplified_indices;
+    simplified_indices.push_back(path_indices[0]);
+    
+    for (size_t i = 1; i < path_indices.size(); ++i) {
+        int last_idx = simplified_indices.back();
+        int curr_idx = path_indices[i];
+        
+        // 检查是否可以跳过中间节点
+        bool can_skip = false;
+        if (i + 1 < path_indices.size()) {
+            int next_idx = path_indices[i + 1];
+            if (!hasObstacleBetween(history_nodes_[last_idx].position,
+                                    history_nodes_[next_idx].position)) {
+                can_skip = true;  // 可以从 last 直接到 next
+            }
+        }
+        
+        if (!can_skip) {
+            simplified_indices.push_back(curr_idx);
+        }
+    }
+    
+    // 确保终点节点在路径中
+    if (simplified_indices.back() != end_idx) {
+        simplified_indices.push_back(end_idx);
+    }
+    
+    // 步骤7：转换为航点位置（跳过起点对应的节点，因为无人机已经在附近）
+    for (size_t i = 1; i < simplified_indices.size(); ++i) {
+        // 不需要严格到达历史节点，只需要作为引导点
+        // 所以使用历史节点位置作为中间航点
+        waypoints.push_back(history_nodes_[simplified_indices[i]].position);
+    }
+    
+    ROS_INFO("[ViewpointGen] Found path via %zu history nodes, simplified to %zu waypoints",
+             path_indices.size(), waypoints.size());
+    
+    return true;
 }
 
 } // namespace rog_map

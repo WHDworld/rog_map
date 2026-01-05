@@ -141,7 +141,10 @@ struct ViewpointGeneratorConfig {
     float sensor_fov_v = 1.22f;          // 垂直FOV [rad] (~70°)
     
     // ========== 视点采样参数 ==========
-    float viewpoint_height = 1.0f;       // 视点高度（起飞高度）
+    float viewpoint_height = 1.0f;       // 视点基准高度（用于起飞检测）
+    float viewpoint_height_min = 0.8f;   // 视点最小采样高度 [m]
+    float viewpoint_height_max = 1.2f;   // 视点最大采样高度 [m]
+    int viewpoint_height_num = 3;        // 高度采样数量（1=仅基准高度）
     float candidate_rmin = 1.5f;         // 最小采样半径
     float candidate_rmax = 4.5f;         // 最大采样半径
     int candidate_rnum = 3;              // 半径采样数量
@@ -219,6 +222,35 @@ public:
     
     // 获取关联的子网格信息（用于可视化）
     const std::vector<AssociatedSubgrid>& getAssociatedSubgrids() const { return associated_subgrids_; }
+    
+    // ==================== 路径规划接口 ====================
+    
+    /**
+     * @brief 检查两点之间是否有障碍物（用于判断是否需要绕行）
+     * 
+     * @param start 起点
+     * @param end 终点
+     * @return true 如果有障碍物遮挡，false 如果直线畅通
+     */
+    bool hasObstacleBetween(const Eigen::Vector3f& start, const Eigen::Vector3f& end);
+    
+    /**
+     * @brief 通过历史节点查找安全路径
+     * 
+     * 算法：
+     * 1. 找到距离起点最近的历史节点作为起始节点
+     * 2. 找到距离终点最近的历史节点作为目标节点
+     * 3. 使用 BFS 在历史节点之间搜索路径
+     * 4. 简化路径（移除不必要的中间点）
+     * 
+     * @param start 起点（当前无人机位置）
+     * @param end 终点（目标视点）
+     * @param waypoints 输出的中间航点（不包含起点和终点）
+     * @return true 如果找到路径，false 如果无法找到
+     */
+    bool findPathViaHistoryNodes(const Eigen::Vector3f& start,
+                                  const Eigen::Vector3f& end,
+                                  std::vector<Eigen::Vector3f>& waypoints);
 
 private:
     // ==================== 历史节点管理 ====================

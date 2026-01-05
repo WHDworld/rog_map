@@ -69,6 +69,9 @@ void ExplorationFSM::init(ros::NodeHandle& nh, ROGMap::Ptr rog_map, GlobalMap::P
     float takeoff_height = 1.0f;
     nh_.param("fsm/takeoff_height", takeoff_height, 1.0f);
     nh_.param("exploration/viewpoint_height", vp_config.viewpoint_height, takeoff_height);
+    nh_.param("exploration/viewpoint_height_min", vp_config.viewpoint_height_min, takeoff_height - 0.2f);
+    nh_.param("exploration/viewpoint_height_max", vp_config.viewpoint_height_max, takeoff_height + 0.2f);
+    nh_.param("exploration/viewpoint_height_num", vp_config.viewpoint_height_num, 3);
     nh_.param("exploration/candidate_rmin", vp_config.candidate_rmin, 1.5f);
     nh_.param("exploration/candidate_rmax", vp_config.candidate_rmax, 4.5f);
     nh_.param("exploration/candidate_rnum", vp_config.candidate_rnum, 3);
@@ -104,8 +107,9 @@ void ExplorationFSM::init(ros::NodeHandle& nh, ROGMap::Ptr rog_map, GlobalMap::P
     nh_.param("exploration/overhead_height_threshold", vp_config.overhead_height_threshold, 0.5f);
     nh_.param("exploration/overhead_distance_threshold", vp_config.overhead_distance_threshold, 2.0f);
     
-    ROS_INFO("[ExplorationFSM] Viewpoint config: height=%.2f, r=[%.1f, %.1f], sensor=[%.1f, %.1f], fov_h=%.2f",
-             vp_config.viewpoint_height, vp_config.candidate_rmin, vp_config.candidate_rmax,
+    ROS_INFO("[ExplorationFSM] Viewpoint config: height=[%.2f, %.2f]x%d, r=[%.1f, %.1f], sensor=[%.1f, %.1f], fov_h=%.2f",
+             vp_config.viewpoint_height_min, vp_config.viewpoint_height_max, vp_config.viewpoint_height_num,
+             vp_config.candidate_rmin, vp_config.candidate_rmax,
              vp_config.sensor_range_min, vp_config.sensor_range_max, vp_config.sensor_fov_h);
     ROS_INFO("[ExplorationFSM] History node: dist=%.1f, radius=%.1f | Ground filter: %.2f+%.2f",
              vp_config.history_node_distance, vp_config.node_frontier_radius,
@@ -123,6 +127,8 @@ void ExplorationFSM::init(ros::NodeHandle& nh, ROGMap::Ptr rog_map, GlobalMap::P
     // 使用 quadrotor_msgs::PositionCommand 发送视点给 EGO-Planner
     // 包含位置、yaw 角和期望终端速度
     viewpoint_pub_ = nh_.advertise<quadrotor_msgs::PositionCommand>("/exploration/viewpoint", 1);
+    // 使用 nav_msgs::Path 发送带中间航点的路径给 EGO-Planner
+    viewpoint_path_pub_ = nh_.advertise<nav_msgs::Path>("/exploration/viewpoint_path", 1);
     frontier_cloud_pub_ = nh_.advertise<sensor_msgs::PointCloud2>("/exploration/frontier_cloud", 1);
     frontier_cluster_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/exploration/frontier_clusters", 1);
     viewpoint_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/exploration/viewpoints", 1);
@@ -1500,32 +1506,100 @@ void ExplorationFSM::clearVisualization() {
 
 // ==================== 辅助函数 ====================
 void ExplorationFSM::publishViewpointTarget(const ExplorationViewpoint& vp) {
-    // 使用 quadrotor_msgs::PositionCommand 发送给 EGO-Planner
-    // 包含位置、yaw 角和期望速度
-    quadrotor_msgs::PositionCommand msg;
-    msg.header.frame_id = "map";
-    msg.header.stamp = ros::Time::now();
+    // 获取当前无人机位置
+    Eigen::Vector3f current_pos;
+    {
+        std::lock_guard<std::mutex> lock(odom_mutex_);
+        current_pos = odom_pos_.cast<float>();
+    }
     
-    // 位置
-    msg.position.x = vp.position.x();
-    msg.position.y = vp.position.y();
-    msg.position.z = vp.position.z();
+    // 检查是否需要通过历史节点绕行
+    std::vector<Eigen::Vector3f> intermediate_waypoints;
+    bool need_detour = false;
     
-    // yaw 角 - EGO-Planner 会使用这个值规划偏航角
-    msg.yaw = vp.yaw;
-    msg.yaw_dot = 0.0;
+    if (viewpoint_generator_) {
+        // 检查当前位置到目标视点之间是否有障碍物
+        if (viewpoint_generator_->hasObstacleBetween(current_pos, vp.position)) {
+            // 需要绕行，查找通过历史节点的路径
+            if (viewpoint_generator_->findPathViaHistoryNodes(
+                    current_pos, vp.position, intermediate_waypoints)) {
+                need_detour = true;
+                ROS_INFO("[ExplorationFSM] Obstacle detected, using %zu intermediate waypoints",
+                         intermediate_waypoints.size());
+            } else {
+                ROS_WARN("[ExplorationFSM] Obstacle detected but no path found via history nodes");
+            }
+        }
+    }
     
-    // 期望终端速度（设为0，即到达视点后悬停）
-    msg.velocity.x = 0.0;
-    msg.velocity.y = 0.0;
-    msg.velocity.z = 0.0;
-    
-    // 加速度设为0
-    msg.acceleration.x = 0.0;
-    msg.acceleration.y = 0.0;
-    msg.acceleration.z = 0.0;
-    
-    viewpoint_pub_.publish(msg);
+    if (need_detour && !intermediate_waypoints.empty()) {
+        // 发布带中间航点的路径
+        nav_msgs::Path path_msg;
+        path_msg.header.frame_id = "map";
+        path_msg.header.stamp = ros::Time::now();
+        
+        // 添加中间航点
+        for (const auto& wp : intermediate_waypoints) {
+            geometry_msgs::PoseStamped pose;
+            pose.header = path_msg.header;
+            pose.pose.position.x = wp.x();
+            pose.pose.position.y = wp.y();
+            pose.pose.position.z = wp.z();
+            
+            // 计算朝向下一个点的 yaw（简化处理）
+            pose.pose.orientation.w = 1.0;  // 暂时不设置精确 yaw
+            
+            path_msg.poses.push_back(pose);
+        }
+        
+        // 添加最终目标视点
+        geometry_msgs::PoseStamped final_pose;
+        final_pose.header = path_msg.header;
+        final_pose.pose.position.x = vp.position.x();
+        final_pose.pose.position.y = vp.position.y();
+        final_pose.pose.position.z = vp.position.z();
+        
+        // 使用目标 yaw 设置 orientation
+        tf::Quaternion q;
+        q.setRPY(0, 0, vp.yaw);
+        final_pose.pose.orientation.x = q.x();
+        final_pose.pose.orientation.y = q.y();
+        final_pose.pose.orientation.z = q.z();
+        final_pose.pose.orientation.w = q.w();
+        
+        path_msg.poses.push_back(final_pose);
+        
+        viewpoint_path_pub_.publish(path_msg);
+        
+        ROS_INFO("[ExplorationFSM] Published path with %zu waypoints (including target)",
+                 path_msg.poses.size());
+    } else {
+        // 直接发送单个目标点（原有逻辑）
+        quadrotor_msgs::PositionCommand msg;
+        msg.header.frame_id = "map";
+        msg.header.stamp = ros::Time::now();
+        
+        // 位置
+        msg.position.x = vp.position.x();
+        msg.position.y = vp.position.y();
+        msg.position.z = vp.position.z();
+        
+        // yaw 角 - EGO-Planner 会使用这个值规划偏航角
+        msg.yaw = vp.yaw;
+        msg.yaw_dot = 0.0;
+        
+        // 期望终端速度（设为0，即到达视点后悬停）
+        msg.velocity.x = 0.0;
+        msg.velocity.y = 0.0;
+        msg.velocity.z = 0.0;
+        
+        // 加速度设为0
+        msg.acceleration.x = 0.0;
+        msg.acceleration.y = 0.0;
+        msg.acceleration.z = 0.0;
+        
+        viewpoint_pub_.publish(msg);
+    }
 }
 
 bool ExplorationFSM::isNearViewpoint(const ExplorationViewpoint& vp) {
