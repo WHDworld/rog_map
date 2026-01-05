@@ -105,15 +105,17 @@ struct FrontierCluster {
 struct ExplorationViewpoint {
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     
-    Eigen::Vector3f position;            // 位置
+    Eigen::Vector3f position;            // 视点位置（观察位置）
+    Eigen::Vector3f target_center;       // 目标簇中心（被观察的前沿区域）
     float yaw;                           // 偏航角
     float pitch;                         // 俯仰角（通常为0）
     int cluster_id;                      // 目标簇ID
     float score;                         // 评分
     bool is_valid;
     
-    ExplorationViewpoint()
+    ExplorationViewpoint() 
         : position(Eigen::Vector3f::Zero())
+        , target_center(Eigen::Vector3f::Zero())
         , yaw(0.0f), pitch(0.0f)
         , cluster_id(-1), score(0.0f), is_valid(false) {}
 };
@@ -168,8 +170,11 @@ struct ViewpointGeneratorConfig {
     // ========== 前沿点过滤参数 ==========
     float ground_height = 0.0f;          // 地面高度 [m]
     float ground_offset = 0.1f;          // 地面偏移（过滤地面噪声）[m]
-    float uav_filter_box_xy = 0.5f;      // 无人机周围过滤包围盒XY半径 [m]
-    float global_map_height = 2.0f;      // 全局地图高度范围 [m]
+    
+    // ========== 头顶区域过滤参数 ==========
+    // 策略：在簇级别过滤，如果簇中心比无人机高且水平距离近，则认为是头顶区域
+    float overhead_height_threshold = 0.5f;   // 头顶高度阈值：簇中心比无人机高多少算头顶 [m]
+    float overhead_distance_threshold = 2.0f; // 头顶距离阈值：水平距离多近时过滤 [m]
 };
 
 // ==================== 主类 ====================
@@ -204,7 +209,7 @@ public:
      * @return 是否成功
      */
     bool generate(std::vector<FrontierCluster>& clusters,
-                  std::vector<ExplorationViewpoint>& viewpoints);
+        std::vector<ExplorationViewpoint>& viewpoints);
     
     const ViewpointGeneratorConfig& getConfig() const { return config_; }
     void setConfig(const ViewpointGeneratorConfig& config) { config_ = config; }
@@ -240,14 +245,17 @@ private:
      * 
      * 过滤条件：
      * 1. 地面噪声：高度 < ground_height + ground_offset
-     * 2. 无人机周围：在UAV安全包围盒内的点
+     * 
+     * 注意：无人机头顶区域的过滤已移至簇级别（overhead_height_threshold）
      */
     void filterFrontierPoints(std::vector<Eigen::Vector3f>& points);
     
     /**
-     * @brief 检查点是否在无人机安全包围盒内
+     * @brief 检查簇是否已被覆盖（即附近未知体素太少）
+     * @param cluster 要检查的簇
+     * @return true 如果簇已被覆盖，false 如果仍有足够未知体素
      */
-    bool isInUAVSafetyBox(const Eigen::Vector3f& point);
+    bool isClusterCovered(const FrontierCluster& cluster);
     
     // ==================== 核心算法 ====================
     
@@ -319,7 +327,7 @@ private:
      * @return 可见性评分 [0, 1]，0表示完全遮挡，1表示完全可见
      */
     float computeVisibilityScore(const Eigen::Vector3f& viewpoint,
-                                 const FrontierCluster& cluster);
+        const FrontierCluster& cluster);
     
     /**
      * @brief 检查射线可见性
@@ -341,7 +349,6 @@ private:
     bool checkRayClear(const Eigen::Vector3f& start,
                        const Eigen::Vector3f& direction,
                        float max_dist);
-    
 
 private:
     GlobalMap::Ptr global_map_;

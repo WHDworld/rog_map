@@ -10,9 +10,14 @@ namespace ego_planner
 
   void EGOPlannerManager::initPlanModules(ros::NodeHandle &nh, rog_map::ROGMap::Ptr map)
   {
-    /* read algorithm parameters */
-    nh.param("manager/max_vel", pp_.max_vel_, 2.0);
-    nh.param("manager/max_acc", pp_.max_acc_, 2.0);
+    /* 从统一的 dynamics 部分读取参数，若无则从 manager 部分读取（向后兼容） */
+    if (!nh.getParam("dynamics/max_vel", pp_.max_vel_)) {
+      nh.param("manager/max_vel", pp_.max_vel_, 2.0);
+    }
+    if (!nh.getParam("dynamics/max_acc", pp_.max_acc_)) {
+      nh.param("manager/max_acc", pp_.max_acc_, 2.0);
+    }
+    
     nh.param("manager/feasibility_tolerance", pp_.feasibility_tolerance_, 0.05);
     nh.param("manager/polyTraj_piece_length", pp_.polyTraj_piece_length, 1.5);
     nh.param("manager/planning_horizon", pp_.planning_horizen_, 7.5);
@@ -206,14 +211,32 @@ namespace ego_planner
     }
   }
 
-  bool EGOPlannerManager::setLocalTrajFromOpt(const poly_traj::MinJerkOpt &opt, const bool touch_goal)
+  bool EGOPlannerManager::setLocalTrajFromOpt(const poly_traj::MinJerkOpt &opt, const bool touch_goal,
+                                               const double time_offset)
   {
     poly_traj::Trajectory traj = opt.getTraj();
     Eigen::MatrixXd cps = opt.getInitConstraintPoints(getCpsNumPrePiece());
     PtsChk_t pts_to_check;
     bool ret = ploy_traj_opt_->computePointsToCheck(traj, ConstraintPoints::two_thirds_id(cps, touch_goal), pts_to_check);
     if (ret)
-      traj_.setLocalTraj(traj, pts_to_check, ros::Time::now().toSec());
+    {
+      double start_time;
+      if (use_precise_start_time_)
+      {
+        // 使用精确的开始时间（与预测状态完全匹配）
+        start_time = replan_start_time_;
+        use_precise_start_time_ = false;  // 重置标志
+        double offset = start_time - ros::Time::now().toSec();
+        ROS_INFO("[PlannerMgr] Using precise start_time (offset=%.3f s)", offset);
+      }
+      else
+      {
+        // 后备方案：使用当前时间 + 偏移
+        start_time = ros::Time::now().toSec() + time_offset;
+        ROS_WARN("[PlannerMgr] Using fallback start_time (offset=%.3f s)", time_offset);
+      }
+      traj_.setLocalTraj(traj, pts_to_check, start_time);
+    }
 
     return ret;
   }
@@ -294,7 +317,8 @@ namespace ego_planner
     // ROS_INFO("total time: %.3f, init: %.3f, optimize: %.3f, avg_time=%.3f",
     //          (t_init + t_opt).toSec(), t_init.toSec(), t_opt.toSec(), sum_time / count_success);
 
-    setLocalTrajFromOpt(best_MJO, touch_goal);
+    // FALCON风格：使用 replan_time_offset_ 延迟新轨迹生效
+    setLocalTrajFromOpt(best_MJO, touch_goal, replan_time_offset_);
 
     // success
     continous_failures_count_ = 0;

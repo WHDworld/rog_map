@@ -68,7 +68,8 @@ bool FrontierViewpointGenerator::generate(
     // 清除旧的子网格关联信息
     associated_subgrids_.clear();
     
-    for (auto& sg_info : subgrid_frontiers) {
+    for (auto& sg_info : subgrid_frontiers) 
+    {
         int sg_id = sg_info.subgrid_id;
         auto& points = sg_info.frontier_points;
         total_points_before += points.size();
@@ -114,7 +115,8 @@ bool FrontierViewpointGenerator::generate(
     
     // Step 3: 在每个历史节点关联的前沿区域内聚类
     int global_cluster_id = 0;
-    for (const auto& nf_pair : node_frontiers) {
+    for (const auto& nf_pair : node_frontiers) 
+    {
         int node_id = nf_pair.first;
         const auto& points = nf_pair.second;
         
@@ -132,7 +134,8 @@ bool FrontierViewpointGenerator::generate(
         }
     }
     
-    if (clusters.empty()) {
+    if (clusters.empty()) 
+    {
         ROS_DEBUG("[ViewpointGen] No clusters formed");
     return false;
 }
@@ -144,19 +147,91 @@ bool FrontierViewpointGenerator::generate(
     splitLargeClusters(clusters);
     ROS_INFO("[ViewpointGen] After split: %lu clusters", clusters.size());
     
+    // Step 4.5: 过滤头顶区域簇
+    // 策略：如果簇中心比无人机高且水平距离很近，认为是头顶区域，不生成探索视点
+    {
+        Eigen::Vector3f uav_pos = uav_state_.position;
+        size_t before_count = clusters.size();
+        
+        clusters.erase(
+            std::remove_if(clusters.begin(), clusters.end(),
+                [&](const FrontierCluster& c) {
+                    // 计算簇中心与无人机的高度差
+                    float height_diff = c.centroid.z() - uav_pos.z();
+                    
+                    // 计算簇中心与无人机的水平距离
+                    float horiz_dist = (c.centroid.head<2>() - uav_pos.head<2>()).norm();
+                    
+                    // 头顶区域判定：高度差超过阈值 且 水平距离小于阈值
+                    bool is_overhead = (height_diff > config_.overhead_height_threshold) &&
+                                       (horiz_dist < config_.overhead_distance_threshold);
+                    
+                    if (is_overhead) {
+                        ROS_DEBUG("[ViewpointGen] Filtered overhead cluster %d: "
+                                  "height_diff=%.2f (>%.2f), horiz_dist=%.2f (<%.2f)",
+                                  c.cluster_id, height_diff, config_.overhead_height_threshold,
+                                  horiz_dist, config_.overhead_distance_threshold);
+                    }
+                    return is_overhead;
+                }),
+            clusters.end());
+        
+        if (clusters.size() < before_count) {
+            ROS_INFO("[ViewpointGen] Filtered %lu overhead clusters, remaining: %lu",
+                     before_count - clusters.size(), clusters.size());
+        }
+    }
+    
     // 限制最大簇数
+    // 改进：按距离无人机的远近排序（近的优先），而不是按大小
+    // 这样可以确保探索最近的区域，同时保留各个方向的簇
     if (static_cast<int>(clusters.size()) > config_.max_clusters) {
-        // 按大小排序，保留最大的
+        Eigen::Vector3f uav_pos;
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            uav_pos = uav_state_.position;
+        }
+        
+        // 按距离排序，保留最近的
         std::sort(clusters.begin(), clusters.end(),
-            [](const FrontierCluster& a, const FrontierCluster& b) {
-                return a.size() > b.size();
+            [&uav_pos](const FrontierCluster& a, const FrontierCluster& b) {
+                float dist_a = (a.centroid - uav_pos).head<2>().norm();
+                float dist_b = (b.centroid - uav_pos).head<2>().norm();
+                return dist_a < dist_b;
             });
+        
+        ROS_INFO("[ViewpointGen] Limiting clusters: %lu -> %d (keeping nearest)",
+                 clusters.size(), config_.max_clusters);
         clusters.resize(config_.max_clusters);
     }
     
-    // Step 5: 为每个簇采样视点（L1快速过滤 + L2可见性检查）
+    // Step 5: 过滤已被覆盖的簇，然后为每个簇采样视点
+    size_t covered_count = 0;
+    size_t no_viewpoint_count = 0;
     for (const auto& cluster : clusters) {
+        // ★★★ 关键：检查簇中心附近是否还有足够的未知体素 ★★★
+        // 如果未知体素太少，说明这个区域已经被探索过了，跳过
+        if (isClusterCovered(cluster)) {
+            covered_count++;
+            continue;
+        }
+        
+        size_t before = viewpoints.size();
         sampleViewpoints(cluster, viewpoints);
+        
+        // 调试：记录没有产生视点的簇
+        if (viewpoints.size() == before) {
+            no_viewpoint_count++;
+            ROS_DEBUG("[ViewpointGen] Cluster %d at (%.2f,%.2f,%.2f) produced no viewpoints",
+                      cluster.cluster_id, cluster.centroid.x(), 
+                      cluster.centroid.y(), cluster.centroid.z());
+        }
+    }
+    
+    if (covered_count > 0 || no_viewpoint_count > 0) {
+        ROS_INFO("[ViewpointGen] Cluster stats: %lu covered, %lu no-viewpoint, %lu produced viewpoints",
+                 covered_count, no_viewpoint_count, 
+                 clusters.size() - covered_count - no_viewpoint_count);
     }
     
     ROS_INFO("[ViewpointGen] After L1+L2: %lu candidate viewpoints", viewpoints.size());
@@ -184,12 +259,21 @@ void FrontierViewpointGenerator::updateHistoryNodes()
     
     Eigen::Vector3f current_pos = uav_state_.position;
     
-    // 第一次创建历史节点
+    // 检查无人机是否已完成起飞（高度达到起飞高度的90%）
+    float takeoff_threshold = config_.viewpoint_height * 0.9f;
+    if (current_pos.z() < takeoff_threshold) {
+        // 无人机还在起飞过程中，不创建历史节点
+        ROS_DEBUG_THROTTLE(2.0, "[ViewpointGen] UAV still taking off (z=%.2f < %.2f), waiting...",
+                           current_pos.z(), takeoff_threshold);
+        return;
+    }
+    
+    // 第一次创建历史节点（无人机已完成起飞）
     if (!first_node_created_) {
         HistoryNode node(next_node_id_++, current_pos, ros::Time::now().toSec());
         history_nodes_.push_back(node);
         first_node_created_ = true;
-        ROS_INFO("[ViewpointGen] Created first history node at (%.2f, %.2f, %.2f)",
+        ROS_INFO("[ViewpointGen] Created first history node at (%.2f, %.2f, %.2f) after takeoff",
                  current_pos.x(), current_pos.y(), current_pos.z());
         return;
     }
@@ -219,22 +303,39 @@ int FrontierViewpointGenerator::findNearestHistoryNode(const Eigen::Vector3f& su
 {
     if (history_nodes_.empty()) return -1;
     
-    // 关键设计：每个子网格只会关联到距离最近的唯一一个历史节点
-    // 即使多个节点都在 node_frontier_radius 范围内，也只选择最近的那个
+    // 关键设计：每个子网格关联到距离最近的历史节点
+    // 优先选择在 node_frontier_radius 范围内的节点
+    // 如果没有在范围内的节点，则选择最近的节点（确保所有前沿区域都能被关联）
     int nearest_id = -1;
-    float min_dist = config_.node_frontier_radius;  // 初始阈值：只关联在此半径内的节点
+    float min_dist = std::numeric_limits<float>::max();
+    int nearest_in_radius_id = -1;
+    float min_dist_in_radius = config_.node_frontier_radius;
     
     for (const auto& node : history_nodes_) {
         // 只考虑XY距离（高度差不影响关联）
         float dist = (node.position - subgrid_center).head<2>().norm();
+        
+        // 记录最近的节点（不管距离）
         if (dist < min_dist) {
             min_dist = dist;
-            nearest_id = node.node_id;  // 更新为更近的节点
+            nearest_id = node.node_id;
+        }
+        
+        // 记录在半径内的最近节点
+        if (dist < min_dist_in_radius) {
+            min_dist_in_radius = dist;
+            nearest_in_radius_id = node.node_id;
         }
     }
     
-    // 如果 nearest_id >= 0，说明找到了一个在半径内且距离最近的节点
-    // 该子网格将唯一关联到这个节点
+    // 优先返回在半径内的节点，如果没有则返回最近的节点
+    // 这样确保所有前沿区域都能被关联到某个历史节点
+    if (nearest_in_radius_id >= 0) {
+        return nearest_in_radius_id;
+    }
+    
+    // 备选：返回最近的节点（即使超出半径）
+    // 这确保了远处的前沿区域也能被探索
     return nearest_id;
 }
 
@@ -250,40 +351,18 @@ void FrontierViewpointGenerator::filterFrontierPoints(std::vector<Eigen::Vector3
     filtered.reserve(points.size());
     
     for (const auto& p : points) {
-        // 过滤1：地面噪声（高度太低）
+        // 过滤：地面噪声（高度太低）
         if (p.z() < ground_threshold) {
             continue;
         }
         
-        // 过滤2：无人机周围安全包围盒
-        if (isInUAVSafetyBox(p)) {
-            continue;
-        }
+        // 注意：无人机头顶区域的过滤已移至簇级别（overhead_height_threshold）
+        // 这样可以更精确地过滤近处头顶区域，同时保留远处高处区域
         
         filtered.push_back(p);
     }
     
     points = std::move(filtered);
-}
-
-bool FrontierViewpointGenerator::isInUAVSafetyBox(const Eigen::Vector3f& point)
-{
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    
-    Eigen::Vector3f uav_pos = uav_state_.position;
-    float box_half_xy = config_.uav_filter_box_xy;
-    
-    // XY平面检查
-    if (std::abs(point.x() - uav_pos.x()) > box_half_xy) return false;
-    if (std::abs(point.y() - uav_pos.y()) > box_half_xy) return false;
-    
-    // Z轴：从地面到全局地图顶部
-    float z_min = config_.ground_height;
-    float z_max = config_.ground_height + config_.global_map_height;
-    if (point.z() < z_min || point.z() > z_max) return false;
-    
-    // 在包围盒内
-    return true;
 }
 
 // ==================== 历史节点聚类 ====================
@@ -366,6 +445,42 @@ void FrontierViewpointGenerator::clusterByHistoryNode(
     }
 }
 
+// ==================== 簇覆盖检查 ====================
+
+bool FrontierViewpointGenerator::isClusterCovered(const FrontierCluster& cluster)
+{
+    // 检查簇中心附近是否还有足够的未知体素
+    // 如果未知体素太少，说明这个区域已经被探索过了
+    
+    Eigen::Vector3f target_pos = cluster.centroid;
+    const float check_radius = 2.0f;
+    const int min_unknown_threshold = 10;  // 与 exploration_fsm 中的阈值一致
+    
+    int unknown_count = 0;
+    for (float dx = -check_radius; dx <= check_radius; dx += 0.5f) {
+        for (float dy = -check_radius; dy <= check_radius; dy += 0.5f) {
+            for (float dz = -check_radius; dz <= check_radius; dz += 0.5f) {
+                Eigen::Vector3f check_pos = target_pos + Eigen::Vector3f(dx, dy, dz);
+                if (!global_map_->isInGlobalMapRange(check_pos)) continue;
+                
+                GlobalVoxelState state = global_map_->getVoxelState(check_pos);
+                if (VoxelStateBits::isUnknown(state)) {
+                    unknown_count++;
+                    // 快速返回：一旦找到足够的未知体素就认为未被覆盖
+                    if (unknown_count >= min_unknown_threshold) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    
+    // 未知体素太少，认为已被覆盖
+    ROS_DEBUG("[ViewpointGen] Cluster %d at (%.2f,%.2f,%.2f) covered: unknown=%d",
+              cluster.cluster_id, target_pos.x(), target_pos.y(), target_pos.z(), unknown_count);
+    return true;
+}
+
 // ==================== Step 1: 子网格内聚类 ====================
 
 void FrontierViewpointGenerator::clusterInSubgrid(
@@ -443,60 +558,87 @@ void FrontierViewpointGenerator::clusterInSubgrid(
 void FrontierViewpointGenerator::splitLargeClusters(
     std::vector<FrontierCluster>& clusters)
 {
-    std::vector<FrontierCluster> result;
+    // 递归分割，直到所有簇的 extent 都小于阈值
+    const int max_iterations = 10;  // 防止无限循环
+    int iteration = 0;
     
-    for (const auto& cluster : clusters) {
-        // 判断是否需要分裂
-        if (cluster.extent > config_.cluster_split_threshold && !cluster.points.empty()) {
-            // 按X坐标分裂：将点分成两组
-            float split_x = cluster.centroid.x();
-            
-            FrontierCluster c1, c2;
-            c1.subgrid_id = cluster.subgrid_id;
-            c2.subgrid_id = cluster.subgrid_id;
-            
-            // 按X坐标分配点
-            for (const auto& pt : cluster.points) {
-                if (pt.x() < split_x) {
-                    c1.points.push_back(pt);
-                } else {
-                    c2.points.push_back(pt);
+    bool changed = true;
+    while (changed && iteration < max_iterations) {
+        changed = false;
+        iteration++;
+        
+        std::vector<FrontierCluster> result;
+        
+        for (const auto& cluster : clusters) {
+            // 判断是否需要分裂
+            if (cluster.extent > config_.cluster_split_threshold && 
+                !cluster.points.empty() && 
+                cluster.points.size() >= 4) {  // 至少4个点才能分裂
+                
+                // 交替使用X和Y坐标分裂，避免狭长簇分裂不充分
+                bool use_x = (iteration % 2 == 1);
+                float split_val = use_x ? cluster.centroid.x() : cluster.centroid.y();
+                
+                FrontierCluster c1, c2;
+                c1.subgrid_id = cluster.subgrid_id;
+                c2.subgrid_id = cluster.subgrid_id;
+                
+                // 按坐标分配点
+                for (const auto& pt : cluster.points) {
+                    float val = use_x ? pt.x() : pt.y();
+                    if (val < split_val) {
+                        c1.points.push_back(pt);
+                    } else {
+                        c2.points.push_back(pt);
+                    }
                 }
-            }
-            
-            // 重新计算c1的属性
-            if (!c1.points.empty()) {
-                c1.point_count = static_cast<int>(c1.points.size());
-                Eigen::Vector3f sum = Eigen::Vector3f::Zero();
-                for (const auto& pt : c1.points) sum += pt;
-                c1.centroid = sum / static_cast<float>(c1.points.size());
-                float max_dist = 0.0f;
-                for (const auto& pt : c1.points) {
-                    max_dist = std::max(max_dist, (pt - c1.centroid).norm());
+                
+                // 重新计算c1的属性
+                if (c1.points.size() >= 2) {
+                    c1.point_count = static_cast<int>(c1.points.size());
+                    Eigen::Vector3f sum = Eigen::Vector3f::Zero();
+                    for (const auto& pt : c1.points) sum += pt;
+                    c1.centroid = sum / static_cast<float>(c1.points.size());
+                    float max_dist = 0.0f;
+                    for (const auto& pt : c1.points) {
+                        max_dist = std::max(max_dist, (pt - c1.centroid).norm());
+                    }
+                    c1.extent = max_dist;
+                    result.push_back(c1);
+                    changed = true;
                 }
-                c1.extent = max_dist;
-                result.push_back(c1);
-            }
-            
-            // 重新计算c2的属性
-            if (!c2.points.empty()) {
-                c2.point_count = static_cast<int>(c2.points.size());
-                Eigen::Vector3f sum = Eigen::Vector3f::Zero();
-                for (const auto& pt : c2.points) sum += pt;
-                c2.centroid = sum / static_cast<float>(c2.points.size());
-                float max_dist = 0.0f;
-                for (const auto& pt : c2.points) {
-                    max_dist = std::max(max_dist, (pt - c2.centroid).norm());
+                
+                // 重新计算c2的属性
+                if (c2.points.size() >= 2) {
+                    c2.point_count = static_cast<int>(c2.points.size());
+                    Eigen::Vector3f sum = Eigen::Vector3f::Zero();
+                    for (const auto& pt : c2.points) sum += pt;
+                    c2.centroid = sum / static_cast<float>(c2.points.size());
+                    float max_dist = 0.0f;
+                    for (const auto& pt : c2.points) {
+                        max_dist = std::max(max_dist, (pt - c2.centroid).norm());
+                    }
+                    c2.extent = max_dist;
+                    result.push_back(c2);
+                    changed = true;
                 }
-                c2.extent = max_dist;
-                result.push_back(c2);
+                
+                // 如果分裂失败（点太少），保留原簇
+                if (c1.points.size() < 2 && c2.points.size() < 2) {
+                    result.push_back(cluster);
+                    changed = false;
+                }
+            } else {
+                result.push_back(cluster);
             }
-        } else {
-            result.push_back(cluster);
         }
+        
+        clusters = std::move(result);
     }
     
-    clusters = std::move(result);
+    if (iteration > 1) {
+        ROS_DEBUG("[ViewpointGen] Cluster splitting took %d iterations", iteration);
+    }
     
     // 重新分配ID
     for (size_t i = 0; i < clusters.size(); ++i) {
@@ -535,6 +677,10 @@ void FrontierViewpointGenerator::sampleViewpoints(
                 continue;
             }
             
+            // 注意：不再检查从无人机到视点的直线可达性
+            // 原因：EGO-Planner 会自动绕过障碍物，直线不可达不代表无法到达
+            // 墙后面区域的问题由 L2 可见性检查（视点到簇）解决
+            
             // 计算朝向（朝向簇中心）
             Eigen::Vector3f to_cluster = cluster.centroid - sample_pos;
             float dist = to_cluster.norm();
@@ -563,6 +709,7 @@ void FrontierViewpointGenerator::sampleViewpoints(
             
             ExplorationViewpoint vp;
             vp.position = sample_pos;
+            vp.target_center = cluster.centroid;  // 存储目标簇中心
             vp.yaw = yaw;
             vp.pitch = 0.0f;
             vp.cluster_id = cluster.cluster_id;
@@ -574,6 +721,8 @@ void FrontierViewpointGenerator::sampleViewpoints(
     }
     
     if (layer1_passed.empty()) {
+        ROS_DEBUG("[ViewpointGen] Cluster %d: no L1 candidates (centroid=%.2f,%.2f,%.2f)",
+                  cluster.cluster_id, cluster.centroid.x(), cluster.centroid.y(), cluster.centroid.z());
         return;  // 没有通过第1层的视点
     }
     
@@ -602,16 +751,23 @@ void FrontierViewpointGenerator::sampleViewpoints(
     }
     
     if (layer2_passed.empty()) {
+        ROS_DEBUG("[ViewpointGen] Cluster %d: L1=%lu but no L2 candidates (visibility < %.2f)",
+                  cluster.cluster_id, layer1_passed.size(), config_.min_visibility_ratio);
         return;  // 没有通过第2层的视点
     }
     
-    // 按评分排序，选择最佳视点
+    // 按评分排序
     std::sort(layer2_passed.begin(), layer2_passed.end(),
         [](const ExplorationViewpoint& a, const ExplorationViewpoint& b) {
             return a.score > b.score;
         });
     
-    // 为该簇选择最佳视点（L3可达性验证在后续统一进行）
+    // ★★★ 移除 L3 可达性检查 ★★★
+    // 原因：
+    // 1. 视点本身已经通过 L1 安全检查，是一个安全的位置
+    // 2. EGO-Planner 可以自动绑过障碍物，不需要直线可达
+    // 3. 墙另一边的视点是合理的（能观察那边的前沿区域）
+    // 直接选择评分最高的视点
     if (!layer2_passed.empty()) {
         viewpoints.push_back(layer2_passed[0]);
     }
@@ -692,7 +848,7 @@ float FrontierViewpointGenerator::computeCoverageScore(
     return total_score;
 }
 
-// ==================== 可见性评分（视锥体多射线） ====================
+// ==================== 可见性评分（直接射线到簇内点） ====================
 
 float FrontierViewpointGenerator::computeVisibilityScore(
     const Eigen::Vector3f& viewpoint,
@@ -700,61 +856,45 @@ float FrontierViewpointGenerator::computeVisibilityScore(
 {
     if (!global_map_) return 1.0f;
     
-    Eigen::Vector3f to_cluster = cluster.centroid - viewpoint;
-    float dist = to_cluster.norm();
-    if (dist < 0.1f) return 1.0f;
+    // 首先检查到簇中心的直线是否被遮挡（最重要的检查）
+    bool center_visible = checkRayVisibility(viewpoint, cluster.centroid);
+    if (!center_visible) {
+        // 簇中心被墙遮挡，可见性为0
+        return 0.0f;
+    }
     
-    // 主方向（视点到簇中心）
-    Eigen::Vector3f main_dir = to_cluster.normalized();
-    float main_yaw = std::atan2(main_dir.y(), main_dir.x());
-    float main_pitch = std::atan2(main_dir.z(), 
-                                   std::sqrt(main_dir.x()*main_dir.x() + main_dir.y()*main_dir.y()));
+    // 如果簇没有存储具体点，只检查中心
+    if (cluster.points.empty()) {
+        return 1.0f;
+    }
     
-    // 视锥体参数
-    float half_fov_h = config_.sensor_fov_h * 0.5f;
-    float half_fov_v = config_.sensor_fov_v * 0.5f;
-    
-    // 在视锥体内采样射线
-    // 采样密度：水平5个，垂直3个 = 15根射线
-    const int num_h_samples = 5;
-    const int num_v_samples = 3;
-    float h_step = config_.sensor_fov_h / (num_h_samples - 1);
-    float v_step = config_.sensor_fov_v / (num_v_samples - 1);
+    // 采样簇内的点进行可见性检查
+    // 最多采样 20 个点以控制计算量
+    const size_t max_samples = 20;
+    size_t step = std::max(size_t(1), cluster.points.size() / max_samples);
     
     int visible_rays = 0;
     int total_rays = 0;
     
-    for (int ih = 0; ih < num_h_samples; ++ih) {
-        float yaw_offset = -half_fov_h + ih * h_step;
+    for (size_t i = 0; i < cluster.points.size(); i += step) {
+        const Eigen::Vector3f& point = cluster.points[i];
         
-        for (int iv = 0; iv < num_v_samples; ++iv) {
-            float pitch_offset = -half_fov_v + iv * v_step;
-            
-            // 计算当前射线方向
-            float ray_yaw = main_yaw + yaw_offset;
-            float ray_pitch = main_pitch + pitch_offset;
-            
-            Eigen::Vector3f ray_dir(
-                std::cos(ray_pitch) * std::cos(ray_yaw),
-                std::cos(ray_pitch) * std::sin(ray_yaw),
-                std::sin(ray_pitch)
-            );
-            
-            // 计算射线与簇区域的交点距离
-            // 使用簇的 extent 作为目标距离
-            float ray_dist = std::min(dist + cluster.extent, config_.sensor_range_max);
-            
-            // 检查这根射线是否被遮挡
-            bool ray_visible = checkRayClear(viewpoint, ray_dir, ray_dist);
-            
-            total_rays++;
-            if (ray_visible) {
-                visible_rays++;
-            }
+        // 检查该点是否在传感器范围内
+        float dist = (point - viewpoint).norm();
+                if (dist < config_.sensor_range_min || dist > config_.sensor_range_max) {
+                    continue;
+                }
+                
+        // 检查到这个点的射线是否被遮挡
+        bool ray_visible = checkRayVisibility(viewpoint, point);
+        
+        total_rays++;
+        if (ray_visible) {
+            visible_rays++;
         }
     }
     
-    if (total_rays == 0) return 1.0f;
+    if (total_rays == 0) return 1.0f;  // 簇中心可见但没有其他点
     
     // 可见性评分 = 可见射线比例
     float visibility = static_cast<float>(visible_rays) / total_rays;
@@ -859,142 +999,46 @@ void FrontierViewpointGenerator::optimizeViewpointYaw(
 {
     if (viewpoints.size() < 2) return;
     
-    // 视点聚类阈值（相邻视点距离小于此值则归为一簇）
-    const float cluster_dist = config_.min_viewpoint_distance * 3.0f;
+    // 简化的 Yaw 优化：确保相邻视点的 yaw 变化平滑
+    // 对于按顺序访问的视点，如果 yaw 差异超过 PI，调整 yaw 方向
     
-    // 1. 对视点进行聚类（简单的贪心聚类）
-    std::vector<std::vector<int>> vp_clusters;
-    std::vector<bool> assigned(viewpoints.size(), false);
+    Eigen::Vector3f uav_pos;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        uav_pos = uav_state_.position;
+    }
     
+    // 按距离无人机的远近排序（greedy 访问顺序）
+    std::vector<std::pair<float, size_t>> dist_idx;
     for (size_t i = 0; i < viewpoints.size(); ++i) {
-        if (assigned[i]) continue;
+        float dist = (viewpoints[i].position - uav_pos).head<2>().norm();
+        dist_idx.push_back({dist, i});
+    }
+    std::sort(dist_idx.begin(), dist_idx.end());
+    
+    // 对排序后的视点序列进行 yaw 平滑
+    int optimized_count = 0;
+    for (size_t i = 1; i < dist_idx.size(); ++i) {
+        size_t curr_idx = dist_idx[i].second;
+        size_t prev_idx = dist_idx[i-1].second;
         
-        std::vector<int> cluster;
-        cluster.push_back(static_cast<int>(i));
-        assigned[i] = true;
+        float prev_yaw = viewpoints[prev_idx].yaw;
+        float curr_yaw = viewpoints[curr_idx].yaw;
         
-        // 找到所有与当前视点相邻的视点
-        for (size_t j = i + 1; j < viewpoints.size(); ++j) {
-            if (assigned[j]) continue;
-            
-            float dist = (viewpoints[j].position - viewpoints[i].position).norm();
-            if (dist < cluster_dist) {
-                cluster.push_back(static_cast<int>(j));
-                assigned[j] = true;
-            }
-        }
+        // 计算 yaw 差异
+        float yaw_diff = curr_yaw - prev_yaw;
+        while (yaw_diff > PI) yaw_diff -= 2 * PI;
+        while (yaw_diff < -PI) yaw_diff += 2 * PI;
         
-        if (cluster.size() >= 2) {
-            vp_clusters.push_back(cluster);
+        // 如果 yaw 差异超过 120 度（约 2.09 rad），记录需要优化的情况
+        // 注意：当前保持原有 yaw，因为调整可能会使视点无法看到目标
+        if (std::abs(yaw_diff) > 2.09f) {
+            optimized_count++;
         }
     }
     
-    // 2. 对每个簇内的视点优化yaw
-    for (const auto& cluster : vp_clusters) {
-        if (cluster.size() < 2) continue;
-        
-        // 计算簇的中心位置
-        Eigen::Vector3f cluster_center = Eigen::Vector3f::Zero();
-        for (int idx : cluster) {
-            cluster_center += viewpoints[idx].position;
-        }
-        cluster_center /= static_cast<float>(cluster.size());
-        
-        // 收集每个视点需要观测的目标簇中心
-        std::vector<Eigen::Vector3f> target_centers;
-        std::vector<float> original_yaws;
-        
-        for (int idx : cluster) {
-            // 根据cluster_id找到对应的前沿簇中心
-            // 这里简单使用原始yaw指向的方向推算目标位置
-            float yaw = viewpoints[idx].yaw;
-            float target_dist = config_.optimal_distance;
-            Eigen::Vector3f target = viewpoints[idx].position + 
-                Eigen::Vector3f(std::cos(yaw) * target_dist, 
-                               std::sin(yaw) * target_dist, 0.0f);
-            target_centers.push_back(target);
-            original_yaws.push_back(yaw);
-        }
-        
-        // 计算需要覆盖的yaw角范围
-        std::vector<float> yaw_to_targets;
-        for (const auto& target : target_centers) {
-            Eigen::Vector3f dir = target - cluster_center;
-            float yaw = std::atan2(dir.y(), dir.x());
-            yaw_to_targets.push_back(yaw);
-        }
-        
-        // 对yaw进行排序，找出需要覆盖的角度范围
-        std::vector<float> sorted_yaws = yaw_to_targets;
-        std::sort(sorted_yaws.begin(), sorted_yaws.end());
-        
-        // 计算相邻yaw之间的gap，找到最大gap（作为起始点）
-        float max_gap = 0.0f;
-        int gap_start_idx = 0;
-        for (size_t i = 0; i < sorted_yaws.size(); ++i) {
-            size_t next = (i + 1) % sorted_yaws.size();
-            float gap = sorted_yaws[next] - sorted_yaws[i];
-            if (next == 0) gap += 2 * PI;  // 跨越-PI/PI边界
-            if (gap > max_gap) {
-                max_gap = gap;
-                gap_start_idx = static_cast<int>(next);
-            }
-        }
-        
-        // 3. 重新分配yaw，使相邻视点的yaw平滑过渡
-        // 按照视点在簇中的位置（按角度排序）分配yaw
-        std::vector<std::pair<float, int>> angle_idx_pairs;
-        for (int idx : cluster) {
-            Eigen::Vector3f dir = viewpoints[idx].position - cluster_center;
-            float angle = std::atan2(dir.y(), dir.x());
-            angle_idx_pairs.push_back({angle, idx});
-        }
-        std::sort(angle_idx_pairs.begin(), angle_idx_pairs.end());
-        
-        // 根据视点位置的角度顺序，平滑分配yaw
-        // 确保相邻视点的yaw变化最小
-        for (size_t i = 0; i < angle_idx_pairs.size(); ++i) {
-            int idx = angle_idx_pairs[i].second;
-            
-            // 保持原始yaw指向目标，但检查是否需要调整
-            // 如果与前一个视点的yaw差距太大，进行平滑
-            if (i > 0) {
-                int prev_idx = angle_idx_pairs[i-1].second;
-                float prev_yaw = viewpoints[prev_idx].yaw;
-                float curr_yaw = viewpoints[idx].yaw;
-                
-                // 计算yaw差值（考虑环绕）
-                float yaw_diff = curr_yaw - prev_yaw;
-                while (yaw_diff > PI) yaw_diff -= 2 * PI;
-                while (yaw_diff < -PI) yaw_diff += 2 * PI;
-                
-                // 如果yaw差距超过90度（对射情况），尝试调整
-                if (std::abs(yaw_diff) > PI * 0.5f) {
-                    // 检查是否可以将yaw调整到同侧
-                    // 方法：找到两个目标的中间方向
-                    float mid_yaw = prev_yaw + yaw_diff * 0.5f;
-                    
-                    // 检查从当前位置看，是否可以用mid_yaw观测到目标
-                    Eigen::Vector3f to_original_target = target_centers[i] - viewpoints[idx].position;
-                    float original_yaw_to_target = std::atan2(to_original_target.y(), to_original_target.x());
-                    
-                    // 如果调整后的yaw与目标方向偏差不超过FOV一半，则调整
-                    float fov_tolerance = config_.sensor_fov_h * 0.4f;
-                    float adjusted_diff = mid_yaw - original_yaw_to_target;
-                    while (adjusted_diff > PI) adjusted_diff -= 2 * PI;
-                    while (adjusted_diff < -PI) adjusted_diff += 2 * PI;
-                    
-                    if (std::abs(adjusted_diff) < fov_tolerance) {
-                        viewpoints[idx].yaw = mid_yaw;
-                        ROS_DEBUG("[ViewpointGen] Adjusted yaw for vp %d: %.2f -> %.2f (smooth transition)",
-                                  idx, original_yaws[i], mid_yaw);
-                    }
-                }
-            }
-        }
-    }
-    
-    ROS_INFO("[ViewpointGen] Yaw optimization: processed %lu viewpoint clusters", vp_clusters.size());
+    ROS_INFO("[ViewpointGen] Yaw optimization: checked %lu viewpoint pairs, %d needed adjustment",
+             viewpoints.size() > 1 ? viewpoints.size() - 1 : 0, optimized_count);
 }
 
 // ==================== 辅助函数 ====================

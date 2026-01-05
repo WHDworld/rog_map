@@ -20,10 +20,13 @@
     <arg name="odom_topic" default="/ground_truth/odom"/>
     <arg name="cloud_topic" default="/cloud_registered"/>
     
-    <!-- 飞行模式: 1=手动目标(RViz), 2=预设路径点 -->
-    <arg name="flight_type" default="2"/>
-    <!-- 起飞后自动开始预设路径 -->
-    <arg name="auto_start" default="true"/>
+    <!-- ★★★ 飞行模式 ★★★ -->
+    <!-- 1 = 探索模式：接收 /exploration/viewpoint 话题的目标 -->
+    <!-- 2 = 预设路径点模式：按顺序飞往预设路径点 -->
+    <arg name="flight_type" default="1"/>
+    
+    <!-- 起飞后自动开始（仅 flight_type=2 时有效） -->
+    <arg name="auto_start" default="false"/>
     
     <!-- ========== RViz 可视化 ========== -->
     <node name="rviz_exploration" pkg="rviz" type="rviz" output="screen"
@@ -69,6 +72,9 @@
         
         <param name="traj_server/time_forward" value="1.0" type="double"/>
     </node>
-
+    
+    <node pkg="my_control_package" type="mpc_analyzer_chw.py" name="record_data" output="screen">
+        <rosparam command="load" file="$(find my_control_package)/config/controller_param.yaml" ns="controller" />
+    </node>
 </launch>
 

@@ -21,6 +21,7 @@
 #include <visualization_msgs/MarkerArray.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <pcl_conversions/pcl_conversions.h>
+#include <quadrotor_msgs/PositionCommand.h>
 
 #include <Eigen/Dense>
 #include <vector>
@@ -56,6 +57,7 @@ struct ExplorationData {
     // 当前目标
     int current_viewpoint_idx;
     ExplorationViewpoint next_viewpoint;
+    bool viewpoint_published;  // 标志：当前视点是否已发布给规划器
     
     // 统计信息
     ros::Time start_time;
@@ -69,6 +71,7 @@ struct ExplorationData {
     
     ExplorationData()
         : current_viewpoint_idx(0)
+        , viewpoint_published(false)
         , total_distance(0.0)
         , total_viewpoints_visited(0)
         , total_frontiers_explored(0)
@@ -78,6 +81,7 @@ struct ExplorationData {
     void reset() {
         current_viewpoints.clear();
         current_viewpoint_idx = 0;
+        viewpoint_published = false;
         total_distance = 0.0;
         total_viewpoints_visited = 0;
         total_frontiers_explored = 0;
@@ -93,16 +97,19 @@ struct ExplorationFSMConfig {
     double safety_check_frequency = 20.0;   // 安全检查频率 (Hz)
     double visualization_frequency = 10.0;  // 可视化频率 (Hz)
     
-    // 重规划参数
-    double replan_thresh_reached = 0.5;     // 到达阈值 (m)
-    double replan_thresh_yaw = 0.1;         // 偏航阈值 (rad)
-    double replan_thresh_time = 2.0;        // 周期性重规划时间 (s)
-    double replan_thresh_frontier = 1.0;    // 前沿被覆盖后等待时间 (s)
+    // 重规划参数（参考 Falcon Planner）
+    double replan_thresh_reached = 0.5;         // 到达阈值 (m)
+    double replan_thresh_yaw = 0.1;             // 偏航阈值 (rad)
+    double replan_thresh_time = 3.0;            // 周期性重规划时间 (s) - Falcon: 3.0s
+    double replan_thresh_frontier = 0.5;        // 最小执行时间后才检查覆盖 (s) - Falcon: 0.2s
+    double replan_thresh_traj_remain = 0.5;     // 轨迹剩余时间阈值 (s) - Falcon: 0.05s
+    double frontier_covered_ratio = 0.25;       // 前沿覆盖比例触发重规划 - Falcon: 0.25
     
     // 探索参数
     bool auto_start = false;                // 自动开始探索
     double init_wait_time = 2.0;            // 初始化等待时间 (s)
     int min_frontier_cluster_size = 50;     // 最小前沿簇大小
+    double takeoff_height = 1.0;            // 起飞高度 (m) - 用于判断是否起飞完成
     
     // 可视化参数
     bool enable_visualization = true;
@@ -188,6 +195,14 @@ private:
     bool planExplorationViewpoints();
     bool selectNextViewpoint();
     
+    /**
+     * @brief 贪心排序视点（参考 EDEN 算法）
+     * 
+     * 从当前无人机位置开始，每次选择距离最近的未访问视点
+     * 这样可以减少飞行距离，提高探索效率
+     */
+    void sortViewpointsByGreedy();
+    
     // ==================== 可视化 ====================
     void visualize();
     void visualizeFrontierClusters();
@@ -258,6 +273,9 @@ private:
     ros::Time fsm_init_time_;
     ros::Time last_replan_time_;
     ros::Time last_frontier_update_time_;
+    ros::Time traj_start_time_;              // 轨迹开始执行时间（用于 Falcon 风格重规划）
+    double traj_duration_ = 0.0;             // 当前轨迹预期执行时间（秒）
+    int initial_unknown_count_ = 0;          // 初始未知体素数量（用于覆盖比例计算）
     
     // 前沿变化检测（用于避免无变化时重复计算视点）
     std::vector<int> last_frontier_subgrids_;

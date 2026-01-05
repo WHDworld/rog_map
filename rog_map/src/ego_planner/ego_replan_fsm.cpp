@@ -38,6 +38,9 @@ namespace ego_planner
     nh.param("fsm/takeoff_accel_time", takeoff_accel_time_, 1.0);
     nh.param("fsm/replan_duration", replan_duration_, 0.05);
     nh.param("fsm/auto_start_preset", auto_start_preset_, true);
+    
+    // FALCON风格：设置重规划时间偏移，用于轨迹连续性
+    planner_manager_->setReplanTimeOffset(replan_duration_);
 
     /* waypoints */
     nh.param("fsm/waypoint_num", waypoint_num_, -1);
@@ -198,10 +201,20 @@ namespace ego_planner
     {
       publishHoverCmd();
       
-      if (!have_target_ || !have_trigger_)
+      if (!have_target_ || !have_trigger_) {
+        // 调试日志：每500次循环打印一次
+        static int wait_count = 0;
+        if (++wait_count >= 500) {
+          ROS_DEBUG("[EGOReplanFSM] WAIT_TARGET: have_target=%d, have_trigger=%d",
+                   have_target_, have_trigger_);
+          wait_count = 0;
+        }
         goto force_return;
+      }
       else
       {
+        ROS_INFO("[EGOReplanFSM] WAIT_TARGET -> GEN_NEW_TRAJ: target=(%.2f,%.2f,%.2f)",
+                 end_pt_.x(), end_pt_.y(), end_pt_.z());
         changeFSMExecState(GEN_NEW_TRAJ, "FSM");
       }
       break;
@@ -312,11 +325,11 @@ namespace ego_planner
     static std::string state_str[8] = {"INIT", "PRE_ARM", "TAKEOFF", "WAIT_TARGET",
                                        "GEN_NEW_TRAJ", "REPLAN_TRAJ", "EXEC_TRAJ", "EMERGENCY_STOP"};
     
-    // int pre_s = static_cast<int>(exec_state_);
+    int pre_s = static_cast<int>(exec_state_);
     exec_state_ = new_state;
     
-    // ROS_INFO("[EGOReplanFSM] State: %s -> %s (by %s)",
-    //          state_str[pre_s].c_str(), state_str[static_cast<int>(new_state)].c_str(), pos_call.c_str());
+    ROS_INFO("[EGOReplanFSM] State: %s -> %s (by %s)",
+             state_str[pre_s].c_str(), state_str[static_cast<int>(new_state)].c_str(), pos_call.c_str());
   }
 
   void EGOReplanFSM::printFSMExecState()
@@ -406,9 +419,30 @@ namespace ego_planner
 
   bool EGOReplanFSM::planFromGlobalTraj(const int trial_times)
   {
-    start_pt_ = odom_pos_;
-    start_vel_ = odom_vel_;
-    start_acc_ = Eigen::Vector3d::Zero();
+    // 关键修复：使用全局轨迹的起点作为局部轨迹的起点
+    // 这确保了 viewpointCallback 中设置的起点状态被保留
+    // 全局轨迹的起点已经在 viewpointCallback/waypointCallback 中正确计算过了
+    
+    GlobalTrajData *global_info = &planner_manager_->traj_.global_traj;
+    if (global_info->traj.getPieceNum() > 0)
+    {
+      // 使用全局轨迹在 t=0 时刻的状态（与 viewpointCallback 中的 start_pos 一致）
+      start_pt_ = global_info->traj.getPos(0);
+      start_vel_ = global_info->traj.getVel(0);
+      start_acc_ = global_info->traj.getAcc(0);
+      
+      // 使用全局轨迹的开始时间（已在 viewpointCallback 中设置为 t_plan_start + replan_duration）
+      // 不需要在这里再次设置 setReplanStartTime，因为已经在 viewpointCallback 中设置了
+    }
+    else
+    {
+      // 后备：如果没有全局轨迹，使用里程计数据
+      double t_plan_start = ros::Time::now().toSec();
+      start_pt_ = odom_pos_;
+      start_vel_ = odom_vel_;
+      start_acc_ = Eigen::Vector3d::Zero();
+      planner_manager_->setReplanStartTime(t_plan_start + replan_duration_);
+    }
 
     for (int i = 0; i < trial_times; i++)
     {
@@ -421,11 +455,23 @@ namespace ego_planner
   bool EGOReplanFSM::planFromLocalTraj(const int trial_times)
   {
     LocalTrajData *info = &planner_manager_->traj_.local_traj;
-    double t_cur = ros::Time::now().toSec() - info->start_time;
+    
+    // 记录规划开始时间（关键：用于确保 start_time 与预测状态匹配）
+    double t_plan_start = ros::Time::now().toSec();
+    double t_cur = t_plan_start - info->start_time;
+    
+    // 预测 t_plan_start + replan_duration 时刻的状态作为新轨迹起点
+    // 新轨迹的 start_time 也应该设为这个时刻
+    double t_predict = t_cur + replan_duration_;
+    t_predict = std::max(0.0, std::min(t_predict, info->traj.getTotalDuration()));
 
-    start_pt_ = info->traj.getPos(t_cur);
-    start_vel_ = info->traj.getVel(t_cur);
-    start_acc_ = info->traj.getAcc(t_cur);
+    start_pt_ = info->traj.getPos(t_predict);
+    start_vel_ = info->traj.getVel(t_predict);
+    start_acc_ = info->traj.getAcc(t_predict);
+    
+    // 设置新轨迹的精确 start_time（与预测状态匹配）
+    // start_time = 规划开始时间 + replan_duration（而非规划完成时间 + replan_duration）
+    planner_manager_->setReplanStartTime(t_plan_start + replan_duration_);
 
     for (int i = 0; i < trial_times; i++)
     {
@@ -452,10 +498,38 @@ namespace ego_planner
     wps_.push_back(Waypoint(end_pt_, end_yaw_, end_vel_));
     wpt_id_ = 0;
 
-    // Plan global trajectory
+    // 记录规划开始时间（关键：用于确保 start_time 与预测状态匹配）
+    double t_plan_start = ros::Time::now().toSec();
+
+    // 确定起点状态：
+    // 关键：使用预测位置！因为规划需要时间，在规划期间无人机继续飞行
+    Eigen::Vector3d start_pos, start_vel, start_acc;
+    if (exec_state_ == EXEC_TRAJ && planner_manager_->traj_.local_traj.traj_id > 0)
+    {
+      // 正在执行轨迹：预测到 t_plan_start + replan_duration 时的轨迹状态
+      LocalTrajData *info = &planner_manager_->traj_.local_traj;
+      double t_cur = t_plan_start - info->start_time;
+      double t_predict = t_cur + replan_duration_;
+      t_predict = std::max(0.0, std::min(t_predict, info->traj.getTotalDuration()));
+      start_pos = info->traj.getPos(t_predict);
+      start_vel = info->traj.getVel(t_predict);
+      start_acc = info->traj.getAcc(t_predict);
+    }
+    else
+    {
+      // 没有正在执行的轨迹：使用里程计位置 + 速度预测
+      start_pos = odom_pos_ + odom_vel_ * replan_duration_;
+      start_vel = odom_vel_;
+      start_acc = Eigen::Vector3d::Zero();
+    }
+    
+    // 设置精确的新轨迹开始时间（与预测状态匹配）
+    planner_manager_->setReplanStartTime(t_plan_start + replan_duration_);
+
+    // Plan global trajectory with smooth start from predicted position
     std::vector<Eigen::Vector3d> waypoints;
     waypoints.push_back(end_pt_);
-    planner_manager_->planGlobalTrajWaypoints(odom_pos_, odom_vel_, Eigen::Vector3d::Zero(),
+    planner_manager_->planGlobalTrajWaypoints(start_pos, start_vel, start_acc,
                                                waypoints, end_vel_, Eigen::Vector3d::Zero());
 
     have_target_ = true;
@@ -482,10 +556,38 @@ namespace ego_planner
     wps_.push_back(Waypoint(end_pt_, end_yaw_, end_vel_));
     wpt_id_ = 0;
 
-    // Plan global trajectory with end velocity
+    // 记录规划开始时间（关键：用于确保 start_time 与预测状态匹配）
+    double t_plan_start = ros::Time::now().toSec();
+    
+    // 确定起点状态：
+    // 关键：使用预测位置！因为规划需要时间，在规划期间无人机继续飞行
+    Eigen::Vector3d start_pos, start_vel, start_acc;
+    if (exec_state_ == EXEC_TRAJ && planner_manager_->traj_.local_traj.traj_id > 0)
+    {
+      // 正在执行轨迹：预测到 t_plan_start + replan_duration 时的轨迹状态
+      LocalTrajData *info = &planner_manager_->traj_.local_traj;
+      double t_cur = t_plan_start - info->start_time;
+      double t_predict = t_cur + replan_duration_;
+      t_predict = std::max(0.0, std::min(t_predict, info->traj.getTotalDuration()));
+      start_pos = info->traj.getPos(t_predict);
+      start_vel = info->traj.getVel(t_predict);
+      start_acc = info->traj.getAcc(t_predict);
+    }
+    else
+    {
+      // 没有正在执行的轨迹：使用里程计位置 + 速度预测
+      start_pos = odom_pos_ + odom_vel_ * replan_duration_;
+      start_vel = odom_vel_;
+      start_acc = Eigen::Vector3d::Zero();
+    }
+    
+    // 设置精确的新轨迹开始时间（与预测状态匹配）
+    planner_manager_->setReplanStartTime(t_plan_start + replan_duration_);
+
+    // Plan global trajectory with smooth start from predicted position
     std::vector<Eigen::Vector3d> waypoints;
     waypoints.push_back(end_pt_);
-    planner_manager_->planGlobalTrajWaypoints(odom_pos_, odom_vel_, Eigen::Vector3d::Zero(),
+    planner_manager_->planGlobalTrajWaypoints(start_pos, start_vel, start_acc,
                                                waypoints, end_vel_, Eigen::Vector3d::Zero());
 
     have_target_ = true;
@@ -571,20 +673,27 @@ namespace ego_planner
   void EGOReplanFSM::odometryCallback(const nav_msgs::OdometryConstPtr &msg)
   {
     odom_pos_ << msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z;
-    odom_vel_ << msg->twist.twist.linear.x, msg->twist.twist.linear.y, msg->twist.twist.linear.z;
+    
+    // 获取四元数
     odom_orient_.w() = msg->pose.pose.orientation.w;
     odom_orient_.x() = msg->pose.pose.orientation.x;
     odom_orient_.y() = msg->pose.pose.orientation.y;
     odom_orient_.z() = msg->pose.pose.orientation.z;
 
     // Extract yaw from quaternion using stable method (avoids gimbal lock)
-    // yaw = atan2(2*(qw*qz + qx*qy), 1 - 2*(qy^2 + qz^2))
     double qw = odom_orient_.w();
     double qx = odom_orient_.x();
     double qy = odom_orient_.y();
     double qz = odom_orient_.z();
     odom_yaw_ = std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz));
     odom_yaw_vel_ = msg->twist.twist.angular.z;
+
+    // 将机体坐标系速度转换到世界坐标系
+    // 里程计的twist通常是机体坐标系，需要用四元数旋转到世界坐标系
+    Eigen::Vector3d vel_body(msg->twist.twist.linear.x, 
+                              msg->twist.twist.linear.y, 
+                              msg->twist.twist.linear.z);
+    odom_vel_ = odom_orient_ * vel_body;  // 四元数旋转: 机体系 -> 世界系
 
     have_odom_ = true;
   }

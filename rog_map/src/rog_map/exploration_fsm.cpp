@@ -38,12 +38,17 @@ void ExplorationFSM::init(ros::NodeHandle& nh, ROGMap::Ptr rog_map, GlobalMap::P
     
     nh_.param("exploration/replan_thresh_reached", config_.replan_thresh_reached, 0.5);
     nh_.param("exploration/replan_thresh_yaw", config_.replan_thresh_yaw, 0.1);
-    nh_.param("exploration/replan_thresh_time", config_.replan_thresh_time, 2.0);
-    nh_.param("exploration/replan_thresh_frontier", config_.replan_thresh_frontier, 1.0);
+    nh_.param("exploration/replan_thresh_time", config_.replan_thresh_time, 3.0);           // Falcon: 3.0s
+    nh_.param("exploration/replan_thresh_frontier", config_.replan_thresh_frontier, 0.5);   // Falcon: 0.2s
+    nh_.param("exploration/replan_thresh_traj_remain", config_.replan_thresh_traj_remain, 0.5);  // Falcon: 0.05s
+    nh_.param("exploration/frontier_covered_ratio", config_.frontier_covered_ratio, 0.25);  // Falcon: 0.25
     
     nh_.param("exploration/auto_start", config_.auto_start, false);
     nh_.param("exploration/init_wait_time", config_.init_wait_time, 2.0);
     nh_.param("exploration/min_frontier_cluster_size", config_.min_frontier_cluster_size, 50);
+    
+    // 起飞高度 - 从 EGO-Planner 配置读取，用于判断起飞是否完成
+    nh_.param("fsm/takeoff_height", config_.takeoff_height, 1.0);
     
     nh_.param("exploration/enable_visualization", config_.enable_visualization, true);
     nh_.param("exploration/viewpoint_sphere_radius", config_.viewpoint_sphere_radius, 0.2);
@@ -94,21 +99,19 @@ void ExplorationFSM::init(ros::NodeHandle& nh, ROGMap::Ptr rog_map, GlobalMap::P
     nh_.param("rog_map/global_map/ground_height", ground_height, 0.0f);
     vp_config.ground_height = ground_height;
     nh_.param("exploration/ground_offset", vp_config.ground_offset, 0.1f);
-    nh_.param("exploration/uav_filter_box_xy", vp_config.uav_filter_box_xy, 0.5f);
     
-    // 获取全局地图高度
-    std::vector<float> map_size;
-    nh_.param("rog_map/global_map/map_size", map_size, std::vector<float>{100.0f, 100.0f, 2.0f});
-    if (map_size.size() >= 3) {
-        vp_config.global_map_height = map_size[2];
-    }
+    // 头顶区域过滤参数（在簇级别过滤）
+    nh_.param("exploration/overhead_height_threshold", vp_config.overhead_height_threshold, 0.5f);
+    nh_.param("exploration/overhead_distance_threshold", vp_config.overhead_distance_threshold, 2.0f);
     
     ROS_INFO("[ExplorationFSM] Viewpoint config: height=%.2f, r=[%.1f, %.1f], sensor=[%.1f, %.1f], fov_h=%.2f",
              vp_config.viewpoint_height, vp_config.candidate_rmin, vp_config.candidate_rmax,
              vp_config.sensor_range_min, vp_config.sensor_range_max, vp_config.sensor_fov_h);
-    ROS_INFO("[ExplorationFSM] History node: dist=%.1f, radius=%.1f | Filter: ground=%.2f+%.2f, box_xy=%.2f",
+    ROS_INFO("[ExplorationFSM] History node: dist=%.1f, radius=%.1f | Ground filter: %.2f+%.2f",
              vp_config.history_node_distance, vp_config.node_frontier_radius,
-             vp_config.ground_height, vp_config.ground_offset, vp_config.uav_filter_box_xy);
+             vp_config.ground_height, vp_config.ground_offset);
+    ROS_INFO("[ExplorationFSM] Overhead filter: height_th=%.2f, dist_th=%.2f",
+             vp_config.overhead_height_threshold, vp_config.overhead_distance_threshold);
     
     viewpoint_generator_ = std::make_shared<FrontierViewpointGenerator>(global_map_, vp_config);
     
@@ -117,7 +120,9 @@ void ExplorationFSM::init(ros::NodeHandle& nh, ROGMap::Ptr rog_map, GlobalMap::P
     trigger_sub_ = nh_.subscribe("/move_base_simple/goal", 1, &ExplorationFSM::triggerCallback, this);
     
     // 发布者
-    viewpoint_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("/exploration/viewpoint", 1);
+    // 使用 quadrotor_msgs::PositionCommand 发送视点给 EGO-Planner
+    // 包含位置、yaw 角和期望终端速度
+    viewpoint_pub_ = nh_.advertise<quadrotor_msgs::PositionCommand>("/exploration/viewpoint", 1);
     frontier_cloud_pub_ = nh_.advertise<sensor_msgs::PointCloud2>("/exploration/frontier_cloud", 1);
     frontier_cluster_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/exploration/frontier_clusters", 1);
     viewpoint_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/exploration/viewpoints", 1);
@@ -208,8 +213,17 @@ void ExplorationFSM::processInit() {
         return;
     }
     
+    // 等待无人机起飞完成（高度达到起飞高度的90%）
+    double takeoff_threshold = config_.takeoff_height * 0.9;
+    if (odom_pos_.z() < takeoff_threshold) {
+        ROS_INFO_THROTTLE(1.0, "[ExplorationFSM] Waiting for takeoff (z=%.2f < %.2f)...",
+                          odom_pos_.z(), takeoff_threshold);
+        return;
+    }
+    
     state_ = ExplorationState::WAIT_TRIGGER;
-    ROS_INFO("[ExplorationFSM] Initialized, waiting for trigger");
+    ROS_INFO("[ExplorationFSM] Takeoff complete (z=%.2f), waiting for trigger (use 2D Nav Goal in RViz)",
+             odom_pos_.z());
 }
 
 void ExplorationFSM::processWaitTrigger() {
@@ -249,6 +263,7 @@ void ExplorationFSM::processPlanViewpoints() {
         if (selectNextViewpoint()) {
             state_ = ExplorationState::EXEC_EXPLORATION;
             last_replan_time_ = ros::Time::now();
+            expl_data_.viewpoint_published = false;  // 重置标志，确保新视点会被发布
         } else {
             state_ = ExplorationState::UPDATE_FRONTIER;
             ROS_WARN("[ExplorationFSM] No valid viewpoint selected, re-updating frontiers");
@@ -260,6 +275,18 @@ void ExplorationFSM::processPlanViewpoints() {
 }
 
 void ExplorationFSM::processExecExploration() {
+    double t_cur = (ros::Time::now() - traj_start_time_).toSec();
+    double elapsed_since_replan = (ros::Time::now() - last_replan_time_).toSec();
+    
+    // ==================== Falcon 风格重规划逻辑 ====================
+    // 三种重规划触发条件：
+    // 1. 目标前视簇被覆盖（执行一定时间后）
+    // 2. 轨迹即将执行完毕（剩余时间不足）
+    // 3. 周期性重规划（适应环境变化）
+    
+    bool need_replan = false;
+    int replan_type = 0;
+    
     // 检查是否到达当前视点
     if (isNearViewpoint(expl_data_.next_viewpoint)) {
         expl_data_.total_viewpoints_visited++;
@@ -271,7 +298,19 @@ void ExplorationFSM::processExecExploration() {
         
         // 尝试选择下一个视点
         if (selectNextViewpoint()) {
+            // 成功选择下一个视点，重置轨迹计时
+            traj_start_time_ = ros::Time::now();
             last_replan_time_ = ros::Time::now();
+            expl_data_.viewpoint_published = false;
+            // 估算轨迹时间（简单估算：距离 / 速度）
+            Eigen::Vector3f target_pos = expl_data_.next_viewpoint.position;
+            Eigen::Vector3d odom;
+            {
+                std::lock_guard<std::mutex> lock(odom_mutex_);
+                odom = odom_pos_;
+            }
+            double dist = (target_pos.cast<double>() - odom).norm();
+            traj_duration_ = dist / 1.0 + 2.0;  // 假设1m/s + 2s缓冲
         } else {
             // 当前区域探索完成，更新前沿
             state_ = ExplorationState::UPDATE_FRONTIER;
@@ -279,23 +318,70 @@ void ExplorationFSM::processExecExploration() {
         return;
     }
     
-    // 检查前沿是否被覆盖
-    if (checkFrontierCovered()) {
-        ROS_INFO("[ExplorationFSM] Current frontier covered, replanning...");
+    // ========== 只有在视点已发布后才检查重规划条件 ==========
+    // 避免在视点还未发布时就触发重规划
+    if (expl_data_.viewpoint_published) {
+        // ========== 触发条件1：目标前视簇被覆盖（Falcon: t > replan_thresh2_） ==========
+        if (t_cur > config_.replan_thresh_frontier && checkFrontierCovered()) {
+            ROS_INFO("[ExplorationFSM] Replan: cluster covered (t=%.2fs)", t_cur);
+            need_replan = true;
+            replan_type = 1;
+        }
+        // ========== 触发条件2：轨迹即将执行完毕（Falcon: remaining < replan_thresh1_） ==========
+        // 只在 traj_duration_ > 0 且 t_cur > 0 时才检查（确保已正确初始化）
+        else if (traj_duration_ > 0.1 && t_cur > 0.1 && 
+                 (traj_duration_ - t_cur) < config_.replan_thresh_traj_remain) {
+            ROS_INFO("[ExplorationFSM] Replan: trajectory almost done (remaining=%.2fs)", 
+                     traj_duration_ - t_cur);
+            need_replan = true;
+            replan_type = 2;
+        }
+        // ========== 触发条件3：周期性重规划（Falcon: t > replan_thresh3_） ==========
+        else if (elapsed_since_replan > config_.replan_thresh_time) {
+            ROS_INFO("[ExplorationFSM] Replan: periodic call (%.1fs elapsed)", elapsed_since_replan);
+            need_replan = true;
+            replan_type = 3;
+        }
+    }
+    
+    if (need_replan) {
+        // 重规划：更新前沿并重新规划视点
+        last_replan_time_ = ros::Time::now();
         state_ = ExplorationState::UPDATE_FRONTIER;
         return;
     }
     
-    // 周期性重规划检查
-    double elapsed = (ros::Time::now() - last_replan_time_).toSec();
-    if (elapsed > config_.replan_thresh_time) {
-        ROS_INFO("[ExplorationFSM] Periodic replan (%.1f s elapsed)", elapsed);
-        state_ = ExplorationState::UPDATE_FRONTIER;
-        return;
+    // 只在视点尚未发布时发布一次（避免频繁触发EGO-Planner重规划）
+    if (!expl_data_.viewpoint_published) {
+        publishViewpointTarget(expl_data_.next_viewpoint);
+        expl_data_.viewpoint_published = true;
+        
+        // 记录轨迹开始时间
+        traj_start_time_ = ros::Time::now();
+        
+        // 重置覆盖检测的初始未知体素计数（用于 Falcon 风格的比例检测）
+        initial_unknown_count_ = 0;
+        
+        // 估算轨迹执行时间
+        Eigen::Vector3f target_pos = expl_data_.next_viewpoint.position;
+        Eigen::Vector3d odom;
+        {
+            std::lock_guard<std::mutex> lock(odom_mutex_);
+            odom = odom_pos_;
+        }
+        double dist = (target_pos.cast<double>() - odom).norm();
+        traj_duration_ = dist / 1.0 + 2.0;  // 假设1m/s + 2s缓冲
+        
+        ROS_INFO("[ExplorationFSM] Published viewpoint: (%.2f, %.2f, %.2f) yaw=%.2f, target=(%.2f, %.2f, %.2f), est_time=%.1fs",
+                 expl_data_.next_viewpoint.position.x(),
+                 expl_data_.next_viewpoint.position.y(),
+                 expl_data_.next_viewpoint.position.z(),
+                 expl_data_.next_viewpoint.yaw,
+                 expl_data_.next_viewpoint.target_center.x(),
+                 expl_data_.next_viewpoint.target_center.y(),
+                 expl_data_.next_viewpoint.target_center.z(),
+                 traj_duration_);
     }
-    
-    // 持续发布目标视点
-    publishViewpointTarget(expl_data_.next_viewpoint);
 }
 
 void ExplorationFSM::processFinish() {
@@ -307,7 +393,7 @@ void ExplorationFSM::processFinish() {
         double duration = (expl_data_.finish_time - expl_data_.start_time).toSec();
         
         ROS_INFO("====================================");
-        ROS_INFO("[ExplorationFSM] Exploration Finished!");
+        ROS_INFO("[ExplorationFSM] Exploration paused (no viewpoints)");
         ROS_INFO("  Duration: %.2f s", duration);
         ROS_INFO("  Viewpoints visited: %d", expl_data_.total_viewpoints_visited);
         ROS_INFO("  Total distance: %.2f m", expl_data_.total_distance);
@@ -317,15 +403,37 @@ void ExplorationFSM::processFinish() {
         finish_time = ros::Time::now();
     }
     
-    // 清理可视化
-    clearVisualization();
-    
-    // 5秒后返回等待状态
-    if ((ros::Time::now() - finish_time).toSec() > 5.0) {
-        triggered_ = false;
-        logged = false;
-        state_ = ExplorationState::WAIT_TRIGGER;
-        ROS_INFO("[ExplorationFSM] Ready for new exploration");
+    // 2秒后主动更新视点并检查是否有新的前沿可以继续探索
+    if ((ros::Time::now() - finish_time).toSec() > 2.0) {
+        // 主动更新视点（因为 triggered_=true 时 frontierCallback 不会更新）
+        UAVState uav_state;
+        {
+            std::lock_guard<std::mutex> lock(odom_mutex_);
+            uav_state.position = odom_pos_.cast<float>();
+            uav_state.yaw = static_cast<float>(odom_yaw_);
+        }
+        viewpoint_generator_->updateUAVState(uav_state);
+        
+        std::vector<FrontierCluster> clusters;
+        std::vector<ExplorationViewpoint> viewpoints;
+        bool success = viewpoint_generator_->generate(clusters, viewpoints);
+        
+        if (success && !viewpoints.empty()) {
+            ROS_INFO("[ExplorationFSM] Found %lu new viewpoints, resuming exploration", viewpoints.size());
+            logged = false;
+            expl_data_.current_viewpoints = viewpoints;
+            expl_data_.viewpoint_published = false;
+            state_ = ExplorationState::PLAN_VIEWPOINTS;
+            return;
+        }
+        
+        // 5秒后返回等待状态
+        if ((ros::Time::now() - finish_time).toSec() > 5.0) {
+            triggered_ = false;
+            logged = false;
+            state_ = ExplorationState::WAIT_TRIGGER;
+            ROS_INFO("[ExplorationFSM] Ready for new exploration");
+        }
     }
 }
 
@@ -451,35 +559,78 @@ bool ExplorationFSM::updateFrontierInfo() {
 }
 
 bool ExplorationFSM::checkFrontierCovered() {
-    // 检查当前目标簇是否已被覆盖
+    // ★★★ Falcon 风格覆盖检测 ★★★
+    // 检查当前目标簇是否已被覆盖（基于覆盖比例）
+    // 如果覆盖比例超过阈值（默认25%），则触发重规划
+    
     if (expl_data_.current_viewpoints.empty()) {
         return true;
     }
     
     const ExplorationViewpoint& vp = expl_data_.next_viewpoint;
     
-    // 检查目标簇是否还有足够的前沿体素
-    // 这里简化处理：检查目标位置附近是否还有未知体素
-    Eigen::Vector3f target_pos = vp.position;
+    // 检查目标簇中心附近是否还有未知体素
+    // 注意：使用 target_center（前沿簇中心）而不是 position（视点位置）
+    Eigen::Vector3f target_pos = vp.target_center;
+    
+    // 如果 target_center 未设置（零向量），使用视点方向估计
+    bool use_estimated = false;
+    if (target_pos.norm() < 0.01f) {
+        // 沿视点方向 3m 处估计目标位置
+        float yaw = vp.yaw;
+        target_pos = vp.position + 3.0f * Eigen::Vector3f(cos(yaw), sin(yaw), 0.0f);
+        use_estimated = true;
+    }
+    
     float check_radius = 2.0f;
     
-    int unknown_count = 0;
+    // 统计当前未知体素数量
+    int current_unknown_count = 0;
+    int total_checked = 0;
     for (float dx = -check_radius; dx <= check_radius; dx += 0.5f) {
         for (float dy = -check_radius; dy <= check_radius; dy += 0.5f) {
             for (float dz = -check_radius; dz <= check_radius; dz += 0.5f) {
                 Eigen::Vector3f check_pos = target_pos + Eigen::Vector3f(dx, dy, dz);
                 if (!global_map_->isInGlobalMapRange(check_pos)) continue;
                 
+                total_checked++;
                 GlobalVoxelState state = global_map_->getVoxelState(check_pos);
                 if (VoxelStateBits::isUnknown(state)) {
-                    unknown_count++;
+                    current_unknown_count++;
                 }
             }
         }
     }
     
-    // 如果未知体素太少，认为已被覆盖
-    return unknown_count < 10;
+    // ★★★ Falcon 风格：基于覆盖比例判断 ★★★
+    // 如果是第一次检查，记录初始未知体素数量
+    if (initial_unknown_count_ == 0) {
+        initial_unknown_count_ = std::max(current_unknown_count, 1);  // 避免除零
+    }
+    
+    // 计算变化数量（已被覆盖的体素）
+    int covered_count = initial_unknown_count_ - current_unknown_count;
+    float covered_ratio = static_cast<float>(covered_count) / initial_unknown_count_;
+    
+    // 判断是否已覆盖（变化比例超过阈值）
+    // Falcon 默认使用 25% 的阈值
+    bool is_covered = covered_ratio >= config_.frontier_covered_ratio;
+    
+    // 备选逻辑：如果剩余未知体素太少，也认为已覆盖
+    const int min_remaining_threshold = 5;
+    if (current_unknown_count < min_remaining_threshold) {
+        is_covered = true;
+    }
+    
+    ROS_DEBUG_THROTTLE(1.0, "[ExplorationFSM] checkFrontierCovered: target=(%.2f,%.2f,%.2f) %s, "
+              "unknown=%d->%d (initial), covered_ratio=%.1f%%, threshold=%.1f%%, covered=%s",
+              target_pos.x(), target_pos.y(), target_pos.z(),
+              use_estimated ? "(estimated)" : "(from cluster)",
+              initial_unknown_count_, current_unknown_count,
+              covered_ratio * 100.0f, config_.frontier_covered_ratio * 100.0f,
+              is_covered ? "YES" : "NO");
+    
+    return is_covered;
 }
 
 int ExplorationFSM::countTotalFrontiers() const {
@@ -507,10 +658,15 @@ bool ExplorationFSM::planExplorationViewpoints() {
         return false;
     }
     
+    // 贪心排序策略（参考 EDEN 算法）：
+    // 从当前无人机位置开始，每次选择距离最近的未访问视点
+    // 这样可以减少飞行距离，提高探索效率
+    sortViewpointsByGreedy();
+    
     // 重置索引
     expl_data_.current_viewpoint_idx = 0;
     
-    ROS_INFO("[ExplorationFSM] Planned %lu clusters, %lu viewpoints",
+    ROS_INFO("[ExplorationFSM] Planned %lu clusters, %lu viewpoints (greedy sorted)",
              frontier_clusters_.size(), expl_data_.current_viewpoints.size());
     
     return true;
@@ -537,6 +693,71 @@ bool ExplorationFSM::selectNextViewpoint() {
              expl_data_.next_viewpoint.yaw);
     
     return true;
+}
+
+void ExplorationFSM::sortViewpointsByGreedy() {
+    // 贪心排序策略（参考 EDEN 算法）：
+    // 从当前无人机位置开始，每次选择距离最近的未访问视点
+    
+    auto& viewpoints = expl_data_.current_viewpoints;
+    if (viewpoints.size() <= 1) {
+        return;
+    }
+    
+    // 获取当前无人机位置
+    Eigen::Vector3d current_pos;
+    {
+        std::lock_guard<std::mutex> lock(odom_mutex_);
+        current_pos = odom_pos_;
+    }
+    
+    std::vector<ExplorationViewpoint> sorted;
+    sorted.reserve(viewpoints.size());
+    
+    std::vector<bool> visited(viewpoints.size(), false);
+    
+    // 第一个视点：选择距离无人机当前位置最近的
+    int best_idx = 0;
+    double best_dist = std::numeric_limits<double>::max();
+    for (size_t i = 0; i < viewpoints.size(); i++) {
+        double dist = (viewpoints[i].position.cast<double>() - current_pos).norm();
+        if (dist < best_dist) {
+            best_dist = dist;
+            best_idx = static_cast<int>(i);
+        }
+    }
+    sorted.push_back(viewpoints[best_idx]);
+    visited[best_idx] = true;
+    
+    // 后续视点：每次选择距离上一个视点最近的未访问视点
+    while (sorted.size() < viewpoints.size()) {
+        Eigen::Vector3f last_pos = sorted.back().position;
+        best_idx = -1;
+        best_dist = std::numeric_limits<double>::max();
+        
+        for (size_t i = 0; i < viewpoints.size(); i++) {
+            if (visited[i]) continue;
+            
+            double dist = (viewpoints[i].position - last_pos).norm();
+            if (dist < best_dist) {
+                best_dist = dist;
+                best_idx = static_cast<int>(i);
+            }
+        }
+        
+        if (best_idx >= 0) {
+            sorted.push_back(viewpoints[best_idx]);
+            visited[best_idx] = true;
+        } else {
+            break;  // 防止无限循环
+        }
+    }
+    
+    // 更新视点列表
+    viewpoints = std::move(sorted);
+    
+    ROS_DEBUG("[ExplorationFSM] Viewpoints sorted by greedy (from UAV pos: %.2f, %.2f, %.2f)",
+              current_pos.x(), current_pos.y(), current_pos.z());
 }
 
 bool ExplorationFSM::getNextViewpoint(ExplorationViewpoint& viewpoint) {
@@ -754,9 +975,15 @@ void ExplorationFSM::visualizeViewpoints() {
     delete_marker.action = visualization_msgs::Marker::DELETEALL;
     markers.markers.push_back(delete_marker);
     
-    // 使用直接生成的视点
-    for (const auto& vp : expl_data_.current_viewpoints) {
+    // 使用直接生成的视点，按探索顺序添加序号标签
+    int viewpoint_order = 1;  // 序号从1开始
+    for (size_t i = 0; i < expl_data_.current_viewpoints.size(); ++i) {
+            const auto& vp = expl_data_.current_viewpoints[i];
             if (!vp.is_valid) continue;
+            
+            // 判断视点状态
+            bool is_current = (static_cast<int>(i) == expl_data_.current_viewpoint_idx);
+            bool is_visited = (static_cast<int>(i) < expl_data_.current_viewpoint_idx);
             
             // 视点位置（球体）
             visualization_msgs::Marker sphere;
@@ -773,20 +1000,58 @@ void ExplorationFSM::visualizeViewpoints() {
             sphere.scale.y = config_.viewpoint_sphere_radius * 2;
             sphere.scale.z = config_.viewpoint_sphere_radius * 2;
             
-            // 当前目标视点用绿色，其他用蓝色
-            bool is_current = (vp.cluster_id == expl_data_.next_viewpoint.cluster_id);
+            // 颜色：当前目标=绿色，已访问=灰色，待访问=蓝色
             if (is_current) {
                 sphere.color.r = 0.0;
                 sphere.color.g = 1.0;
                 sphere.color.b = 0.0;
+                sphere.color.a = 0.9;
+            } else if (is_visited) {
+                sphere.color.r = 0.5;
+                sphere.color.g = 0.5;
+                sphere.color.b = 0.5;
+                sphere.color.a = 0.5;
             } else {
                 sphere.color.r = 0.2;
                 sphere.color.g = 0.4;
                 sphere.color.b = 1.0;
+                sphere.color.a = 0.8;
             }
-            sphere.color.a = 0.8;
             
             markers.markers.push_back(sphere);
+            
+            // 添加序号标签（显示探索顺序）
+            visualization_msgs::Marker text;
+            text.header.frame_id = "map";
+            text.header.stamp = ros::Time::now();
+            text.ns = "viewpoint_labels";
+            text.id = marker_id++;
+            text.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
+            text.action = visualization_msgs::Marker::ADD;
+            text.pose.position.x = vp.position.x();
+            text.pose.position.y = vp.position.y();
+            text.pose.position.z = vp.position.z() + 0.5;  // 在视点上方显示
+            text.scale.z = 0.4;  // 文字高度
+            text.text = std::to_string(viewpoint_order);
+            
+            // 文字颜色
+            if (is_current) {
+                text.color.r = 0.0;
+                text.color.g = 1.0;
+                text.color.b = 0.0;
+            } else if (is_visited) {
+                text.color.r = 0.6;
+                text.color.g = 0.6;
+                text.color.b = 0.6;
+            } else {
+                text.color.r = 1.0;
+                text.color.g = 1.0;
+                text.color.b = 1.0;
+            }
+            text.color.a = 1.0;
+            
+            markers.markers.push_back(text);
+            viewpoint_order++;
             
             // 视线方向（箭头）
             visualization_msgs::Marker arrow;
@@ -812,12 +1077,51 @@ void ExplorationFSM::visualizeViewpoints() {
             arrow.scale.x = 0.05;
             arrow.scale.y = 0.1;
             arrow.scale.z = 0.1;
-            arrow.color.r = 1.0;
-            arrow.color.g = 1.0;
-            arrow.color.b = 0.0;
-            arrow.color.a = 1.0;
+            
+            // 箭头颜色与视点一致
+            if (is_current) {
+                arrow.color.r = 0.0;
+                arrow.color.g = 1.0;
+                arrow.color.b = 0.0;
+            } else if (is_visited) {
+                arrow.color.r = 0.5;
+                arrow.color.g = 0.5;
+                arrow.color.b = 0.5;
+            } else {
+                arrow.color.r = 1.0;
+                arrow.color.g = 1.0;
+                arrow.color.b = 0.0;
+            }
+            arrow.color.a = is_visited ? 0.5 : 1.0;
             
             markers.markers.push_back(arrow);
+    }
+    
+    // 添加探索路径连线（显示探索顺序）
+    if (expl_data_.current_viewpoints.size() > 1) {
+        visualization_msgs::Marker route_line;
+        route_line.header.frame_id = "map";
+        route_line.header.stamp = ros::Time::now();
+        route_line.ns = "exploration_route";
+        route_line.id = marker_id++;
+        route_line.type = visualization_msgs::Marker::LINE_STRIP;
+        route_line.action = visualization_msgs::Marker::ADD;
+        route_line.scale.x = 0.05;
+        route_line.color.r = 1.0;
+        route_line.color.g = 0.5;
+        route_line.color.b = 0.0;
+        route_line.color.a = 0.8;
+        
+        for (const auto& vp : expl_data_.current_viewpoints) {
+            if (!vp.is_valid) continue;
+            geometry_msgs::Point p;
+            p.x = vp.position.x();
+            p.y = vp.position.y();
+            p.z = vp.position.z();
+            route_line.points.push_back(p);
+        }
+        
+        markers.markers.push_back(route_line);
     }
     
     viewpoint_marker_pub_.publish(markers);
@@ -1196,20 +1500,30 @@ void ExplorationFSM::clearVisualization() {
 
 // ==================== 辅助函数 ====================
 void ExplorationFSM::publishViewpointTarget(const ExplorationViewpoint& vp) {
-    geometry_msgs::PoseStamped msg;
+    // 使用 quadrotor_msgs::PositionCommand 发送给 EGO-Planner
+    // 包含位置、yaw 角和期望速度
+    quadrotor_msgs::PositionCommand msg;
     msg.header.frame_id = "map";
     msg.header.stamp = ros::Time::now();
-    msg.pose.position.x = vp.position.x();
-    msg.pose.position.y = vp.position.y();
-    msg.pose.position.z = vp.position.z();
     
-    // 从yaw创建四元数
-    tf::Quaternion q;
-    q.setRPY(0, 0, vp.yaw);
-    msg.pose.orientation.x = q.x();
-    msg.pose.orientation.y = q.y();
-    msg.pose.orientation.z = q.z();
-    msg.pose.orientation.w = q.w();
+    // 位置
+    msg.position.x = vp.position.x();
+    msg.position.y = vp.position.y();
+    msg.position.z = vp.position.z();
+    
+    // yaw 角 - EGO-Planner 会使用这个值规划偏航角
+    msg.yaw = vp.yaw;
+    msg.yaw_dot = 0.0;
+    
+    // 期望终端速度（设为0，即到达视点后悬停）
+    msg.velocity.x = 0.0;
+    msg.velocity.y = 0.0;
+    msg.velocity.z = 0.0;
+    
+    // 加速度设为0
+    msg.acceleration.x = 0.0;
+    msg.acceleration.y = 0.0;
+    msg.acceleration.z = 0.0;
     
     viewpoint_pub_.publish(msg);
 }

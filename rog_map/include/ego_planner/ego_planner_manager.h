@@ -52,12 +52,19 @@ namespace ego_planner
     
     bool EmergencyStop(Eigen::Vector3d stop_pos);
     
-    bool setLocalTrajFromOpt(const poly_traj::MinJerkOpt &opt, const bool touch_goal);
+    bool setLocalTrajFromOpt(const poly_traj::MinJerkOpt &opt, const bool touch_goal, 
+                               const double time_offset = 0.0);
     
     inline int getCpsNumPrePiece(void) { return ploy_traj_opt_->get_cps_num_prePiece_(); }
     
     // 设置期望高度（用于高度保持功能）
     inline void setDesiredHeight(double height) { ploy_traj_opt_->setDesiredHeight(height); }
+    
+    // FALCON风格：设置重规划时间偏移（用于轨迹连续性）
+    inline void setReplanTimeOffset(double offset) { replan_time_offset_ = offset; }
+    
+    // 设置精确的重规划开始时间（用于确保 start_time 与预测状态匹配）
+    inline void setReplanStartTime(double time) { replan_start_time_ = time; use_precise_start_time_ = true; }
 
     PlanParameters pp_;
     rog_map::ROGMap::Ptr rog_map_;
@@ -67,6 +74,9 @@ namespace ego_planner
     PolyTrajOptimizer::Ptr ploy_traj_opt_;
 
     int continous_failures_count_{0};
+    double replan_time_offset_{0.0};  // 重规划时间偏移，用于延迟新轨迹生效
+    double replan_start_time_{0.0};   // 精确的重规划开始时间
+    bool use_precise_start_time_{false};  // 是否使用精确的开始时间
 
   public:
     typedef std::unique_ptr<EGOPlannerManager> Ptr;

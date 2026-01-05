@@ -17,10 +17,22 @@ quadrotor_msgs::PositionCommand cmd;
 
 bool receive_traj_ = false;
 bool task_finished_ = false;
+
+// ===== 双轨迹缓存机制 (FALCON风格) =====
+// 新轨迹
 boost::shared_ptr<poly_traj::Trajectory> traj_;
 double traj_duration_;
 ros::Time start_time_;
 int traj_id_ = -1;
+double start_yaw_ = 0.0, end_yaw_ = 0.0;
+
+// 旧轨迹（用于过渡期间）
+boost::shared_ptr<poly_traj::Trajectory> prev_traj_;
+double prev_traj_duration_;
+ros::Time prev_start_time_;
+double prev_start_yaw_ = 0.0, prev_end_yaw_ = 0.0;
+bool has_prev_traj_ = false;
+
 int last_traj_id_ = -1;
 ros::Time heartbeat_time_(0);
 Eigen::Vector3d last_pos_;
@@ -32,7 +44,6 @@ double time_forward_;
 bool yaw_initialized_ = false;
 
 // target yaw (from planner)
-double start_yaw_ = 0.0, end_yaw_ = 0.0;
 bool use_target_yaw_ = false;  // If true, interpolate to target yaw; otherwise, follow velocity direction
 
 void heartbeatCallback(std_msgs::EmptyPtr msg)
@@ -68,6 +79,17 @@ void polyTrajCallback(rog_map::PolyTrajPtr msg)
     return;
   }
 
+  // ===== 保存旧轨迹用于过渡期间 (FALCON风格) =====
+  if (traj_ != nullptr && receive_traj_)
+  {
+    prev_traj_ = traj_;
+    prev_start_time_ = start_time_;
+    prev_traj_duration_ = traj_duration_;
+    prev_start_yaw_ = start_yaw_;
+    prev_end_yaw_ = end_yaw_;
+    has_prev_traj_ = true;
+  }
+
   int piece_nums = msg->duration.size();
   std::vector<double> dura(piece_nums);
   std::vector<poly_traj::CoefficientMat> cMats(piece_nums);
@@ -90,40 +112,46 @@ void polyTrajCallback(rog_map::PolyTrajPtr msg)
   traj_duration_ = traj_->getTotalDuration();
   last_traj_id_ = traj_id_;
   traj_id_ = msg->traj_id;
+  
+  // 调试：检查 start_time 是否在未来
+  double time_offset = (start_time_ - ros::Time::now()).toSec();
+  if (time_offset > 0.01)
+  {
+    ROS_INFO("[EGOTrajServer] New traj id=%d starts in %.3f s (FALCON mode)", traj_id_, time_offset);
+  }
+  else
+  {
+    ROS_WARN("[EGOTrajServer] New traj id=%d starts immediately (offset=%.3f s) - NOT delayed!", traj_id_, time_offset);
+  }
 
   // Extract yaw info
-  start_yaw_ = msg->start_yaw;
+  // 关键：start_yaw 使用当前实际的 last_yaw_，确保yaw连续性！
+  // 这类似于FALCON的边界约束机制
+  if (yaw_initialized_ && receive_traj_)
+  {
+    start_yaw_ = last_yaw_;  // 从当前yaw开始，保证连续
+  }
+  else
+  {
+    start_yaw_ = msg->start_yaw;  // 第一次使用消息中的值
+  }
   end_yaw_ = msg->end_yaw;
   
   // Check if target yaw is specified:
   // - If end_yaw is NaN, it means "follow velocity direction" (preset waypoint mode)
-  // - Otherwise, interpolate to target yaw (exploration mode with specified yaw)
+  // - Otherwise, ALWAYS interpolate to target yaw (exploration mode needs smooth yaw transition)
   if (std::isnan(end_yaw_))
   {
     use_target_yaw_ = false;  // Follow velocity direction
   }
   else
   {
-    // Use target yaw interpolation if start and end yaw differ significantly
-    double yaw_diff = fabs(end_yaw_ - start_yaw_);
-    if (yaw_diff > M_PI) yaw_diff = 2 * M_PI - yaw_diff;
-    use_target_yaw_ = (yaw_diff > 0.1);  // > 0.1 rad (~5.7 deg) - increased threshold
+    // Always use target yaw interpolation for exploration mode
+    use_target_yaw_ = true;
   }
 
   receive_traj_ = true;
   task_finished_ = false;
-
-  // if (std::isnan(end_yaw_))
-  // {
-  //   ROS_INFO("[EGOTrajServer] Received trajectory, id: %d, duration: %.2f s, yaw: following velocity direction", 
-  //            traj_id_, traj_duration_);
-  // }
-  // else
-  // {
-  //   ROS_INFO("[EGOTrajServer] Received trajectory, id: %d, duration: %.2f s, yaw: %.2f -> %.2f %s", 
-  //            traj_id_, traj_duration_, start_yaw_, end_yaw_,
-  //            use_target_yaw_ ? "(interpolating)" : "(small diff, following velocity)");
-  // }
 }
 
 void odomCallback(const nav_msgs::OdometryConstPtr &msg)
@@ -157,6 +185,9 @@ double angleDiff(double target, double current)
   return normalizeAngle(diff);
 }
 
+// 可选的轨迹指针，用于过渡期间使用旧轨迹
+boost::shared_ptr<poly_traj::Trajectory> active_traj_for_yaw_ = nullptr;
+
 std::pair<double, double> calculate_yaw(double t_cur, Eigen::Vector3d &pos, double dt)
 {
   constexpr double YAW_DOT_MAX_PER_SEC = 2 * M_PI;
@@ -165,26 +196,41 @@ std::pair<double, double> calculate_yaw(double t_cur, Eigen::Vector3d &pos, doub
 
   double yaw_temp;
   
+  // 使用活动轨迹（正常情况用traj_，过渡期间用prev_traj_）
+  auto active_traj = active_traj_for_yaw_ ? active_traj_for_yaw_ : traj_;
+  
+  // 计算速度方向的 yaw（始终计算，用于安全飞行）
+  Eigen::Vector3d dir = t_cur + time_forward_ <= traj_duration_
+                            ? active_traj->getPos(t_cur + time_forward_) - pos
+                            : active_traj->getPos(traj_duration_) - pos;
+  double velocity_yaw = dir.norm() > 0.1 ? atan2(dir(1), dir(0)) : last_yaw_;
+  
   if (use_target_yaw_)
   {
-    // Interpolate from start_yaw to end_yaw based on trajectory progress
-    // Use smooth interpolation (smoothstep) for better motion
+    // 混合策略：
+    // - 轨迹前 70%：跟随速度方向（安全飞行，朝前看）
+    // - 轨迹后 30%：从速度方向平滑过渡到目标 yaw（到达目标点前调整朝向）
     double progress = std::min(1.0, t_cur / traj_duration_);
-    double smooth_progress = progress * progress * (3.0 - 2.0 * progress);  // smoothstep
     
-    // Calculate interpolated yaw considering angle wrap-around
-    double yaw_diff = angleDiff(end_yaw_, start_yaw_);
-    yaw_temp = normalizeAngle(start_yaw_ + smooth_progress * yaw_diff);
+    const double transition_start = 0.7;  // 70% 时开始过渡
+    
+    if (progress < transition_start) {
+      // 前 70%：跟随速度方向
+      yaw_temp = velocity_yaw;
+    } else {
+      // 后 30%：从当前速度方向平滑过渡到目标 yaw
+      double transition_progress = (progress - transition_start) / (1.0 - transition_start);
+      double smooth_progress = transition_progress * transition_progress * (3.0 - 2.0 * transition_progress);
+      
+      // 从速度方向过渡到目标 yaw
+      double yaw_diff = angleDiff(end_yaw_, velocity_yaw);
+      yaw_temp = normalizeAngle(velocity_yaw + smooth_progress * yaw_diff);
+    }
   }
   else
   {
-    // Follow velocity direction (original behavior)
-    Eigen::Vector3d dir = t_cur + time_forward_ <= traj_duration_
-                              ? traj_->getPos(t_cur + time_forward_) - pos
-                              : traj_->getPos(traj_duration_) - pos;
-    yaw_temp = dir.norm() > 0.1
-                          ? atan2(dir(1), dir(0))
-                          : last_yaw_;
+    // Follow velocity direction (original behavior for preset waypoints)
+    yaw_temp = velocity_yaw;
   }
 
   double d_yaw = angleDiff(yaw_temp, last_yaw_);
@@ -292,11 +338,76 @@ void cmdCallback(const ros::TimerEvent &e)
 
   if (t_cur < 0.0)
   {
-    // Trajectory hasn't started yet, wait
-    return;
+    // ===== FALCON风格：新轨迹尚未开始，继续执行旧轨迹 =====
+    if (has_prev_traj_ && prev_traj_ != nullptr)
+    {
+      double t_prev = (time_now - prev_start_time_).toSec();
+      if (t_prev >= 0 && t_prev < prev_traj_duration_)
+      {
+        // 继续执行旧轨迹的位置/速度/加速度
+        pos = prev_traj_->getPos(t_prev);
+        vel = prev_traj_->getVel(t_prev);
+        acc = prev_traj_->getAcc(t_prev);
+        
+        // 临时切换到旧轨迹的yaw参数，使用统一的calculate_yaw处理
+        double saved_end_yaw = end_yaw_;
+        bool saved_use_target = use_target_yaw_;
+        double saved_duration = traj_duration_;
+        
+        end_yaw_ = prev_end_yaw_;
+        use_target_yaw_ = !std::isnan(prev_end_yaw_);
+        traj_duration_ = prev_traj_duration_;
+        active_traj_for_yaw_ = prev_traj_;  // 使用旧轨迹计算yaw
+        
+        // 使用统一的yaw计算逻辑（处理角度环绕和速度限制）
+        yaw_yawdot = calculate_yaw(t_prev, pos, (time_now - time_last).toSec());
+        
+        // 恢复新轨迹的yaw参数
+        end_yaw_ = saved_end_yaw;
+        use_target_yaw_ = saved_use_target;
+        traj_duration_ = saved_duration;
+        active_traj_for_yaw_ = nullptr;  // 恢复默认
+        
+        time_last = time_now;
+        last_yaw_ = yaw_yawdot.first;
+        last_pos_ = pos;
+        
+        publish_cmd(pos, vel, acc, yaw_yawdot.first, yaw_yawdot.second);
+        return;
+      }
+      else if (t_prev >= prev_traj_duration_)
+      {
+        // 旧轨迹已结束，等待新轨迹开始
+        // 关键修复：发送新轨迹起点位置，而不是旧轨迹末端位置
+        // 这样当 t_cur=0 新轨迹开始时，位置是连续的
+        pos = traj_->getPos(0);
+        vel = traj_->getVel(0);
+        acc = traj_->getAcc(0);
+        // yaw保持last_yaw_，由calculate_yaw的速度限制保证平滑
+        publish_cmd(pos, vel, acc, last_yaw_, 0);
+        return;
+      }
+    }
+    else
+    {
+      // 没有旧轨迹可执行，发送新轨迹起点位置等待
+      pos = traj_->getPos(0);
+      vel = traj_->getVel(0);
+      acc = traj_->getAcc(0);
+      publish_cmd(pos, vel, acc, last_yaw_, 0);
+      return;
+    }
   }
   else if (t_cur < traj_duration_)
   {
+    // ===== 新轨迹已开始，正常执行 =====
+    // 清除旧轨迹引用（不再需要）
+    if (has_prev_traj_)
+    {
+      has_prev_traj_ = false;
+      prev_traj_.reset();
+    }
+    
     pos = traj_->getPos(t_cur);
     vel = traj_->getVel(t_cur);
     acc = traj_->getAcc(t_cur);
