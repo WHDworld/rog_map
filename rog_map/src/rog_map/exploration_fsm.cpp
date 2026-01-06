@@ -47,6 +47,12 @@ void ExplorationFSM::init(ros::NodeHandle& nh, ROGMap::Ptr rog_map, GlobalMap::P
     nh_.param("exploration/init_wait_time", config_.init_wait_time, 2.0);
     nh_.param("exploration/min_frontier_cluster_size", config_.min_frontier_cluster_size, 50);
     
+    // 视点选择参数（避免近距离大转向）
+    nh_.param("exploration/min_viewpoint_distance", config_.min_viewpoint_distance, 2.0);
+    nh_.param("exploration/yaw_change_weight", config_.yaw_change_weight, 0.5);
+    nh_.param("exploration/large_yaw_threshold", config_.large_yaw_threshold, 1.57);
+    nh_.param("exploration/large_yaw_penalty", config_.large_yaw_penalty, 3.0);
+    
     // 起飞高度 - 从 EGO-Planner 配置读取，用于判断起飞是否完成
     nh_.param("fsm/takeoff_height", config_.takeoff_height, 1.0);
     
@@ -359,7 +365,43 @@ void ExplorationFSM::processExecExploration() {
     
     // 只在视点尚未发布时发布一次（避免频繁触发EGO-Planner重规划）
     if (!expl_data_.viewpoint_published) {
-        publishViewpointTarget(expl_data_.next_viewpoint);
+        // 尝试发布当前视点，如果失败（无法找到路径）则尝试下一个视点
+        bool publish_success = false;
+        int max_attempts = static_cast<int>(expl_data_.current_viewpoints.size());
+        int attempts = 0;
+        
+        while (!publish_success && attempts < max_attempts) {
+            if (publishViewpointTarget(expl_data_.next_viewpoint)) {
+                publish_success = true;
+            } else {
+                // 当前视点无法规划，尝试下一个
+                ROS_WARN("[ExplorationFSM] Viewpoint %d unreachable, trying next...",
+                         expl_data_.current_viewpoint_idx + 1);
+                expl_data_.current_viewpoint_idx++;
+                
+                if (expl_data_.current_viewpoint_idx >= static_cast<int>(expl_data_.current_viewpoints.size())) {
+                    ROS_WARN("[ExplorationFSM] All viewpoints unreachable, triggering replan");
+                    state_ = ExplorationState::UPDATE_FRONTIER;
+                    return;
+                }
+                
+                expl_data_.next_viewpoint = expl_data_.current_viewpoints[expl_data_.current_viewpoint_idx];
+                ROS_INFO("[ExplorationFSM] Trying viewpoint %d/%lu: (%.2f, %.2f, %.2f)",
+                         expl_data_.current_viewpoint_idx + 1,
+                         expl_data_.current_viewpoints.size(),
+                         expl_data_.next_viewpoint.position.x(),
+                         expl_data_.next_viewpoint.position.y(),
+                         expl_data_.next_viewpoint.position.z());
+            }
+            attempts++;
+        }
+        
+        if (!publish_success) {
+            ROS_ERROR("[ExplorationFSM] Failed to find reachable viewpoint after %d attempts", attempts);
+            state_ = ExplorationState::UPDATE_FRONTIER;
+            return;
+        }
+        
         expl_data_.viewpoint_published = true;
         
         // 记录轨迹开始时间
@@ -703,18 +745,22 @@ bool ExplorationFSM::selectNextViewpoint() {
 
 void ExplorationFSM::sortViewpointsByGreedy() {
     // 贪心排序策略（参考 EDEN 算法）：
-    // 从当前无人机位置开始，每次选择距离最近的未访问视点
+    // 从当前无人机位置开始，每次选择综合代价最低的未访问视点
+    // 综合代价 = 实际路径长度 + yaw变化权重 * |yaw差|
+    // 实际路径长度：如果需要回溯，使用历史节点路径长度；否则使用直线距离
     
     auto& viewpoints = expl_data_.current_viewpoints;
     if (viewpoints.size() <= 1) {
         return;
     }
     
-    // 获取当前无人机位置
+    // 获取当前无人机位置和yaw
     Eigen::Vector3d current_pos;
+    double current_yaw;
     {
         std::lock_guard<std::mutex> lock(odom_mutex_);
         current_pos = odom_pos_;
+        current_yaw = odom_yaw_;
     }
     
     std::vector<ExplorationViewpoint> sorted;
@@ -722,31 +768,108 @@ void ExplorationFSM::sortViewpointsByGreedy() {
     
     std::vector<bool> visited(viewpoints.size(), false);
     
-    // 第一个视点：选择距离无人机当前位置最近的
+    // 计算视点综合代价的 lambda 函数（第一个视点使用）
+    // 使用实际路径长度而非直线距离
+    auto computeFirstCost = [&](const ExplorationViewpoint& vp) -> double {
+        double direct_dist = (vp.position.cast<double>() - current_pos).norm();
+        
+        // 估算实际路径长度（考虑障碍物和回溯）
+        double path_dist = direct_dist;
+        if (viewpoint_generator_) {
+            float estimated = viewpoint_generator_->estimatePathLength(
+                current_pos.cast<float>(), vp.position);
+            if (estimated > 0) {
+                path_dist = static_cast<double>(estimated);
+            } else if (estimated < 0) {
+                // 无法到达，给一个很大的代价
+                path_dist = 1000.0;
+            }
+        }
+        
+        // 计算 yaw 变化（归一化到 [-π, π]）
+        double yaw_diff = vp.yaw - current_yaw;
+        while (yaw_diff > M_PI) yaw_diff -= 2 * M_PI;
+        while (yaw_diff < -M_PI) yaw_diff += 2 * M_PI;
+        double abs_yaw_diff = std::abs(yaw_diff);
+        
+        // 综合代价 = 实际路径长度 + yaw权重 * yaw差
+        double cost = path_dist + config_.yaw_change_weight * abs_yaw_diff;
+        
+        // 如果需要大量回溯（路径长度远大于直线距离），增加额外惩罚
+        if (path_dist > direct_dist * 2.0) {
+            double backtrack_penalty = (path_dist - direct_dist) * 0.5;  // 回溯惩罚
+            cost += backtrack_penalty;
+            ROS_DEBUG("[ExplorationFSM] Viewpoint (%.2f,%.2f,%.2f): needs backtrack, "
+                      "direct=%.2f, path=%.2f, penalty=%.2f",
+                      vp.position.x(), vp.position.y(), vp.position.z(),
+                      direct_dist, path_dist, backtrack_penalty);
+        }
+        
+        // 近距离大转向额外惩罚
+        if (direct_dist < config_.min_viewpoint_distance && 
+            abs_yaw_diff > config_.large_yaw_threshold) {
+            cost += config_.large_yaw_penalty;
+        }
+        
+        return cost;
+    };
+    
+    // 后续视点使用的代价函数（直线距离，因为已经在探索路径上了）
+    auto computeCost = [&](const ExplorationViewpoint& vp, 
+                           const Eigen::Vector3d& from_pos, 
+                           double from_yaw) -> double {
+        double dist = (vp.position.cast<double>() - from_pos).norm();
+        
+        // 计算 yaw 变化
+        double yaw_diff = vp.yaw - from_yaw;
+        while (yaw_diff > M_PI) yaw_diff -= 2 * M_PI;
+        while (yaw_diff < -M_PI) yaw_diff += 2 * M_PI;
+        double abs_yaw_diff = std::abs(yaw_diff);
+        
+        return dist + config_.yaw_change_weight * abs_yaw_diff;
+    };
+    
+    // 第一个视点：选择综合代价最低的（考虑实际路径长度）
     int best_idx = 0;
-    double best_dist = std::numeric_limits<double>::max();
+    double best_cost = std::numeric_limits<double>::max();
     for (size_t i = 0; i < viewpoints.size(); i++) {
-        double dist = (viewpoints[i].position.cast<double>() - current_pos).norm();
-        if (dist < best_dist) {
-            best_dist = dist;
+        double cost = computeFirstCost(viewpoints[i]);
+        
+        ROS_DEBUG("[ExplorationFSM] Viewpoint %zu: (%.2f,%.2f,%.2f) cost=%.2f",
+                  i, viewpoints[i].position.x(), viewpoints[i].position.y(),
+                  viewpoints[i].position.z(), cost);
+        
+        if (cost < best_cost) {
+            best_cost = cost;
             best_idx = static_cast<int>(i);
         }
     }
+    
+    // 记录第一个视点的信息
+    double best_direct_dist = (viewpoints[best_idx].position.cast<double>() - current_pos).norm();
+    double best_yaw_diff = std::abs(viewpoints[best_idx].yaw - current_yaw);
+    while (best_yaw_diff > M_PI) best_yaw_diff = 2 * M_PI - best_yaw_diff;
+    
     sorted.push_back(viewpoints[best_idx]);
     visited[best_idx] = true;
     
-    // 后续视点：每次选择距离上一个视点最近的未访问视点
+    ROS_INFO("[ExplorationFSM] Selected first viewpoint %d: direct_dist=%.2f, yaw_diff=%.2f, total_cost=%.2f",
+             best_idx, best_direct_dist, best_yaw_diff, best_cost);
+    
+    // 后续视点：每次选择综合代价最低的未访问视点
     while (sorted.size() < viewpoints.size()) {
-        Eigen::Vector3f last_pos = sorted.back().position;
+        Eigen::Vector3d last_pos = sorted.back().position.cast<double>();
+        double last_yaw = sorted.back().yaw;
+        
         best_idx = -1;
-        best_dist = std::numeric_limits<double>::max();
+        best_cost = std::numeric_limits<double>::max();
         
         for (size_t i = 0; i < viewpoints.size(); i++) {
             if (visited[i]) continue;
             
-            double dist = (viewpoints[i].position - last_pos).norm();
-            if (dist < best_dist) {
-                best_dist = dist;
+            double cost = computeCost(viewpoints[i], last_pos, last_yaw);
+            if (cost < best_cost) {
+                best_cost = cost;
                 best_idx = static_cast<int>(i);
             }
         }
@@ -762,8 +885,8 @@ void ExplorationFSM::sortViewpointsByGreedy() {
     // 更新视点列表
     viewpoints = std::move(sorted);
     
-    ROS_DEBUG("[ExplorationFSM] Viewpoints sorted by greedy (from UAV pos: %.2f, %.2f, %.2f)",
-              current_pos.x(), current_pos.y(), current_pos.z());
+    ROS_DEBUG("[ExplorationFSM] Viewpoints sorted by greedy with yaw cost (from UAV pos: %.2f, %.2f, %.2f, yaw: %.2f)",
+              current_pos.x(), current_pos.y(), current_pos.z(), current_yaw);
 }
 
 bool ExplorationFSM::getNextViewpoint(ExplorationViewpoint& viewpoint) {
@@ -1505,7 +1628,7 @@ void ExplorationFSM::clearVisualization() {
 }
 
 // ==================== 辅助函数 ====================
-void ExplorationFSM::publishViewpointTarget(const ExplorationViewpoint& vp) {
+bool ExplorationFSM::publishViewpointTarget(const ExplorationViewpoint& vp) {
     // 获取当前无人机位置
     Eigen::Vector3f current_pos;
     {
@@ -1516,10 +1639,12 @@ void ExplorationFSM::publishViewpointTarget(const ExplorationViewpoint& vp) {
     // 检查是否需要通过历史节点绕行
     std::vector<Eigen::Vector3f> intermediate_waypoints;
     bool need_detour = false;
+    bool obstacle_detected = false;
     
     if (viewpoint_generator_) {
         // 检查当前位置到目标视点之间是否有障碍物
         if (viewpoint_generator_->hasObstacleBetween(current_pos, vp.position)) {
+            obstacle_detected = true;
             // 需要绕行，查找通过历史节点的路径
             if (viewpoint_generator_->findPathViaHistoryNodes(
                     current_pos, vp.position, intermediate_waypoints)) {
@@ -1527,7 +1652,8 @@ void ExplorationFSM::publishViewpointTarget(const ExplorationViewpoint& vp) {
                 ROS_INFO("[ExplorationFSM] Obstacle detected, using %zu intermediate waypoints",
                          intermediate_waypoints.size());
             } else {
-                ROS_WARN("[ExplorationFSM] Obstacle detected but no path found via history nodes");
+                ROS_WARN("[ExplorationFSM] Obstacle detected but no path found via history nodes, skip this viewpoint");
+                return false;  // 无法找到有效路径，跳过这个视点
             }
         }
     }
@@ -1600,6 +1726,8 @@ void ExplorationFSM::publishViewpointTarget(const ExplorationViewpoint& vp) {
         
         viewpoint_pub_.publish(msg);
     }
+    
+    return true;  // 成功发布视点目标
 }
 
 bool ExplorationFSM::isNearViewpoint(const ExplorationViewpoint& vp) {

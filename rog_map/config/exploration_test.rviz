@@ -170,7 +170,7 @@ Visualization Manager:
           Color: 173; 127; 168
           Color Transformer: FlatColor
           Decay Time: 0
-          Enabled: true
+          Enabled: false
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -185,7 +185,7 @@ Visualization Manager:
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
-          Value: true
+          Value: false
         - Alpha: 1
           Class: rviz/Axes
           Enabled: false
@@ -739,7 +739,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/XYOrbit
-      Distance: 17.422178268432617
+      Distance: 42.515506744384766
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -747,17 +747,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: -13.089235305786133
-        Y: 2.833181858062744
-        Z: -7.058806659188122e-07
+        X: -5.4058122634887695
+        Y: -12.812213897705078
+        Z: 6.923513865331188e-06
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.9347971081733704
+      Pitch: 0.9997968673706055
       Target Frame: perfect_drone
-      Yaw: 2.3141510486602783
+      Yaw: 3.4091594219207764
     Saved:
       - Class: rviz/ThirdPersonFollower
         Distance: 17.48538589477539

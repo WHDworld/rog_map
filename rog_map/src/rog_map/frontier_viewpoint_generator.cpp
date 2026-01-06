@@ -1151,102 +1151,114 @@ bool FrontierViewpointGenerator::findPathViaHistoryNodes(
         return false;
     }
     
-    // 步骤1：找到距离起点最近的历史节点
-    int start_node_id = -1;
+    ROS_INFO("[ViewpointGen] Finding path from (%.2f,%.2f,%.2f) to (%.2f,%.2f,%.2f) via %zu history nodes",
+             start.x(), start.y(), start.z(), end.x(), end.y(), end.z(), history_nodes_.size());
+    
+    // 步骤1：找到距离起点最近且可达的历史节点
+    int start_idx = -1;
     float min_start_dist = std::numeric_limits<float>::max();
-    for (const auto& node : history_nodes_) {
-        float dist = (node.position - start).norm();
-        if (dist < min_start_dist) {
+    for (size_t i = 0; i < history_nodes_.size(); ++i) {
+        float dist = (history_nodes_[i].position - start).norm();
+        // 起点节点必须可达（无障碍）
+        if (dist < min_start_dist && !hasObstacleBetween(start, history_nodes_[i].position)) {
             min_start_dist = dist;
-            start_node_id = node.node_id;
+            start_idx = static_cast<int>(i);
         }
     }
     
-    // 步骤2：找到距离终点最近的历史节点
-    int end_node_id = -1;
+    // 步骤2：找到距离终点最近且可达的历史节点
+    int end_idx = -1;
     float min_end_dist = std::numeric_limits<float>::max();
-    for (const auto& node : history_nodes_) {
-        float dist = (node.position - end).norm();
-        if (dist < min_end_dist) {
+    for (size_t i = 0; i < history_nodes_.size(); ++i) {
+        float dist = (history_nodes_[i].position - end).norm();
+        // 终点节点必须可达（从该节点到终点无障碍）
+        if (dist < min_end_dist && !hasObstacleBetween(history_nodes_[i].position, end)) {
             min_end_dist = dist;
-            end_node_id = node.node_id;
+            end_idx = static_cast<int>(i);
         }
     }
     
-    if (start_node_id < 0 || end_node_id < 0) {
-        ROS_WARN("[ViewpointGen] Could not find start/end nodes");
+    if (start_idx < 0) {
+        ROS_WARN("[ViewpointGen] Could not find reachable start node from current position");
+        return false;
+    }
+    if (end_idx < 0) {
+        ROS_WARN("[ViewpointGen] Could not find reachable end node to target position");
         return false;
     }
     
-    // 如果起点和终点关联到同一个节点，不需要中间航点
-    if (start_node_id == end_node_id) {
-        return true;  // 成功，但没有中间航点
+    ROS_INFO("[ViewpointGen] Start node idx=%d at (%.2f,%.2f,%.2f), End node idx=%d at (%.2f,%.2f,%.2f)",
+             start_idx, history_nodes_[start_idx].position.x(), 
+             history_nodes_[start_idx].position.y(), history_nodes_[start_idx].position.z(),
+             end_idx, history_nodes_[end_idx].position.x(),
+             history_nodes_[end_idx].position.y(), history_nodes_[end_idx].position.z());
+    
+    // 如果起点和终点是同一个节点，直接通过该节点
+    if (start_idx == end_idx) {
+        waypoints.push_back(history_nodes_[start_idx].position);
+        ROS_INFO("[ViewpointGen] Start and end at same node, using single waypoint");
+        return true;
     }
     
-    // 步骤3：构建节点索引映射
-    std::unordered_map<int, int> node_id_to_idx;
+    // 步骤3：构建邻接表（基于可通行性检查）
+    // 重要：即使是索引相邻的节点，也需要检查障碍物（可能存在墙）
+    std::vector<std::vector<int>> adj(history_nodes_.size());
+    
+    // 3.1 检查所有节点对的连通性
+    float max_connect_dist = config_.history_node_distance * 4.0f;  // 最大连接距离
+    
     for (size_t i = 0; i < history_nodes_.size(); ++i) {
-        node_id_to_idx[history_nodes_[i].node_id] = static_cast<int>(i);
+        for (size_t j = i + 1; j < history_nodes_.size(); ++j) {
+            float dist = (history_nodes_[i].position - history_nodes_[j].position).norm();
+            
+            // 距离太远的节点不考虑
+            if (dist > max_connect_dist) continue;
+            
+            // 关键：检查两点之间是否无障碍
+            if (!hasObstacleBetween(history_nodes_[i].position, history_nodes_[j].position)) {
+                adj[i].push_back(j);
+                adj[j].push_back(i);
+            }
+        }
     }
     
-    // 步骤4：BFS 搜索路径
-    // 由于历史节点是沿轨迹顺序创建的，相邻节点天然连通
+    // 打印连通性统计
+    int total_edges = 0;
+    for (const auto& neighbors : adj) total_edges += neighbors.size();
+    ROS_DEBUG("[ViewpointGen] Built adjacency graph: %zu nodes, %d edges", 
+              history_nodes_.size(), total_edges / 2);
+    
+    // 步骤4：BFS 搜索最短路径
     std::vector<int> parent(history_nodes_.size(), -1);
     std::vector<bool> visited(history_nodes_.size(), false);
     std::queue<int> queue;
     
-    int start_idx = node_id_to_idx[start_node_id];
-    int end_idx = node_id_to_idx[end_node_id];
-    
     queue.push(start_idx);
     visited[start_idx] = true;
     
-    // BFS：历史节点按时间顺序存储，相邻节点自然连通
-    // 连通性：与前后节点连接，以及距离小于阈值的节点
-    float connect_dist = config_.history_node_distance * 2.0f;
-    
     while (!queue.empty()) {
-        int curr_idx = queue.front();
+        int curr = queue.front();
         queue.pop();
         
-        if (curr_idx == end_idx) break;  // 找到目标
+        if (curr == end_idx) break;  // 找到目标
         
-        // 检查所有可能的邻居
-        for (size_t i = 0; i < history_nodes_.size(); ++i) {
-            if (visited[i]) continue;
-            
-            // 连通条件：
-            // 1. 相邻节点（索引差1）
-            // 2. 或距离小于阈值
-            bool connected = false;
-            if (std::abs(static_cast<int>(i) - curr_idx) == 1) {
-                connected = true;  // 相邻节点
-            } else {
-                float dist = (history_nodes_[i].position - 
-                              history_nodes_[curr_idx].position).norm();
-                if (dist < connect_dist) {
-                    // 额外检查：两点之间无障碍物
-                    if (!hasObstacleBetween(history_nodes_[curr_idx].position,
-                                            history_nodes_[i].position)) {
-                        connected = true;
-                    }
-                }
-            }
-            
-            if (connected) {
-                visited[i] = true;
-                parent[i] = curr_idx;
-                queue.push(static_cast<int>(i));
+        for (int neighbor : adj[curr]) {
+            if (!visited[neighbor]) {
+                visited[neighbor] = true;
+                parent[neighbor] = curr;
+                queue.push(neighbor);
             }
         }
     }
     
-    // 步骤5：回溯路径
+    // 步骤5：检查是否找到路径
     if (!visited[end_idx]) {
-        ROS_WARN("[ViewpointGen] Could not find path between history nodes");
+        ROS_WARN("[ViewpointGen] Could not find path between history nodes (start_idx=%d, end_idx=%d)",
+                 start_idx, end_idx);
         return false;
     }
     
+    // 步骤6：回溯构建路径
     std::vector<int> path_indices;
     int curr = end_idx;
     while (curr != -1) {
@@ -1255,46 +1267,107 @@ bool FrontierViewpointGenerator::findPathViaHistoryNodes(
     }
     std::reverse(path_indices.begin(), path_indices.end());
     
-    // 步骤6：简化路径 - 移除不必要的中间点
-    // 策略：如果从节点 A 可以直接看到节点 C（无障碍），则移除中间的 B
-    std::vector<int> simplified_indices;
-    simplified_indices.push_back(path_indices[0]);
+    ROS_INFO("[ViewpointGen] Found raw path with %zu nodes", path_indices.size());
     
-    for (size_t i = 1; i < path_indices.size(); ++i) {
-        int last_idx = simplified_indices.back();
-        int curr_idx = path_indices[i];
-        
-        // 检查是否可以跳过中间节点
-        bool can_skip = false;
-        if (i + 1 < path_indices.size()) {
-            int next_idx = path_indices[i + 1];
-            if (!hasObstacleBetween(history_nodes_[last_idx].position,
-                                    history_nodes_[next_idx].position)) {
-                can_skip = true;  // 可以从 last 直接到 next
+    // 步骤7：路径简化 - 移除不必要的中间点
+    // 如果从节点 A 可以直接到节点 C（无障碍），则移除中间的 B
+    std::vector<int> simplified;
+    simplified.push_back(path_indices[0]);
+    
+    size_t i = 0;
+    while (i < path_indices.size() - 1) {
+        // 尝试跳过尽可能多的中间节点
+        size_t j = path_indices.size() - 1;
+        while (j > i + 1) {
+            if (!hasObstacleBetween(history_nodes_[path_indices[i]].position,
+                                    history_nodes_[path_indices[j]].position)) {
+                // 可以从 i 直接到 j
+                break;
             }
+            j--;
         }
-        
-        if (!can_skip) {
-            simplified_indices.push_back(curr_idx);
-        }
+        simplified.push_back(path_indices[j]);
+        i = j;
     }
     
-    // 确保终点节点在路径中
-    if (simplified_indices.back() != end_idx) {
-        simplified_indices.push_back(end_idx);
+    ROS_INFO("[ViewpointGen] Simplified path: %zu -> %zu nodes", path_indices.size(), simplified.size());
+    
+    // 步骤8：转换为航点（跳过起点节点，因为会从当前位置直接到第一个中间航点）
+    for (size_t k = 1; k < simplified.size(); ++k) {
+        waypoints.push_back(history_nodes_[simplified[k]].position);
     }
     
-    // 步骤7：转换为航点位置（跳过起点对应的节点，因为无人机已经在附近）
-    for (size_t i = 1; i < simplified_indices.size(); ++i) {
-        // 不需要严格到达历史节点，只需要作为引导点
-        // 所以使用历史节点位置作为中间航点
-        waypoints.push_back(history_nodes_[simplified_indices[i]].position);
+    // 打印路径信息
+    ROS_INFO("[ViewpointGen] Path waypoints (%zu):", waypoints.size());
+    for (size_t k = 0; k < waypoints.size(); ++k) {
+        ROS_INFO("  [%zu] (%.2f, %.2f, %.2f)", k, waypoints[k].x(), waypoints[k].y(), waypoints[k].z());
     }
-    
-    ROS_INFO("[ViewpointGen] Found path via %zu history nodes, simplified to %zu waypoints",
-             path_indices.size(), waypoints.size());
     
     return true;
+}
+
+float FrontierViewpointGenerator::estimatePathLength(
+    const Eigen::Vector3f& start,
+    const Eigen::Vector3f& end)
+{
+    float direct_dist = (end - start).norm();
+    
+    // 情况1：直线无障碍，直接返回直线距离
+    if (!hasObstacleBetween(start, end)) {
+        return direct_dist;
+    }
+    
+    // 情况2：直线有障碍，判断是否需要回溯
+    // 关键：检查终点附近是否有历史节点
+    // - 如果终点附近没有历史节点 → 新探索区域，不需要回溯，EGO-Planner可以规划
+    // - 如果终点附近有历史节点 → 已探索区域，可能需要回溯
+    
+    float min_dist_to_end = std::numeric_limits<float>::max();
+    int nearest_end_node = -1;
+    for (size_t i = 0; i < history_nodes_.size(); ++i) {
+        float dist = (history_nodes_[i].position - end).norm();
+        if (dist < min_dist_to_end) {
+            min_dist_to_end = dist;
+            nearest_end_node = static_cast<int>(i);
+        }
+    }
+    
+    // 如果终点附近没有历史节点（距离 > 阈值），说明是新探索区域
+    // EGO-Planner可以直接规划过去（绕开拐角），返回稍微增加的距离
+    float history_threshold = config_.history_node_distance * 3.0f;
+    if (min_dist_to_end > history_threshold) {
+        // 新探索区域，返回直线距离的1.3倍（考虑可能需要绕开拐角）
+        ROS_DEBUG("[ViewpointGen] estimatePathLength: target is new area (dist_to_nearest_node=%.2f > %.2f), "
+                  "returning %.2f (1.3x direct)",
+                  min_dist_to_end, history_threshold, direct_dist * 1.3f);
+        return direct_dist * 1.3f;
+    }
+    
+    // 情况3：终点附近有历史节点，尝试通过历史节点回溯
+    std::vector<Eigen::Vector3f> waypoints;
+    if (!findPathViaHistoryNodes(start, end, waypoints)) {
+        // 找不到路径，但这不一定意味着无法到达
+        // 可能是新探索区域的边缘，EGO-Planner仍可能规划成功
+        ROS_DEBUG("[ViewpointGen] estimatePathLength: no path via history nodes, "
+                  "but target may still be reachable, returning %.2f (2x direct)",
+                  direct_dist * 2.0f);
+        return direct_dist * 2.0f;  // 给一个适中的代价
+    }
+    
+    // 计算实际路径长度
+    float path_length = 0.0f;
+    Eigen::Vector3f prev = start;
+    for (const auto& wp : waypoints) {
+        path_length += (wp - prev).norm();
+        prev = wp;
+    }
+    path_length += (end - prev).norm();
+    
+    ROS_DEBUG("[ViewpointGen] estimatePathLength: via %zu waypoints, "
+              "direct=%.2f, actual=%.2f",
+              waypoints.size(), direct_dist, path_length);
+    
+    return path_length;
 }
 
 } // namespace rog_map

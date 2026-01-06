@@ -259,10 +259,10 @@ void ProbMap::updateOccPointCloud(const PointCloud& input_cloud) {
     for (int i = 0; i < cloud_in_size; i++) {
         static Vec3f p, ray_pt;
         static Vec3i pt_id_g, pt_id_l;
-        if (cfg_.intensity_thresh > 0 &&
-            input_cloud[i].intensity < cfg_.intensity_thresh) {
-            continue;
-        }
+        // if (cfg_.intensity_thresh > 0 &&
+        //     input_cloud[i].intensity < cfg_.intensity_thresh) {
+        //     continue;
+        // }
 
         p.x() = input_cloud[i].x;
         p.y() = input_cloud[i].y;
@@ -730,10 +730,10 @@ void ProbMap::raycastProcess(const PointCloud& input_cloud, const Vec3f& cur_odo
     int temperol_cnt{0};
     for (const auto& pcl_p : input_cloud) {
         // 1.1) intensity filter
-        if (cfg_.intensity_thresh > 0 &&
-            pcl_p.intensity < cfg_.intensity_thresh) {
-            continue;
-        }
+        // if (cfg_.intensity_thresh > 0 &&
+        //     pcl_p.intensity < cfg_.intensity_thresh) {
+        //     continue;
+        // }
 
         // 1.2) temporal filter
         if (temperol_cnt++ % cfg_.point_filt_num) {

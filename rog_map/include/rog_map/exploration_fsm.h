@@ -112,6 +112,12 @@ struct ExplorationFSMConfig {
     int min_frontier_cluster_size = 50;     // 最小前沿簇大小
     double takeoff_height = 1.0;            // 起飞高度 (m) - 用于判断是否起飞完成
     
+    // 视点选择参数（避免近距离大转向）
+    double min_viewpoint_distance = 2.0;    // 视点最小距离 (m) - 小于此值考虑 yaw 惩罚
+    double yaw_change_weight = 0.5;         // yaw 变化权重 (m/rad) - 转1rad相当于多飞多少米
+    double large_yaw_threshold = 1.57;      // 大转向阈值 (rad) - 超过90°视为大转向
+    double large_yaw_penalty = 3.0;         // 近距离大转向额外惩罚 (m)
+    
     // 可视化参数
     bool enable_visualization = true;
     double viewpoint_sphere_radius = 0.2;
@@ -215,7 +221,8 @@ private:
     void clearVisualization();
     
     // ==================== 辅助函数 ====================
-    void publishViewpointTarget(const ExplorationViewpoint& vp);
+    // 发布视点目标，如果无法找到有效路径返回 false
+    bool publishViewpointTarget(const ExplorationViewpoint& vp);
     bool isNearViewpoint(const ExplorationViewpoint& vp);
     double getYawDiff(double yaw1, double yaw2);
     

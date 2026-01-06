@@ -251,6 +251,19 @@ public:
     bool findPathViaHistoryNodes(const Eigen::Vector3f& start,
                                   const Eigen::Vector3f& end,
                                   std::vector<Eigen::Vector3f>& waypoints);
+    
+    /**
+     * @brief 估算从起点到终点的实际路径长度
+     * 
+     * 用于视点选择优先级，考虑是否需要历史节点回溯
+     * 
+     * @param start 起点位置
+     * @param end 终点位置
+     * @return 估算的路径长度（如果需要回溯会比直线距离大）
+     *         返回 -1 表示无法到达
+     */
+    float estimatePathLength(const Eigen::Vector3f& start,
+                             const Eigen::Vector3f& end);
 
 private:
     // ==================== 历史节点管理 ====================
