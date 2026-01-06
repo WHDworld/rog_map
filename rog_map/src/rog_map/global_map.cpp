@@ -595,8 +595,10 @@ void GlobalMap::visualizeGlobalMapVoxels()
         point.y = pos.y();
         point.z = pos.z();
         
-        // 根据状态设置颜色并添加到对应的点云
-        switch(state)
+        // 根据几何状态设置颜色并添加到对应的点云
+        // 重要：必须使用 MASK_GEO 提取几何状态位，否则带有 FLAG_VISITED 的体素会被遗漏！
+        uint8_t geo_state = state & VoxelStateBits::MASK_GEO;
+        switch(geo_state)
         {
             case VoxelStateBits::GEO_UNKNOWN:
                 // 不显示 UNKNOWN 状态（因为默认就是未知）
@@ -609,7 +611,7 @@ void GlobalMap::visualizeGlobalMapVoxels()
                 free_cloud.push_back(point);
                 break;
             case VoxelStateBits::GEO_OCCUPIED:
-                // 红色
+                // 红色（无论是否已访问，几何障碍物都显示）
                 point.r = 255;
                 point.g = 0;
                 point.b = 0;

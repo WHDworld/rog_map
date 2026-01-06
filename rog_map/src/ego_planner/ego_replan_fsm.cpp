@@ -40,6 +40,9 @@ namespace ego_planner
     nh.param("fsm/replan_duration", replan_duration_, 0.05);
     nh.param("fsm/auto_start_preset", auto_start_preset_, true);
     
+    /* Simulation mode: 0=gazebo, 1=open3d, 2=real */
+    nh.param("fsm/sim_mode", sim_mode_, 0);
+    
     // FALCON风格：设置重规划时间偏移，用于轨迹连续性
     planner_manager_->setReplanTimeOffset(replan_duration_);
 
@@ -80,7 +83,9 @@ namespace ego_planner
       trigger_sub_ = nh.subscribe("/traj_start_trigger", 1, &EGOReplanFSM::triggerCallback, this);
     }
 
-    ROS_INFO("[EGOReplanFSM] Initialized with target_type=%d", target_type_);
+    const char* sim_mode_str[] = {"GAZEBO", "OPEN3D", "REAL"};
+    ROS_INFO("[EGOReplanFSM] Initialized with target_type=%d, sim_mode=%s", 
+             target_type_, sim_mode_str[sim_mode_]);
     if (target_type_ == TARGET_TYPE::PRESET_TARGET)
     {
       ROS_INFO("[EGOReplanFSM] Preset waypoints (%d):", waypoint_num_);
@@ -117,56 +122,118 @@ namespace ego_planner
         goto force_return;
       }
       initial_pos_ = odom_pos_;
-      changeFSMExecState(PRE_ARM, "FSM");
+      
+      if (sim_mode_ == SIM_OPEN3D)
+      {
+        // Open3D mode: no FCU, directly go to TAKEOFF
+        offboard_ready_ = true;
+        takeoff_start_time_ = ros::Time::now();
+        // 关键修复：hover_pos_ 应该设置为目标起飞高度，而不是当前位置（z=0）
+        // 这样即使起飞过程中出现问题，悬停位置也不会是地面
+        double target_height = initial_pos_.z() + takeoff_height_;
+        hover_pos_ = Eigen::Vector3d(initial_pos_.x(), initial_pos_.y(), target_height);
+        hover_yaw_ = odom_yaw_;
+        hover_pos_set_ = true;
+        ROS_INFO("[EGOReplanFSM] Open3D mode: skipping PRE_ARM, starting takeoff to z=%.2f", target_height);
+        changeFSMExecState(TAKEOFF, "FSM");
+      }
+      else
+      {
+        // Gazebo or Real mode: go through PRE_ARM
+        changeFSMExecState(PRE_ARM, "FSM");
+      }
       break;
     }
 
     case PRE_ARM:
     {
-      // Wait for connection and request OFFBOARD mode
-      static ros::Time last_request = ros::Time::now();
-      static int arm_attempts = 0;
-      
-      if (!current_state_.connected)
+      if (sim_mode_ == SIM_REAL)
       {
-        ROS_INFO_THROTTLE(1.0, "[EGOReplanFSM] Waiting for FCU connection...");
-        goto force_return;
-      }
-
-      // First send setpoints before switching to OFFBOARD
-      publishHoverCmd();
-      
-      if (current_state_.mode != "OFFBOARD" && (ros::Time::now() - last_request > ros::Duration(2.0)))
-      {
-        mavros_msgs::SetMode offb_set_mode;
-        offb_set_mode.request.custom_mode = "OFFBOARD";
-        if (set_mode_client_.call(offb_set_mode) && offb_set_mode.response.mode_sent)
+        // Real flight mode: wait for manual arming and OFFBOARD mode switch
+        // User arms and switches to OFFBOARD manually, then we auto-takeoff
+        static bool waiting_printed = false;
+        
+        if (!current_state_.connected)
         {
-          ROS_INFO("[EGOReplanFSM] OFFBOARD mode requested");
+          ROS_INFO_THROTTLE(1.0, "[EGOReplanFSM] REAL mode: Waiting for FCU connection...");
+          goto force_return;
         }
-        last_request = ros::Time::now();
-      }
-      else if (!current_state_.armed && (ros::Time::now() - last_request > ros::Duration(2.0)))
-      {
-        mavros_msgs::CommandBool arm_cmd;
-        arm_cmd.request.value = true;
-        if (arming_client_.call(arm_cmd) && arm_cmd.response.success)
+        
+        if (!waiting_printed)
         {
-          ROS_INFO("[EGOReplanFSM] Vehicle armed");
+          ROS_INFO("[EGOReplanFSM] REAL mode: Waiting for manual arming and OFFBOARD mode...");
+          ROS_INFO("[EGOReplanFSM] Please arm the vehicle and switch to OFFBOARD mode manually.");
+          waiting_printed = true;
         }
-        last_request = ros::Time::now();
-        arm_attempts++;
+        
+        // Send hover command to keep setpoint active
+        publishHoverCmd();
+        
+        // Wait for both armed and OFFBOARD mode (set manually by pilot)
+        if (current_state_.mode == "OFFBOARD" && current_state_.armed)
+        {
+          offboard_ready_ = true;
+          takeoff_start_time_ = ros::Time::now();
+          hover_pos_ = odom_pos_;
+          hover_yaw_ = odom_yaw_;
+          hover_pos_set_ = true;
+          changeFSMExecState(TAKEOFF, "FSM");
+          ROS_INFO("[EGOReplanFSM] REAL mode: Manual arming detected, starting takeoff");
+          waiting_printed = false;
+        }
+        else
+        {
+          ROS_INFO_THROTTLE(2.0, "[EGOReplanFSM] REAL mode: armed=%d, mode=%s (waiting for OFFBOARD+armed)", 
+                           current_state_.armed, current_state_.mode.c_str());
+        }
       }
-
-      if (current_state_.mode == "OFFBOARD" && current_state_.armed)
+      else  // SIM_GAZEBO mode
       {
-        offboard_ready_ = true;
-        takeoff_start_time_ = ros::Time::now();
-        hover_pos_ = odom_pos_;
-        hover_yaw_ = odom_yaw_;
-        hover_pos_set_ = true;
-        changeFSMExecState(TAKEOFF, "FSM");
-        ROS_INFO("[EGOReplanFSM] OFFBOARD mode enabled, starting takeoff");
+        // Wait for connection and request OFFBOARD mode automatically
+        static ros::Time last_request = ros::Time::now();
+        static int arm_attempts = 0;
+        
+        if (!current_state_.connected)
+        {
+          ROS_INFO_THROTTLE(1.0, "[EGOReplanFSM] GAZEBO mode: Waiting for FCU connection...");
+          goto force_return;
+        }
+
+        // First send setpoints before switching to OFFBOARD
+        publishHoverCmd();
+        
+        if (current_state_.mode != "OFFBOARD" && (ros::Time::now() - last_request > ros::Duration(2.0)))
+        {
+          mavros_msgs::SetMode offb_set_mode;
+          offb_set_mode.request.custom_mode = "OFFBOARD";
+          if (set_mode_client_.call(offb_set_mode) && offb_set_mode.response.mode_sent)
+          {
+            ROS_INFO("[EGOReplanFSM] GAZEBO mode: OFFBOARD mode requested");
+          }
+          last_request = ros::Time::now();
+        }
+        else if (!current_state_.armed && (ros::Time::now() - last_request > ros::Duration(2.0)))
+        {
+          mavros_msgs::CommandBool arm_cmd;
+          arm_cmd.request.value = true;
+          if (arming_client_.call(arm_cmd) && arm_cmd.response.success)
+          {
+            ROS_INFO("[EGOReplanFSM] GAZEBO mode: Vehicle armed");
+          }
+          last_request = ros::Time::now();
+          arm_attempts++;
+        }
+
+        if (current_state_.mode == "OFFBOARD" && current_state_.armed)
+        {
+          offboard_ready_ = true;
+          takeoff_start_time_ = ros::Time::now();
+          hover_pos_ = odom_pos_;
+          hover_yaw_ = odom_yaw_;
+          hover_pos_set_ = true;
+          changeFSMExecState(TAKEOFF, "FSM");
+          ROS_INFO("[EGOReplanFSM] GAZEBO mode: OFFBOARD enabled, starting takeoff");
+        }
       }
       break;
     }
@@ -176,8 +243,10 @@ namespace ego_planner
       double elapsed = (ros::Time::now() - takeoff_start_time_).toSec();
       double target_height = initial_pos_.z() + takeoff_height_;
       
+      // All modes use the same takeoff logic - send position commands to reach target height
       publishTakeoffCmd();
       
+      // Check if takeoff is complete
       if (odom_pos_.z() > target_height - 0.1 && elapsed > takeoff_accel_time_)
       {
         hover_pos_ = Eigen::Vector3d(initial_pos_.x(), initial_pos_.y(), target_height);
@@ -189,12 +258,28 @@ namespace ego_planner
           readGivenWpsAndPlan();
           have_trigger_ = true;
           changeFSMExecState(WAIT_TARGET, "FSM");
-          ROS_INFO("[EGOReplanFSM] Takeoff complete, starting preset path");
+          if (sim_mode_ == SIM_OPEN3D)
+            ROS_INFO("[EGOReplanFSM] Open3D mode: Takeoff complete (z=%.2f), starting preset path", odom_pos_.z());
+          else
+            ROS_INFO("[EGOReplanFSM] Takeoff complete (z=%.2f), starting preset path", odom_pos_.z());
         }
         else
         {
           changeFSMExecState(WAIT_TARGET, "FSM");
-          ROS_INFO("[EGOReplanFSM] Takeoff complete, waiting for target");
+          if (sim_mode_ == SIM_OPEN3D)
+            ROS_INFO("[EGOReplanFSM] Open3D mode: Takeoff complete (z=%.2f), waiting for target", odom_pos_.z());
+          else
+            ROS_INFO("[EGOReplanFSM] Takeoff complete (z=%.2f), waiting for target", odom_pos_.z());
+        }
+      }
+      else
+      {
+        // Print takeoff progress periodically
+        static ros::Time last_print = ros::Time(0);
+        if ((ros::Time::now() - last_print).toSec() > 1.0)
+        {
+          ROS_INFO("[EGOReplanFSM] Takeoff in progress: z=%.2f / %.2f", odom_pos_.z(), target_height);
+          last_print = ros::Time::now();
         }
       }
       break;
@@ -225,6 +310,9 @@ namespace ego_planner
 
     case GEN_NEW_TRAJ:
     {
+      // 关键：在规划过程中持续发布悬停指令，避免指令空隙
+      publishHoverCmd();
+      
       bool success = planFromGlobalTraj(10);
       if (success)
       {
@@ -240,6 +328,11 @@ namespace ego_planner
 
     case REPLAN_TRAJ:
     {
+      // 关键：在重规划过程中持续发布悬停指令，避免指令空隙
+      // 注意：这里不发布悬停指令，因为 ego_traj_server 正在执行旧轨迹
+      // 如果发布悬停指令会与 ego_traj_server 冲突
+      // ego_traj_server 的 FALCON 风格双缓存机制会在重规划期间继续执行旧轨迹
+      
       if (planFromLocalTraj(1))
       {
         changeFSMExecState(EXEC_TRAJ, "FSM");
@@ -312,6 +405,15 @@ namespace ego_planner
 
     case EMERGENCY_STOP:
     {
+      // 安全检查：确保悬停高度不低于起飞高度
+      double min_safe_height = initial_pos_.z() + takeoff_height_ * 0.5;  // 至少是起飞高度的一半
+      if (hover_pos_.z() < min_safe_height)
+      {
+        ROS_WARN_ONCE("[EGOReplanFSM] Emergency hover height %.2f is too low, correcting to %.2f",
+                      hover_pos_.z(), min_safe_height);
+        hover_pos_.z() = min_safe_height;
+      }
+      
       publishHoverCmd();
       ROS_WARN_THROTTLE(1.0, "[EGOReplanFSM] EMERGENCY STOP! Hovering at (%.2f, %.2f, %.2f)",
                         hover_pos_.x(), hover_pos_.y(), hover_pos_.z());
@@ -379,7 +481,16 @@ namespace ego_planner
     hover_yaw_ = odom_yaw_;
     hover_pos_set_ = true;
     
-    planner_manager_->EmergencyStop(stop_pos);
+    // 安全检查：确保紧急停止高度不低于起飞高度的一半
+    double min_safe_height = initial_pos_.z() + takeoff_height_ * 0.5;
+    if (hover_pos_.z() < min_safe_height)
+    {
+      ROS_WARN("[EGOReplanFSM] Emergency stop height %.2f is too low, correcting to %.2f",
+               hover_pos_.z(), min_safe_height);
+      hover_pos_.z() = min_safe_height;
+    }
+    
+    planner_manager_->EmergencyStop(hover_pos_);  // 使用修正后的位置
     return true;
   }
 
@@ -849,6 +960,8 @@ namespace ego_planner
     cmd.acceleration.z = 0.0;
     cmd.yaw = hover_yaw_;
     cmd.yaw_dot = 0.0;
+    cmd.trajectory_flag = quadrotor_msgs::PositionCommand::TRAJECTORY_STATUS_READY;
+    cmd.trajectory_id = 0;
     
     pos_cmd_pub_.publish(cmd);
   }
@@ -876,6 +989,8 @@ namespace ego_planner
     cmd.acceleration.z = 0.0;
     cmd.yaw = hover_yaw_;
     cmd.yaw_dot = 0.0;
+    cmd.trajectory_flag = quadrotor_msgs::PositionCommand::TRAJECTORY_STATUS_READY;
+    cmd.trajectory_id = 0;
     
     pos_cmd_pub_.publish(cmd);
   }

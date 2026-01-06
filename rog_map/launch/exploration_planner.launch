@@ -20,6 +20,12 @@
     <arg name="odom_topic" default="/ground_truth/odom"/>
     <arg name="cloud_topic" default="/cloud_registered"/>
     
+    <!-- ★★★ 仿真模式 ★★★ -->
+    <!-- 0 = GAZEBO: Gazebo + PX4 仿真，自动解锁和OFFBOARD切换 -->
+    <!-- 1 = OPEN3D: Open3D仿真，无FCU，直接位置控制 -->
+    <!-- 2 = REAL:   实物飞行，等待手动解锁和OFFBOARD切换 -->
+    <arg name="sim_mode" default="0"/>
+    
     <!-- ★★★ 飞行模式 ★★★ -->
     <!-- 1 = 探索模式：接收 /exploration/viewpoint 话题的目标 -->
     <!-- 2 = 预设路径点模式：按顺序飞往预设路径点 -->
@@ -48,6 +54,7 @@
         
         <!-- FSM 参数覆盖 -->
         <param name="fsm/flight_type" value="$(arg flight_type)"/>
+        <param name="fsm/sim_mode" value="$(arg sim_mode)"/>
         <param name="fsm/auto_start_preset" value="$(arg auto_start)"/>
         
         <!-- ROG-Map 话题重映射 -->

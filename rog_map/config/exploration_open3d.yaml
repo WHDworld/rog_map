@@ -1,0 +1,303 @@
+# ============================================================
+#     探索系统统一配置文件 (Unified Exploration Configuration)
+# ============================================================
+# 
+# 包含内容:
+#   1. ROG-Map 地图配置
+#   2. EGO-Planner 规划器配置
+#   3. 探索状态机配置
+#   4. 视点生成器配置
+#   5. 可视化配置
+#
+# 使用方法:
+#   roslaunch rog_map exploration_planner.launch
+#
+# ============================================================
+
+# ============================================================
+#                    ROG-Map 地图配置
+# ============================================================
+rog_map:
+  # ---------- 基础地图参数 ----------
+  resolution: 0.2                   # 体素分辨率 [m]
+  map_size: [20, 20, 6]             # 局部地图尺寸 [m]
+  fix_map_origin: [0, 0, 0]         # 固定地图原点
+  
+  # ---------- 膨胀地图 ----------
+  inflation_resolution: 0.2         # 膨胀分辨率 [m]
+  inflation_step: 1                 # 膨胀步长
+  unk_inflation_en: false           # 未知区域膨胀是否启用
+  unk_inflation_step: 1             # 未知区域膨胀步长
+  
+  # ---------- 前沿提取 ----------
+  frontier_extraction_en: false     # 启用前沿提取（使用GlobalMap的前沿提取）
+  
+  # ---------- 虚拟边界 ----------
+  virtual_ceil_height: 9999         # 虚拟天花板高度 [m]
+  virtual_ground_height: -9999      # 虚拟地面高度 [m]
+  
+  # ---------- 其他选项 ----------
+  block_inf_pt: false
+  kd_tree_en: false
+  load_pcd_en: false
+  intensity_thresh: -10
+  point_filt_num: 1
+  
+  # ---------- 滑动窗口 ----------
+  map_sliding:
+    enable: true
+    threshold: 1.0                  # 滑动触发阈值 [m]
+  
+  # ---------- ESDF地图 ----------
+  esdf:
+    enable: false                   # 是否启用ESDF
+    resolution: 0.1                 # ESDF分辨率 [m]
+    local_update_box: [10, 10, 6]   # 局部更新范围 [m]
+  
+  # ---------- 射线追踪 ----------
+  raycasting:
+    enable: true
+    blind_filter_en: false
+    blind_filter_dis: 1.0
+    batch_update_size: 1
+    local_update_box: [20, 20, 6]
+    ray_range: [0.0, 10]            # 有效射线范围 [m]
+    # 概率更新参数
+    p_min: 0.12                     # 最小占用概率
+    p_miss: 0.35                    # 未命中更新概率
+    p_free: 0.499                   # 自由空间阈值
+    p_occ: 0.65                     # 占用阈值（降低以更快确认占用）
+    p_hit: 0.70                     # 命中更新概率（提高以更快累积）
+    p_max: 0.90                     # 最大占用概率
+    unk_thresh: 1.0                 # 未知阈值
+  
+  # ---------- 全局地图 ----------
+  global_map:
+    enable: true
+    map_size: [50, 50, 2.0]       # 全局地图尺寸 [m]
+    map_model: 0
+    ground_height: -0.01            # 地面高度 [m]
+    ceil_height: 9990               # 天花板高度 [m]
+    sub_grid_xy: 0.03               # 子网格比例因子
+  
+  # ---------- 相机视锥体 ----------
+  camera_map:
+    enable: true
+    fov_h_deg: 90                   # 水平FOV [度]
+    fov_v_deg: 60                   # 垂直FOV [度]
+    max_dist: 5.0                   # 最大感知距离 [m]
+    min_dist: 0.3                   # 最小感知距离 [m]
+  
+  # ---------- ROS回调 ----------
+  ros_callback:
+    enable: true
+    cloud_topic: "/livox/lidar"
+    odom_topic: "/uav_simulator/odometry"
+    odom_timeout: 2.0               # 里程计超时 [s]
+  
+  # ---------- 可视化 ----------
+  visualization:
+    enable: true
+    use_dynamic_reconfigure: false
+    time_rate: 10
+    frame_rate: 0
+    range: [20, 20, 6]
+    frame_id: "map"
+    pub_unknown_map_en: true
+
+
+# ============================================================
+#                EGO-Planner 规划器配置
+# ============================================================
+
+# ---------- 规划状态机 FSM ----------
+fsm:
+  # ★★★ 飞行模式设置 ★★★
+  # 1 = 外部目标模式：接收 /exploration/viewpoint 话题的目标
+  # 2 = 预设路径点模式：按顺序飞往预设路径点
+  flight_type: 1
+  
+  # ★★★ 仿真模式设置 ★★★
+  # 0 = GAZEBO: Full FCU/MAVROS integration (Gazebo + PX4)
+  # 1 = OPEN3D: No FCU, direct position command (Open3D simulator)
+  # 2 = REAL:   Real flight - wait for manual arming, then auto-takeoff
+  sim_mode: 1
+  
+  # ★★★ 起飞后行为 ★★★
+  # true  = 起飞后自动开始执行（仅 flight_type=2 时有效）
+  # false = 起飞后等待目标（flight_type=1 时应设为 false）
+  auto_start_preset: false
+  
+  # 起飞参数
+  takeoff_height: 1.0               # 起飞高度 [m]
+  takeoff_accel_time: 1.0           # 起飞加速时间 [s]
+  
+  # 重规划参数
+  thresh_replan_time: 1.0           # 剩余时间重规划阈值 [s]
+  thresh_no_replan_meter: 1.0       # 接近目标不重规划距离 [m]
+  planning_horizon: 7.5             # 规划视野 [m]
+  replan_duration: 0.10              # 重规划轨迹起始时间偏移 [s] - 补偿规划延迟，避免位置回退
+  
+  # 安全参数
+  fail_safe: true                   # 启用故障保护
+  emergency_time: 1.0               # 紧急制动时间 [s]
+  
+  # 预设路径点（仅 flight_type=2 时使用）
+  waypoint_num: 1
+  waypoint0_x: 0.0
+  waypoint0_y: 0.0
+  waypoint0_z: 1.0
+
+# ---------- ★★★ 统一动力学约束 ★★★ ----------
+# 这些参数同时被 manager 和 optimization 使用
+dynamics:
+  max_vel: 1.0                      # 最大速度 [m/s]
+  max_acc: 1.0                      # 最大加速度 [m/s²]
+  max_yaw_rate: 0.15                 # 最大偏航角速度 [rad/s] (~30°/s)
+  max_yaw_acc: 0.15                  # 最大偏航角加速度 [rad/s²]
+
+# ---------- 规划管理器 ----------
+manager:
+  # 速度/加速度使用 dynamics 部分的统一值
+  feasibility_tolerance: 0.05       # 可行性容差
+  polyTraj_piece_length: 1.5        # 多项式轨迹段长度 [m]
+  planning_horizon: 12.0             # 规划视野 [m]
+  use_distinctive_trajs: true      # 是否使用多拓扑轨迹搜索
+
+# ---------- 轨迹优化 (MINCO) ----------
+optimization:
+  # 约束点
+  constraint_points_perPiece: 5     # 每段轨迹的约束点数
+  
+  # 优化权重
+  weight_obstacle: 50000.0          # 障碍物代价权重
+  weight_obstacle_soft: 5000.0      # 软约束障碍物权重
+  weight_feasibility: 10000.0       # 可行性约束权重
+  weight_sqrvariance: 10000.0       # 段长度方差权重
+  weight_time: 10.0                 # 时间优化权重
+  
+  # 安全距离
+  obstacle_clearance: 1.25           # 硬约束安全距离 [m]
+  obstacle_clearance_soft: 0.75      # 软约束安全距离 [m]
+  
+  # 高度保持（用于室内/走廊场景）
+  # 注意：为防止无人机飞高越墙，需要强约束高度
+  enable_height_keeping: true       # 是否启用高度保持
+  weight_height: 500000.0           # 高度保持权重（增大10x，强力约束）
+  height_tolerance: 0.1             # 高度容差 [m]（减小，只允许±0.1m波动）
+
+# ---------- 轨迹服务器 ----------
+traj_server:
+  time_forward: 1.0                 # Yaw规划前向时间 [s]
+
+
+# ============================================================
+#                   探索状态机配置
+# ============================================================
+exploration:
+  # ---------- FSM频率设置 ----------
+  fsm_frequency: 100.0              # FSM主循环频率 [Hz]
+  frontier_update_frequency: 1.0    # 前沿更新频率 [Hz]
+  safety_check_frequency: 20.0      # 安全检查频率 [Hz]
+  visualization_frequency: 10.0     # 可视化频率 [Hz]
+  
+  # ---------- 重规划阈值（参考 Falcon Planner） ----------
+  replan_thresh_reached: 0.5          # 到达视点位置阈值 [m]
+  replan_thresh_yaw: 0.15             # 到达视点偏航阈值 [rad] (~8.6°)
+  replan_thresh_time: 5.0             # 周期性重规划时间 [s] - Falcon默认3.0
+  replan_thresh_frontier: 0.5         # 最小执行时间后才检查覆盖 [s] - Falcon默认0.2
+  replan_thresh_traj_remain: 0.5      # 轨迹剩余时间阈值 [s] - Falcon默认0.05
+  frontier_covered_ratio: 0.25        # 前沿覆盖比例触发重规划 [0-1] - Falcon默认0.25
+  
+  # ---------- ★★★ 探索触发参数 ★★★ ----------
+  # auto_start: 是否自动开始探索
+  #   true  = 起飞完成后自动开始探索（无需用户触发）
+  #   false = 起飞完成后等待用户在 RViz 中点击 2D Nav Goal 触发
+  auto_start: false
+  init_wait_time: 2.0               # 初始化等待时间 [s]
+  
+  # ---------- 视点选择参数（避免近距离大转向） ----------
+  # 问题：如果视点距离很近但 yaw 变化很大，无人机会原地大幅转向，效率很低
+  # 解决：综合考虑距离和 yaw 变化，对近距离大转向给予惩罚
+  min_viewpoint_distance: 2.5       # 视点最小距离 [m] - 小于此值时考虑 yaw 惩罚
+  yaw_change_weight: 3.0            # yaw 变化权重 [m/rad] - 转1rad相当于多飞0.5m
+  large_yaw_threshold: 1.2         # 大转向阈值 [rad] - 超过60°视为大转向
+  large_yaw_penalty: 3.0            # 近距离大转向额外惩罚 [m]
+  
+  # ---------- 可视化参数 ----------
+  enable_visualization: true        # 启用可视化
+  viewpoint_sphere_radius: 0.2      # 视点球体半径 [m]
+  frustum_length: 1.0               # 视锥体长度 [m]
+  frustum_fov_h: 1.57               # 水平视场角 [rad] (90°)
+  frustum_fov_v: 1.22               # 垂直视场角 [rad] (70°)
+  
+  # ---------- 传感器参数（视点评估用） ----------
+  sensor_range_min: 2.0             # 最小感知距离 [m]
+  sensor_range_max: 5.0             # 最大感知距离 [m]
+  sensor_fov_h: 1.57                # 水平FOV [rad] (~90°)
+  sensor_fov_v: 1.15                # 垂直FOV [rad] (~60°)
+  optimal_distance: 5.5             # 最优观测距离 [m]
+  
+
+  
+  # ---------- 视点采样参数 ----------
+  viewpoint_height: 1.0             # 视点基准高度 [m]（用于起飞检测）
+  viewpoint_height_min: 0.9         # 视点最小采样高度 [m]
+  viewpoint_height_max: 1.1         # 视点最大采样高度 [m]
+  viewpoint_height_num: 1           # 高度采样数量（1=仅基准高度）
+  candidate_rmin: 3.0               # 最小采样半径 [m]
+  candidate_rmax: 7.0               # 最大采样半径 [m]
+  candidate_rnum: 6                 # 半径采样数量
+  candidate_dphi: 0.25              # 角度采样间隔 [rad] (~14°)
+  
+  # ---------- 前沿簇参数 ----------
+  # 聚类使用BFS区域增长，在每个子网格内独立进行
+  cluster_eps: 0.25                  # 聚类半径 [m] - 点连通阈值
+  min_cluster_size: 30              # 最小簇大小 - 低于此值的簇被丢弃
+  cluster_split_threshold: 4.0      # 簇分裂阈值 [m] - extent超过此值则分裂
+  max_clusters: 30                  # 最大簇数（增大以覆盖更多方向）
+  
+  # ---------- 安全性参数 ----------
+  # 视点安全半径 = uav_radius + safety_margin
+  # 在此范围内不能有障碍物或未知区域
+  uav_radius: 0.3                  # 无人机机身半径 [m]
+  safety_margin: 0.5                # 额外安全边距 [m]
+  
+  # ---------- 滤波参数 ----------
+  min_viewpoint_distance: 1.5       # 视点最小间距 [m]
+  min_coverage_score: 0.3           # 最小覆盖评分 [0,1]
+  min_visibility_ratio: 0.70          # 最小可见性比例 [0,1] (建议0.3-0.5，太高会导致没有候选视点)
+  
+  # ---------- 历史节点参数（借鉴EDEN算法） ----------
+  history_node_distance: 3.0        # 历史节点间隔距离 [m]
+  node_frontier_radius: 20.0         # 节点关联前沿区域的最大半径 [m]
+  
+  # ---------- 前沿点过滤参数 ----------
+  ground_offset: 0.4                # 地面偏移 [m]
+  
+  # ---------- 头顶区域过滤参数 ----------
+  overhead_height_threshold: 0.3    # 头顶高度阈值 [m]
+  overhead_distance_threshold: 3.0  # 头顶水平距离阈值 [m]
+
+
+# ============================================================
+#                     可视化颜色配置
+# ============================================================
+visualization:
+  # 前沿簇颜色（自动循环）
+  cluster_colors:
+    - [1.0, 0.0, 0.0, 0.6]          # Red
+    - [0.0, 1.0, 0.0, 0.6]          # Green
+    - [0.0, 0.0, 1.0, 0.6]          # Blue
+    - [1.0, 1.0, 0.0, 0.6]          # Yellow
+    - [1.0, 0.0, 1.0, 0.6]          # Magenta
+    - [0.0, 1.0, 1.0, 0.6]          # Cyan
+    
+  # 视点颜色
+  current_viewpoint_color: [0.0, 1.0, 0.0, 0.8]    # 当前目标（绿色）
+  pending_viewpoint_color: [0.2, 0.4, 1.0, 0.8]    # 待访问（蓝色）
+  visited_viewpoint_color: [0.5, 0.5, 0.5, 0.5]    # 已访问（灰色）
+  
+  # 路由颜色
+  route_line_color: [1.0, 0.5, 0.0, 0.8]           # 橙色
+  route_text_color: [1.0, 1.0, 1.0, 1.0]           # 白色

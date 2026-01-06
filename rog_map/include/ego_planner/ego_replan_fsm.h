@@ -55,6 +55,13 @@ namespace ego_planner
       MANUAL_TARGET = 1,
       PRESET_TARGET = 2
     };
+    /* Simulation mode: determines FCU/arming behavior */
+    enum SIM_MODE
+    {
+      SIM_GAZEBO = 0,   // Full FCU/MAVROS integration (Gazebo + PX4)
+      SIM_OPEN3D = 1,   // No FCU, direct position command (Open3D simulator)
+      SIM_REAL = 2      // Real flight: wait for manual arming, then auto-takeoff
+    };
 
     /* planning utils */
     EGOPlannerManager::Ptr planner_manager_;
@@ -74,6 +81,7 @@ namespace ego_planner
     double takeoff_accel_time_;
     double replan_duration_;
     bool auto_start_preset_;
+    int sim_mode_;  // SIM_GAZEBO=0, SIM_OPEN3D=1, SIM_REAL=2
 
     /* state flags */
     bool have_trigger_, have_target_, have_odom_, have_new_target_, touch_goal_, mandatory_stop_;

@@ -117,6 +117,12 @@ fsm:
   # 2 = 预设路径点模式：按顺序飞往预设路径点
   flight_type: 1
   
+  # ★★★ 仿真模式设置 ★★★
+  # 0 = GAZEBO: Full FCU/MAVROS integration (Gazebo + PX4)
+  # 1 = OPEN3D: No FCU, direct position command (Open3D simulator)
+  # 2 = REAL:   Real flight - wait for manual arming, then auto-takeoff
+  sim_mode: 0
+  
   # ★★★ 起飞后行为 ★★★
   # true  = 起飞后自动开始执行（仅 flight_type=2 时有效）
   # false = 起飞后等待目标（flight_type=1 时应设为 false）

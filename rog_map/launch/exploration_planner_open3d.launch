@@ -1,0 +1,90 @@
+<!--
+  统一探索规划 Launch 文件 (Open3D 仿真版本)
+  
+  特点：
+  1. 单一 ROG-Map 实例（EGO-Planner 和 探索FSM 共享）
+  2. 数据同步，无延迟
+  3. 减少内存占用
+  
+  功能:
+  1. EGO-Planner 控制无人机按预设路径点飞行
+  2. 探索模块实时可视化前沿簇和探索视点
+  3. 前沿簇与可视化的前沿点云完全一致
+  
+  使用方法:
+  ★★★ 重要：必须先启动仿真器，并禁用 waypoint_control 避免指令冲突 ★★★
+  
+  终端1: roslaunch simulation_standalone uav_simulation.launch enable_waypoint_control:=false
+  终端2: roslaunch rog_map exploration_planner_open3d.launch
+-->
+<launch>
+    <!-- ========== 参数配置 ========== -->
+    <arg name="config_file" default="$(find rog_map)/config/exploration_open3d.yaml"/>
+    <arg name="odom_topic" default="/uav_simulator/odometry"/>
+    <arg name="cloud_topic" default="/livox/lidar"/>
+    
+    <!-- ★★★ 仿真模式 ★★★ -->
+    <!-- 0 = GAZEBO: Gazebo + PX4 仿真，自动解锁和OFFBOARD切换 -->
+    <!-- 1 = OPEN3D: Open3D仿真，无FCU，直接位置控制 -->
+    <!-- 2 = REAL:   实物飞行，等待手动解锁和OFFBOARD切换 -->
+    <arg name="sim_mode" default="1"/>
+    
+    <!-- ★★★ 飞行模式 ★★★ -->
+    <!-- 1 = 探索模式：接收 /exploration/viewpoint 话题的目标 -->
+    <!-- 2 = 预设路径点模式：按顺序飞往预设路径点 -->
+    <arg name="flight_type" default="1"/>
+    
+    <!-- 起飞后自动开始（仅 flight_type=2 时有效） -->
+    <arg name="auto_start" default="false"/>
+    
+    <!-- ========== RViz 可视化 ========== -->
+    <node name="rviz_exploration" pkg="rviz" type="rviz" output="screen"
+        args="-d $(find rog_map)/config/exploration_open3d.rviz"/>
+
+    <!-- ========================================================== -->
+    <!--         统一探索规划节点（共享ROG-Map实例）                    -->
+    <!-- ========================================================== -->
+    
+    <node pkg="rog_map" type="exploration_planner_node" name="exploration_planner_node" output="screen">
+        <!-- 加载配置文件 -->
+        <rosparam command="load" file="$(arg config_file)"/>
+        
+        <!-- 话题重映射 -->
+        <remap from="~odom" to="$(arg odom_topic)"/>
+        <remap from="~mandatory_stop" to="/mandatory_stop_to_planner"/>
+        <remap from="~planning/trajectory" to="/planning/trajectory"/>
+        <remap from="~planning/heartbeat" to="/traj_server/heartbeat"/>
+        
+        <!-- FSM 参数覆盖 -->
+        <param name="fsm/flight_type" value="$(arg flight_type)"/>
+        <param name="fsm/sim_mode" value="$(arg sim_mode)"/>
+        <param name="fsm/auto_start_preset" value="$(arg auto_start)"/>
+        
+        <!-- ROG-Map 话题重映射 -->
+        <param name="rog_map/ros_callback/odom_topic" value="$(arg odom_topic)"/>
+        <param name="rog_map/ros_callback/cloud_topic" value="$(arg cloud_topic)"/>
+        
+        <!-- 探索参数（被动可视化模式） -->
+        <param name="exploration/auto_start" value="false"/>
+        <param name="exploration/enable_visualization" value="true"/>
+    </node>
+    
+    <!-- 轨迹服务器（发布控制命令） -->
+    <node pkg="rog_map" type="ego_traj_server" name="ego_traj_server" output="screen">
+        <!-- 加载配置文件 -->
+        <rosparam command="load" file="$(arg config_file)"/>
+        
+        <!-- 话题重映射 -->
+        <remap from="~odom" to="$(arg odom_topic)"/>
+        <remap from="position_cmd" to="/planning/pos_cmd"/>
+        <remap from="~planning/trajectory" to="/planning/trajectory"/>
+        <remap from="~planning/heartbeat" to="/traj_server/heartbeat"/>
+        
+        <param name="traj_server/time_forward" value="1.0" type="double"/>
+    </node>
+    
+    <node pkg="my_control_package" type="mpc_analyzer_chw.py" name="record_data" output="screen">
+        <rosparam command="load" file="$(find my_control_package)/config/controller_param.yaml" ns="controller" />
+    </node>
+</launch>
+
