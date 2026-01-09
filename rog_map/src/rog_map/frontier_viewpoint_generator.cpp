@@ -15,6 +15,12 @@
 #include "rog_map/frontier_viewpoint_generator.h"
 #include <queue>
 #include <unordered_map>
+#include <pcl_conversions/pcl_conversions.h>
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+
+// 性能监控
+#include "utils/perf_logger.hpp"
 
 namespace rog_map {
 
@@ -40,11 +46,16 @@ bool FrontierViewpointGenerator::generate(
     std::vector<FrontierCluster>& clusters,
     std::vector<ExplorationViewpoint>& viewpoints)
 {
+    // 性能监控：整体计时
+    perf::ScopeTimer gen_timer("GEN", "TOTAL_GENERATE");
+    PERF_INFO("GEN", "========== Starting viewpoint generation cycle ==========");
+    
     clusters.clear();
     viewpoints.clear();
     
     if (!global_map_) {
         ROS_WARN("[ViewpointGen] No global_map!");
+        PERF_WARN("GEN", "No global_map available!");
         return false;
     }
     
@@ -52,7 +63,7 @@ bool FrontierViewpointGenerator::generate(
     updateHistoryNodes();
     
     // Step 1: 获取按子网格分组的前沿点（包含子网格几何信息）
-    std::vector<rog_map::GlobalMap::SubGridFrontierInfo> subgrid_frontiers;
+    std::vector<SubGridFrontierInfo> subgrid_frontiers;
     global_map_->getFrontierPositionsBySubGrid(subgrid_frontiers);
     
     if (subgrid_frontiers.empty()) {
@@ -108,30 +119,77 @@ bool FrontierViewpointGenerator::generate(
         // 这些区域会在无人机移动并创建新历史节点后被关联
     }
     
-    ROS_INFO("[ViewpointGen] Filtered frontier points: %lu -> %lu (removed %lu)",
+    // 性能监控：前沿点统计（输出到日志文件，减少终端输出）
+    PERF_LOG.logf("GEN", "FILTER_POINTS", "Raw=%lu, After=%lu, Removed=%lu",
+                  total_points_before, total_points_after, 
+                  total_points_before - total_points_after);
+    PERF_LOG.logf("GEN", "INFO", "HistoryNodes=%lu, FrontierGroups=%lu",
+                  history_nodes_.size(), node_frontiers.size());
+    
+    ROS_DEBUG("[ViewpointGen] Filtered frontier points: %lu -> %lu (removed %lu)",
              total_points_before, total_points_after, 
              total_points_before - total_points_after);
-    ROS_INFO("[ViewpointGen] History nodes: %lu, Frontier groups: %lu", 
+    ROS_DEBUG("[ViewpointGen] History nodes: %lu, Frontier groups: %lu", 
              history_nodes_.size(), node_frontiers.size());
     
     // Step 3: 在每个历史节点关联的前沿区域内聚类
     int global_cluster_id = 0;
-    for (const auto& nf_pair : node_frontiers) 
-    {
-        int node_id = nf_pair.first;
-        const auto& points = nf_pair.second;
+    
+    if (config_.use_surface_frontier) {
+        // ==================== SFExplorer 策略：表面前沿聚类 ====================
+        // 表面前沿：同时存在 occupied 和 free 邻居的 unknown 体素
+        // 基于法向量相似性进行区域生长聚类
         
-        if (points.size() < static_cast<size_t>(config_.min_cluster_size)) {
-            continue;
+        ROS_DEBUG("[ViewpointGen] Using SFExplorer surface frontier strategy");
+        
+        for (const auto& nf_pair : node_frontiers) 
+        {
+            int node_id = nf_pair.first;
+            const auto& points = nf_pair.second;
+            
+            if (points.size() < static_cast<size_t>(config_.min_cluster_size)) {
+                continue;
+            }
+            
+            // 步骤1：将普通前沿点转换为表面前沿点（带法向量）
+            std::vector<SurfaceFrontierPoint> surface_points;
+            for (const auto& pt : points) {
+                SurfaceFrontierPoint sfp(pt);
+                sfp.has_normal = computeSurfaceNormal(pt, sfp.normal);
+                surface_points.push_back(sfp);
+            }
+            
+            // 步骤2：基于法向量相似性聚类
+            std::vector<FrontierCluster> node_clusters;
+            clusterByNormalSimilarity(surface_points, node_clusters);
+            
+            for (auto& c : node_clusters) {
+                c.cluster_id = global_cluster_id++;
+                c.history_node_id = node_id;
+                clusters.push_back(c);
+            }
         }
         
-        std::vector<FrontierCluster> node_clusters;
-        clusterByHistoryNode(points, node_id, node_clusters);
-        
-        for (auto& c : node_clusters) {
-            c.cluster_id = global_cluster_id++;
-            c.history_node_id = node_id;
-            clusters.push_back(c);
+        ROS_INFO("[ViewpointGen-SF] Surface frontier clustering: %lu clusters", clusters.size());
+    } else {
+        // ==================== 原有策略：空间距离聚类 ====================
+        for (const auto& nf_pair : node_frontiers) 
+        {
+            int node_id = nf_pair.first;
+            const auto& points = nf_pair.second;
+            
+            if (points.size() < static_cast<size_t>(config_.min_cluster_size)) {
+                continue;
+            }
+            
+            std::vector<FrontierCluster> node_clusters;
+            clusterByHistoryNode(points, node_id, node_clusters);
+            
+            for (auto& c : node_clusters) {
+                c.cluster_id = global_cluster_id++;
+                c.history_node_id = node_id;
+                clusters.push_back(c);
+            }
         }
     }
     
@@ -141,12 +199,12 @@ bool FrontierViewpointGenerator::generate(
     return false;
 }
 
-    ROS_INFO("[ViewpointGen] Formed %lu clusters from %lu history node groups", 
-             clusters.size(), node_frontiers.size());
+    PERF_LOG.logf("GEN", "CLUSTERS", "formed=%lu from %lu groups", 
+                  clusters.size(), node_frontiers.size());
     
     // Step 4: 分裂大簇
     splitLargeClusters(clusters);
-    ROS_INFO("[ViewpointGen] After split: %lu clusters", clusters.size());
+    PERF_LOG.logf("GEN", "SPLIT", "after_split=%lu clusters", clusters.size());
     
     // Step 4.5: 过滤头顶区域簇
     // 策略：如果簇中心比无人机高且水平距离很近，认为是头顶区域，不生成探索视点
@@ -178,8 +236,8 @@ bool FrontierViewpointGenerator::generate(
             clusters.end());
         
         if (clusters.size() < before_count) {
-            ROS_INFO("[ViewpointGen] Filtered %lu overhead clusters, remaining: %lu",
-                     before_count - clusters.size(), clusters.size());
+            PERF_LOG.logf("GEN", "OVERHEAD_FILTER", "removed=%lu, remaining=%lu",
+                          before_count - clusters.size(), clusters.size());
         }
     }
     
@@ -201,8 +259,8 @@ bool FrontierViewpointGenerator::generate(
                 return dist_a < dist_b;
             });
         
-        ROS_INFO("[ViewpointGen] Limiting clusters: %lu -> %d (keeping nearest)",
-                 clusters.size(), config_.max_clusters);
+        PERF_LOG.logf("GEN", "LIMIT", "clusters %lu -> %d (keeping nearest)",
+                      clusters.size(), config_.max_clusters);
         clusters.resize(config_.max_clusters);
     }
     
@@ -218,7 +276,15 @@ bool FrontierViewpointGenerator::generate(
         }
         
         size_t before = viewpoints.size();
-        sampleViewpoints(cluster, viewpoints);
+        
+        // 根据配置选择采样策略
+        if (config_.use_spherical_sampling) {
+            // SFExplorer 策略：球扇形均匀采样
+            sampleViewpointsSpherical(cluster, viewpoints);
+        } else {
+            // 原有策略：圆周采样
+            sampleViewpoints(cluster, viewpoints);
+        }
         
         // 调试：记录没有产生视点的簇
         if (viewpoints.size() == before) {
@@ -229,25 +295,61 @@ bool FrontierViewpointGenerator::generate(
         }
     }
     
-    if (covered_count > 0 || no_viewpoint_count > 0) {
-        ROS_INFO("[ViewpointGen] Cluster stats: %lu covered, %lu no-viewpoint, %lu produced viewpoints",
-                 covered_count, no_viewpoint_count, 
-                 clusters.size() - covered_count - no_viewpoint_count);
-    }
+    // 性能监控：簇处理统计
+    PERF_LOG.logf("GEN", "CLUSTER_STATS", "total=%lu, covered=%lu, no_viewpoint=%lu, produced=%lu",
+                  clusters.size(), covered_count, no_viewpoint_count,
+                  clusters.size() - covered_count - no_viewpoint_count);
     
-    ROS_INFO("[ViewpointGen] After L1+L2: %lu candidate viewpoints", viewpoints.size());
+    // 性能监控：簇统计（输出到日志文件）
+    PERF_LOG.logf("GEN", "SAMPLING", "covered=%lu, no_vp=%lu, produced=%lu, L1L2_candidates=%lu",
+                  covered_count, no_viewpoint_count, 
+                  clusters.size() - covered_count - no_viewpoint_count, viewpoints.size());
     
     // Step 6: 去重滤波
     filterViewpoints(viewpoints);
     
-    ROS_INFO("[ViewpointGen] After dedup: %lu viewpoints", viewpoints.size());
+    PERF_LOG.logf("GEN", "DEDUP", "After_dedup=%lu", viewpoints.size());
     
     // Step 7: 视点聚类与Yaw优化
     // 对相邻视点进行聚类，然后优化每个簇内视点的yaw角，避免对射情况
     optimizeViewpointYaw(viewpoints);
     
-    ROS_INFO("[ViewpointGen] Final: %lu viewpoints from %lu clusters", 
-             viewpoints.size(), clusters.size());
+    // Step 8: 增量视点聚类（SFExplorer策略，可选）
+    // 对远距离视点聚类，用锚点替代，降低路径规划复杂度
+    if (config_.use_viewpoint_clustering && viewpoints.size() > 5) {
+        std::vector<ExplorationViewpoint> unclustered;
+        std::vector<ViewpointCluster> vp_clusters;
+        
+        clusterViewpointsIncremental(viewpoints, unclustered, vp_clusters);
+        
+        // 将锚点转换为视点加入结果
+        for (const auto& vpc : vp_clusters) {
+            // 入口锚点视点
+            ExplorationViewpoint anchor_vp;
+            anchor_vp.position = vpc.anchor_entry;
+            anchor_vp.target_center = vpc.centroid;
+            Eigen::Vector3f to_center = vpc.centroid - vpc.anchor_entry;
+            anchor_vp.yaw = std::atan2(to_center.y(), to_center.x());
+            anchor_vp.pitch = 0.0f;
+            anchor_vp.cluster_id = -1;  // 锚点标记
+            anchor_vp.score = 1.0f;     // 高优先级
+            anchor_vp.is_valid = true;
+            unclustered.push_back(anchor_vp);
+            
+            // 出口锚点视点（可选，根据路径规划需要）
+            // 暂时不添加，让路径规划自行决定
+        }
+        
+        PERF_LOG.logf("GEN", "VP_CLUSTER", "%zu -> %zu unclustered + %zu clusters",
+                      viewpoints.size(), unclustered.size(), vp_clusters.size());
+        
+        viewpoints = std::move(unclustered);
+        viewpoint_clusters_ = std::move(vp_clusters);
+    }
+    
+    // 性能监控：最终结果
+    PERF_LOG.logf("GEN", "FINAL", "viewpoints=%zu, clusters=%lu, gen_time=%.2fms",
+                  viewpoints.size(), clusters.size(), gen_timer.elapsed());
     
     return !viewpoints.empty();
 }
@@ -272,31 +374,90 @@ void FrontierViewpointGenerator::updateHistoryNodes()
     // 第一次创建历史节点（无人机已完成起飞）
     if (!first_node_created_) {
         HistoryNode node(next_node_id_++, current_pos, ros::Time::now().toSec());
+        node.parent_node_id = -1;  // 第一个节点没有父节点
         history_nodes_.push_back(node);
         first_node_created_ = true;
-        ROS_INFO("[ViewpointGen] Created first history node at (%.2f, %.2f, %.2f) after takeoff",
+        last_connected_node_idx_ = 0;  // 初始化最后连接的节点索引
+        
+        // 性能监控：记录首个历史节点
+        PERF_LOG.logf("HIST", "CREATE_FIRST", "id=%d, pos=(%.2f,%.2f,%.2f)",
+                      node.node_id, current_pos.x(), current_pos.y(), current_pos.z());
+        ROS_DEBUG("[ViewpointGen] Created first history node at (%.2f, %.2f, %.2f) after takeoff",
                  current_pos.x(), current_pos.y(), current_pos.z());
         return;
     }
     
-    // 检查是否需要添加新节点
-    // 改进：与所有已采样历史节点的最短距离超过阈值时才采样
-    // 而不是只与上一个节点比较
+    // 找到距离当前位置最近的现有节点（这就是 UAV 从哪个节点飞来的）
     float min_dist_to_existing = std::numeric_limits<float>::max();
-    for (const auto& node : history_nodes_) {
-        float dist = (current_pos - node.position).head<2>().norm();  // 只考虑XY距离
+    int nearest_node_idx = -1;
+    for (size_t i = 0; i < history_nodes_.size(); ++i) {
+        float dist = (current_pos - history_nodes_[i].position).norm();  // 3D距离
         if (dist < min_dist_to_existing) {
             min_dist_to_existing = dist;
+            nearest_node_idx = static_cast<int>(i);
         }
+    }
+    
+    // 更新 last_connected_node_idx_：UAV 当前最近的节点
+    // 这用于追踪 UAV 的实际路径
+    if (nearest_node_idx >= 0 && min_dist_to_existing < config_.history_node_distance * 1.5f) {
+        last_connected_node_idx_ = nearest_node_idx;
     }
     
     // 只有当与所有现有节点的距离都超过阈值时，才创建新节点
     if (min_dist_to_existing >= config_.history_node_distance) {
         HistoryNode node(next_node_id_++, current_pos, ros::Time::now().toSec());
+        
+        // 关键：建立与最近节点的连接（因为 UAV 确实从那里飞来）
+        node.parent_node_id = nearest_node_idx >= 0 ? history_nodes_[nearest_node_idx].node_id : -1;
+        
+        // 双向连接
+        if (nearest_node_idx >= 0) {
+            node.addNeighbor(history_nodes_[nearest_node_idx].node_id);
+            history_nodes_[nearest_node_idx].addNeighbor(node.node_id);
+        }
+        
+        // 如果最近节点不是 last_connected_node_idx_，也与 last_connected 建立连接
+        // 这处理回溯情况：UAV 从节点 A 飞到 B，再飞回 A 附近并创建新节点 C
+        // 此时 C 应该连接到 A（最近的）
+        if (last_connected_node_idx_ >= 0 && last_connected_node_idx_ != nearest_node_idx) {
+            // 检查是否已经连接
+            if (!node.hasNeighbor(history_nodes_[last_connected_node_idx_].node_id)) {
+                node.addNeighbor(history_nodes_[last_connected_node_idx_].node_id);
+                history_nodes_[last_connected_node_idx_].addNeighbor(node.node_id);
+            }
+        }
+        
         history_nodes_.push_back(node);
-        ROS_INFO("[ViewpointGen] Created history node %d at (%.2f, %.2f, %.2f), min_dist=%.2f",
+        last_connected_node_idx_ = history_nodes_.size() - 1;  // 更新为新创建的节点
+        
+        // 性能监控：记录新历史节点及其连接
+        PERF_LOG.logf("HIST", "CREATE_NODE", "id=%d, pos=(%.2f,%.2f,%.2f), parent=%d, neighbors=%zu, total=%zu",
+                      node.node_id, current_pos.x(), current_pos.y(), current_pos.z(),
+                      node.parent_node_id, node.neighbors.size(), history_nodes_.size());
+        ROS_DEBUG("[ViewpointGen] Created history node %d at (%.2f, %.2f, %.2f), connected to node %d",
                  node.node_id, current_pos.x(), current_pos.y(), current_pos.z(),
-                 min_dist_to_existing);
+                 node.parent_node_id);
+    }
+    
+    // 周期性统计：每10秒输出一次 History Node 网络状态摘要
+    static double last_summary_time = 0;
+    double current_time = ros::Time::now().toSec();
+    if (history_nodes_.size() >= 3 && (current_time - last_summary_time) >= 10.0) {
+        last_summary_time = current_time;
+        
+        // 统计邻居数量
+        int total_edges = 0;
+        int isolated_nodes = 0;
+        for (const auto& node : history_nodes_) {
+            total_edges += node.neighbors.size();
+            if (node.neighbors.empty() && node.node_id != 0) {  // 第一个节点可以没有邻居
+                isolated_nodes++;
+            }
+        }
+        
+        PERF_LOG.logf("HIST", "NETWORK_SUMMARY", "nodes=%zu, edges=%d, isolated=%d",
+                      history_nodes_.size(), total_edges / 2, isolated_nodes);
     }
 }
 
@@ -629,7 +790,7 @@ void FrontierViewpointGenerator::splitLargeClusters(
                     result.push_back(cluster);
                     changed = false;
                 }
-            } else {
+        } else {
                 result.push_back(cluster);
             }
         }
@@ -931,7 +1092,7 @@ bool FrontierViewpointGenerator::checkRayClear(
                 
         // 如果遇到占据点，射线被阻挡
         if (global_map_->isOccupied(check_pos)) {
-            return false;
+    return false;
         }
     }
     
@@ -1046,8 +1207,8 @@ void FrontierViewpointGenerator::optimizeViewpointYaw(
         }
     }
     
-    ROS_INFO("[ViewpointGen] Yaw optimization: checked %lu viewpoint pairs, %d needed adjustment",
-             viewpoints.size() > 1 ? viewpoints.size() - 1 : 0, optimized_count);
+    PERF_LOG.logf("GEN", "YAW_OPT", "checked=%lu pairs, adjusted=%d",
+                  viewpoints.size() > 1 ? viewpoints.size() - 1 : 0, optimized_count);
 }
 
 // ==================== 辅助函数 ====================
@@ -1109,6 +1270,73 @@ bool FrontierViewpointGenerator::isPositionFree(const Eigen::Vector3f& pos)
     return VoxelStateBits::isFree(state);
 }
 
+bool FrontierViewpointGenerator::isPositionSafeForExploration(const Eigen::Vector3f& pos)
+{
+    // 用于球扇形采样的宽松安全检查：
+    // - 允许 FREE 和 UNKNOWN 区域
+    // - 只拒绝 OCCUPIED 区域
+    // 这是因为探索视点可能需要放置在已知自由区域的边界附近
+    
+    if (!global_map_) return true;
+    
+    // 调试计数器（静态，用于统计拒绝原因）
+    static int reject_range = 0, reject_occupied = 0, reject_height = 0, reject_neighbor = 0;
+    static int accept_count = 0;
+    static int total_checks = 0;
+    total_checks++;
+    
+    // 检查是否在地图范围内
+    if (!global_map_->isInGlobalMapRange(pos)) {
+        reject_range++;
+        return false;
+    }
+    
+    // 检查中心点不是障碍物
+    GlobalVoxelState state = global_map_->getVoxelState(pos);
+    if (VoxelStateBits::isOccupied(state)) {
+        reject_occupied++;
+        return false;
+    }
+    
+    // 高度检查
+    if (pos.z() < config_.viewpoint_height_min || pos.z() > config_.viewpoint_height_max) {
+        reject_height++;
+        return false;
+    }
+    
+    // 简化的障碍物距离检查（只检查正下方和周围一圈）
+    float check_radius = config_.uav_radius;
+    
+    // 检查周围几个关键点是否有障碍物
+    const Eigen::Vector3f offsets[] = {
+        {check_radius, 0, 0}, {-check_radius, 0, 0},
+        {0, check_radius, 0}, {0, -check_radius, 0},
+        {0, 0, -0.3f}  // 下方
+    };
+    
+    for (const auto& offset : offsets) {
+        Eigen::Vector3f check_pos = pos + offset;
+        if (!global_map_->isInGlobalMapRange(check_pos)) continue;
+        
+        GlobalVoxelState check_state = global_map_->getVoxelState(check_pos);
+        if (VoxelStateBits::isOccupied(check_state)) {
+            reject_neighbor++;
+            return false;
+        }
+    }
+    
+    accept_count++;
+    
+    // 每100次检查输出一次统计
+    if (total_checks % 100 == 0) {
+        ROS_INFO_THROTTLE(2.0, "[SafetyCheck] total=%d, accept=%d, reject: range=%d, occ=%d, height=%d, neighbor=%d | height_range=[%.1f,%.1f]",
+            total_checks, accept_count, reject_range, reject_occupied, reject_height, reject_neighbor,
+            config_.viewpoint_height_min, config_.viewpoint_height_max);
+    }
+    
+    return true;
+}
+
 // ==================== 路径规划函数 ====================
 
 bool FrontierViewpointGenerator::hasObstacleBetween(const Eigen::Vector3f& start, 
@@ -1121,19 +1349,39 @@ bool FrontierViewpointGenerator::hasObstacleBetween(const Eigen::Vector3f& start
     if (dist < 0.1f) return false;  // 距离太近，无需检查
     
     dir.normalize();
-    float step = 0.2f;  // 步长
+    float step = 0.3f;  // 放宽步长，减少过度检测
+    
+    int obstacle_count = 0;
+    int unknown_count = 0;
+    int total_checks = 0;
     
     // 沿射线检查障碍物
     for (float t = step; t < dist - step; t += step) {
         Eigen::Vector3f check_pos = start + dir * t;
+        total_checks++;
         
         if (!global_map_->isInGlobalMapRange(check_pos)) {
-            continue;
+            unknown_count++;
+                    continue;
+                }
+                
+        // 使用膨胀后的检测，更准确地反映实际碰撞风险
+        if (global_map_->isOccupiedInflate(check_pos)) {
+            obstacle_count++;
+            // 关键：不要只检测到一个点就返回，累计检测
+            // 如果连续多个点都是障碍物，才认为有障碍物阻挡
+            if (obstacle_count >= 2) {
+                return true;  // 确认有障碍物阻挡
+            }
+        } else {
+            obstacle_count = 0;  // 重置计数，不是连续的
         }
-        
-        if (global_map_->isOccupied(check_pos)) {
-            return true;  // 有障碍物
-        }
+    }
+    
+    // 如果大部分区域是未知的（超过60%），允许通过
+    // 因为这可能是待探索区域，不应该阻止探索
+    if (total_checks > 0 && (float)unknown_count / total_checks > 0.6f) {
+        return false;
     }
     
     return false;  // 无障碍物
@@ -1147,88 +1395,62 @@ bool FrontierViewpointGenerator::findPathViaHistoryNodes(
     waypoints.clear();
     
     if (history_nodes_.empty()) {
-        ROS_WARN("[ViewpointGen] No history nodes available for path finding");
+        PERF_WARN("HIST", "No history nodes available for path finding");
         return false;
     }
     
-    ROS_INFO("[ViewpointGen] Finding path from (%.2f,%.2f,%.2f) to (%.2f,%.2f,%.2f) via %zu history nodes",
+    PERF_LOG.logf("HIST", "PATH_FIND_START", "from=(%.2f,%.2f,%.2f) to=(%.2f,%.2f,%.2f) nodes=%zu",
              start.x(), start.y(), start.z(), end.x(), end.y(), end.z(), history_nodes_.size());
     
-    // 步骤1：找到距离起点最近且可达的历史节点
+    // 步骤1：找到距离起点最近的历史节点（优先使用距离近的，不再检查障碍物）
+    // 因为 UAV 当前就在起点附近，最近的节点一定可达
     int start_idx = -1;
     float min_start_dist = std::numeric_limits<float>::max();
     for (size_t i = 0; i < history_nodes_.size(); ++i) {
         float dist = (history_nodes_[i].position - start).norm();
-        // 起点节点必须可达（无障碍）
-        if (dist < min_start_dist && !hasObstacleBetween(start, history_nodes_[i].position)) {
+        if (dist < min_start_dist) {
             min_start_dist = dist;
             start_idx = static_cast<int>(i);
         }
     }
     
-    // 步骤2：找到距离终点最近且可达的历史节点
+    // 步骤2：找到距离终点最近的历史节点
     int end_idx = -1;
     float min_end_dist = std::numeric_limits<float>::max();
     for (size_t i = 0; i < history_nodes_.size(); ++i) {
         float dist = (history_nodes_[i].position - end).norm();
-        // 终点节点必须可达（从该节点到终点无障碍）
-        if (dist < min_end_dist && !hasObstacleBetween(history_nodes_[i].position, end)) {
+        if (dist < min_end_dist) {
             min_end_dist = dist;
             end_idx = static_cast<int>(i);
         }
     }
     
-    if (start_idx < 0) {
-        ROS_WARN("[ViewpointGen] Could not find reachable start node from current position");
-        return false;
-    }
-    if (end_idx < 0) {
-        ROS_WARN("[ViewpointGen] Could not find reachable end node to target position");
+    if (start_idx < 0 || end_idx < 0) {
+        PERF_LOG.logf("HIST", "PATH_FAIL", "reason=no_nodes, start_idx=%d, end_idx=%d",
+                      start_idx, end_idx);
         return false;
     }
     
-    ROS_INFO("[ViewpointGen] Start node idx=%d at (%.2f,%.2f,%.2f), End node idx=%d at (%.2f,%.2f,%.2f)",
-             start_idx, history_nodes_[start_idx].position.x(), 
-             history_nodes_[start_idx].position.y(), history_nodes_[start_idx].position.z(),
-             end_idx, history_nodes_[end_idx].position.x(),
-             history_nodes_[end_idx].position.y(), history_nodes_[end_idx].position.z());
+    PERF_LOG.logf("HIST", "PATH_NODES", "start_idx=%d(%.2f,%.2f), end_idx=%d(%.2f,%.2f), dist_to_start=%.2f, dist_to_end=%.2f",
+             start_idx, history_nodes_[start_idx].position.x(), history_nodes_[start_idx].position.y(),
+             end_idx, history_nodes_[end_idx].position.x(), history_nodes_[end_idx].position.y(),
+             min_start_dist, min_end_dist);
     
     // 如果起点和终点是同一个节点，直接通过该节点
     if (start_idx == end_idx) {
         waypoints.push_back(history_nodes_[start_idx].position);
-        ROS_INFO("[ViewpointGen] Start and end at same node, using single waypoint");
+        PERF_LOG.logf("HIST", "PATH_SAME_NODE", "node_idx=%d", start_idx);
         return true;
     }
     
-    // 步骤3：构建邻接表（基于可通行性检查）
-    // 重要：即使是索引相邻的节点，也需要检查障碍物（可能存在墙）
-    std::vector<std::vector<int>> adj(history_nodes_.size());
-    
-    // 3.1 检查所有节点对的连通性
-    float max_connect_dist = config_.history_node_distance * 4.0f;  // 最大连接距离
-    
+    // 步骤3：使用存储的邻接关系构建索引映射
+    // 将 node_id 映射到数组索引
+    std::unordered_map<int, int> id_to_idx;
     for (size_t i = 0; i < history_nodes_.size(); ++i) {
-        for (size_t j = i + 1; j < history_nodes_.size(); ++j) {
-            float dist = (history_nodes_[i].position - history_nodes_[j].position).norm();
-            
-            // 距离太远的节点不考虑
-            if (dist > max_connect_dist) continue;
-            
-            // 关键：检查两点之间是否无障碍
-            if (!hasObstacleBetween(history_nodes_[i].position, history_nodes_[j].position)) {
-                adj[i].push_back(j);
-                adj[j].push_back(i);
-            }
-        }
+        id_to_idx[history_nodes_[i].node_id] = static_cast<int>(i);
     }
     
-    // 打印连通性统计
-    int total_edges = 0;
-    for (const auto& neighbors : adj) total_edges += neighbors.size();
-    ROS_DEBUG("[ViewpointGen] Built adjacency graph: %zu nodes, %d edges", 
-              history_nodes_.size(), total_edges / 2);
-    
-    // 步骤4：BFS 搜索最短路径
+    // 步骤4：BFS 搜索最短路径（使用存储的邻接关系）
     std::vector<int> parent(history_nodes_.size(), -1);
     std::vector<bool> visited(history_nodes_.size(), false);
     std::queue<int> queue;
@@ -1237,24 +1459,42 @@ bool FrontierViewpointGenerator::findPathViaHistoryNodes(
     visited[start_idx] = true;
     
     while (!queue.empty()) {
-        int curr = queue.front();
+        int curr_idx = queue.front();
         queue.pop();
         
-        if (curr == end_idx) break;  // 找到目标
+        if (curr_idx == end_idx) break;  // 找到目标
         
-        for (int neighbor : adj[curr]) {
-            if (!visited[neighbor]) {
-                visited[neighbor] = true;
-                parent[neighbor] = curr;
-                queue.push(neighbor);
+        // 使用存储的邻居列表
+        for (int neighbor_id : history_nodes_[curr_idx].neighbors) {
+            auto it = id_to_idx.find(neighbor_id);
+            if (it != id_to_idx.end()) {
+                int neighbor_idx = it->second;
+                if (!visited[neighbor_idx]) {
+                    visited[neighbor_idx] = true;
+                    parent[neighbor_idx] = curr_idx;
+                    queue.push(neighbor_idx);
+                }
             }
         }
     }
     
+    // 性能监控：连通性统计
+    int total_edges = 0;
+    int isolated_nodes = 0;
+    for (const auto& node : history_nodes_) {
+        total_edges += node.neighbors.size();
+        if (node.neighbors.empty() && node.node_id != 0) isolated_nodes++;
+    }
+    PERF_LOG.logf("HIST", "CONNECTIVITY", "nodes=%zu, edges=%d, isolated=%d",
+                  history_nodes_.size(), total_edges / 2, isolated_nodes);
+    
     // 步骤5：检查是否找到路径
     if (!visited[end_idx]) {
-        ROS_WARN("[ViewpointGen] Could not find path between history nodes (start_idx=%d, end_idx=%d)",
-                 start_idx, end_idx);
+        PERF_LOG.logf("HIST", "PATH_FAIL", "reason=no_graph_path, start_idx=%d, end_idx=%d, "
+                      "start_neighbors=%zu, end_neighbors=%zu",
+                      start_idx, end_idx, 
+                      history_nodes_[start_idx].neighbors.size(), 
+                      history_nodes_[end_idx].neighbors.size());
         return false;
     }
     
@@ -1267,7 +1507,7 @@ bool FrontierViewpointGenerator::findPathViaHistoryNodes(
     }
     std::reverse(path_indices.begin(), path_indices.end());
     
-    ROS_INFO("[ViewpointGen] Found raw path with %zu nodes", path_indices.size());
+    PERF_LOG.logf("HIST", "RAW_PATH", "nodes=%zu", path_indices.size());
     
     // 步骤7：路径简化 - 移除不必要的中间点
     // 如果从节点 A 可以直接到节点 C（无障碍），则移除中间的 B
@@ -1282,7 +1522,7 @@ bool FrontierViewpointGenerator::findPathViaHistoryNodes(
             if (!hasObstacleBetween(history_nodes_[path_indices[i]].position,
                                     history_nodes_[path_indices[j]].position)) {
                 // 可以从 i 直接到 j
-                break;
+            break;
             }
             j--;
         }
@@ -1290,18 +1530,22 @@ bool FrontierViewpointGenerator::findPathViaHistoryNodes(
         i = j;
     }
     
-    ROS_INFO("[ViewpointGen] Simplified path: %zu -> %zu nodes", path_indices.size(), simplified.size());
+    PERF_LOG.logf("HIST", "SIMPLIFIED", "%zu -> %zu nodes", path_indices.size(), simplified.size());
     
     // 步骤8：转换为航点（跳过起点节点，因为会从当前位置直接到第一个中间航点）
     for (size_t k = 1; k < simplified.size(); ++k) {
         waypoints.push_back(history_nodes_[simplified[k]].position);
     }
     
-    // 打印路径信息
-    ROS_INFO("[ViewpointGen] Path waypoints (%zu):", waypoints.size());
+    // 记录路径到日志文件
+    std::stringstream path_ss;
+    path_ss << "waypoints=" << waypoints.size() << ": ";
     for (size_t k = 0; k < waypoints.size(); ++k) {
-        ROS_INFO("  [%zu] (%.2f, %.2f, %.2f)", k, waypoints[k].x(), waypoints[k].y(), waypoints[k].z());
+        path_ss << "(" << std::fixed << std::setprecision(1) 
+                << waypoints[k].x() << "," << waypoints[k].y() << ")";
+        if (k < waypoints.size() - 1) path_ss << "->";
     }
+    PERF_LOG.log("HIST", "PATH_FOUND", path_ss.str());
     
     return true;
 }
@@ -1368,6 +1612,648 @@ float FrontierViewpointGenerator::estimatePathLength(
               waypoints.size(), direct_dist, path_length);
     
     return path_length;
+}
+
+// ==================== SFExplorer 策略实现 ====================
+
+void FrontierViewpointGenerator::extractSurfaceFrontiers(
+    std::vector<SurfaceFrontierPoint>& surface_frontiers)
+{
+    surface_frontiers.clear();
+    
+    if (!global_map_) return;
+    
+    // 获取所有前沿体素
+    std::vector<GlobalVoxelIndex> frontier_voxels;
+    global_map_->extractGlobalFrontierIncremental();
+    
+    // 遍历前沿体素，检查是否为表面前沿
+    // 表面前沿：同时存在 occupied 和 free 邻居的 unknown 体素
+    const GlobalVoxelIndex neighbor_offsets[6] = {
+        {1, 0, 0}, {-1, 0, 0},
+        {0, 1, 0}, {0, -1, 0},
+        {0, 0, 1}, {0, 0, -1}
+    };
+    
+    // 获取全局地图的 frontier voxels
+    sensor_msgs::PointCloud2 pc_frontier;
+    global_map_->getFrontierPointCloud(pc_frontier);
+    
+    // 将 PointCloud2 转换为点列表
+    pcl::PointCloud<pcl::PointXYZ> pcl_frontier;
+    pcl::fromROSMsg(pc_frontier, pcl_frontier);
+    
+    for (const auto& pcl_pt : pcl_frontier.points) {
+        Eigen::Vector3f pos(pcl_pt.x, pcl_pt.y, pcl_pt.z);
+        GlobalVoxelIndex idx;
+        global_map_->posToIndex(pos, idx);
+        
+        // 检查是否同时有 occupied 和 free 邻居
+        bool has_occupied_neighbor = false;
+        bool has_free_neighbor = false;
+        
+        for (int d = 0; d < 6; ++d) {
+            GlobalVoxelIndex nei_idx = idx + neighbor_offsets[d];
+            Eigen::Vector3f nei_pos;
+            global_map_->indexToPos(nei_idx, nei_pos);
+            
+            GlobalVoxelState state = global_map_->getVoxelState(nei_pos);
+            if (VoxelStateBits::isOccupied(state)) {
+                has_occupied_neighbor = true;
+            } else if (VoxelStateBits::isFree(state)) {
+                has_free_neighbor = true;
+            }
+        }
+        
+        // 只有同时有 occupied 和 free 邻居的才是表面前沿
+        if (has_occupied_neighbor && has_free_neighbor) {
+            SurfaceFrontierPoint sfp(pos);
+            
+            // 计算法向量
+            sfp.has_normal = computeSurfaceNormal(pos, sfp.normal);
+            
+            surface_frontiers.push_back(sfp);
+        }
+    }
+    
+    ROS_DEBUG("[ViewpointGen-SF] Extracted %zu surface frontiers from %zu total frontiers",
+              surface_frontiers.size(), pcl_frontier.size());
+}
+
+bool FrontierViewpointGenerator::computeSurfaceNormal(
+    const Eigen::Vector3f& point, Eigen::Vector3f& normal)
+{
+    if (!global_map_) return false;
+    
+    // 收集邻域内的 occupied 点（表面点云）
+    std::vector<Eigen::Vector3f> neighbor_points;
+    float search_radius = config_.cluster_eps;  // 搜索半径
+    // config_.normal_pca_k 用于控制采样密度，但这里我们采用半径搜索
+    
+    // 在搜索半径内查找 occupied 体素
+    GlobalVoxelIndex center_idx;
+    global_map_->posToIndex(point, center_idx);
+    
+    float voxel_size = global_map_->getResolution();
+    int search_range = static_cast<int>(std::ceil(search_radius / voxel_size));
+    
+    for (int dx = -search_range; dx <= search_range; ++dx) {
+        for (int dy = -search_range; dy <= search_range; ++dy) {
+            for (int dz = -search_range; dz <= search_range; ++dz) {
+                GlobalVoxelIndex nei_idx(center_idx.x + dx, center_idx.y + dy, center_idx.z + dz);
+                Eigen::Vector3f nei_pos;
+                global_map_->indexToPos(nei_idx, nei_pos);
+                
+                // 检查距离
+                if ((nei_pos - point).norm() > search_radius) continue;
+                
+                // 检查是否是 occupied
+                if (global_map_->isOccupied(nei_pos)) {
+                    neighbor_points.push_back(nei_pos);
+                }
+            }
+        }
+    }
+    
+    // 需要至少 3 个点才能计算法向量
+    if (neighbor_points.size() < 3) {
+        // 没有足够的邻居点，使用默认法向量（从UAV指向前沿点）
+        Eigen::Vector3f to_point = point - uav_state_.position;
+        to_point.z() = 0.0f;
+        if (to_point.norm() > 0.1f) {
+            normal = to_point.normalized();
+        } else {
+            normal = Eigen::Vector3f::UnitX();
+        }
+        return false;
+    }
+    
+    // PCA 计算法向量
+    // 1. 计算均值
+    Eigen::Vector3f mean = Eigen::Vector3f::Zero();
+    for (const auto& p : neighbor_points) {
+        mean += p;
+    }
+    mean /= static_cast<float>(neighbor_points.size());
+    
+    // 2. 构建协方差矩阵
+    Eigen::Matrix3f cov = Eigen::Matrix3f::Zero();
+    for (const auto& p : neighbor_points) {
+        Eigen::Vector3f diff = p - mean;
+        cov += diff * diff.transpose();
+    }
+    cov /= static_cast<float>(neighbor_points.size());
+    
+    // 3. 特征值分解，最小特征值对应的特征向量就是法向量
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3f> solver(cov);
+    if (solver.info() != Eigen::Success) {
+        return false;
+    }
+    
+    // 最小特征值对应的特征向量（第一列）
+    normal = solver.eigenvectors().col(0);
+    
+    // 4. 确保法向量指向未知区域（从 occupied 指向 unknown）
+    // 法向量应该从表面指向外部（前沿点方向）
+    Eigen::Vector3f to_frontier = point - mean;
+    if (normal.dot(to_frontier) < 0) {
+        normal = -normal;
+    }
+    
+    return true;
+}
+
+void FrontierViewpointGenerator::clusterByNormalSimilarity(
+    const std::vector<SurfaceFrontierPoint>& surface_points,
+    std::vector<FrontierCluster>& clusters)
+{
+    clusters.clear();
+    if (surface_points.empty()) return;
+    
+    const float angle_threshold = config_.normal_angle_threshold;
+    const float eps = config_.cluster_eps;
+    const int min_pts = config_.min_cluster_size;
+    
+    std::vector<bool> visited(surface_points.size(), false);
+    
+    for (size_t i = 0; i < surface_points.size(); ++i) {
+        if (visited[i]) continue;
+        
+        // 区域生长
+        std::vector<size_t> cluster_indices;
+        std::queue<size_t> queue;
+        queue.push(i);
+        visited[i] = true;
+        
+        // 使用第一个点的法向量作为初始主法线
+        Eigen::Vector3f cluster_normal = surface_points[i].normal;
+        
+        while (!queue.empty()) {
+            size_t current = queue.front();
+            queue.pop();
+            cluster_indices.push_back(current);
+            
+            const auto& curr_point = surface_points[current];
+            
+            // 查找邻居
+            for (size_t j = 0; j < surface_points.size(); ++j) {
+                if (visited[j]) continue;
+                
+                const auto& other = surface_points[j];
+                
+                // 距离检查
+                float dist = (other.position - curr_point.position).norm();
+                if (dist > eps) continue;
+                
+                // 法向量相似性检查（仅当两个点都有有效法向量时）
+                if (curr_point.has_normal && other.has_normal) {
+                    float cos_angle = curr_point.normal.dot(other.normal);
+                    cos_angle = std::max(-1.0f, std::min(1.0f, cos_angle));
+                    float angle = std::acos(cos_angle);
+                    
+                    if (angle > angle_threshold) continue;
+                }
+                
+                visited[j] = true;
+                queue.push(j);
+            }
+        }
+        
+        // 检查簇大小
+        if (static_cast<int>(cluster_indices.size()) >= min_pts) {
+            FrontierCluster cluster;
+            
+            // 计算属性
+            Eigen::Vector3f sum = Eigen::Vector3f::Zero();
+            Eigen::Vector3f normal_sum = Eigen::Vector3f::Zero();
+            
+            for (size_t idx : cluster_indices) {
+                sum += surface_points[idx].position;
+                cluster.points.push_back(surface_points[idx].position);
+                cluster.surface_points.push_back(surface_points[idx]);
+                
+                if (surface_points[idx].has_normal) {
+                    normal_sum += surface_points[idx].normal;
+                }
+            }
+            
+            cluster.centroid = sum / static_cast<float>(cluster_indices.size());
+            cluster.point_count = static_cast<int>(cluster_indices.size());
+            
+            // 计算主法线
+            if (normal_sum.norm() > 0.1f) {
+                cluster.normal = normal_sum.normalized();
+            }
+            
+            // 计算范围
+            float max_dist = 0.0f;
+            for (const auto& pt : cluster.points) {
+                max_dist = std::max(max_dist, (pt - cluster.centroid).norm());
+            }
+            cluster.extent = max_dist;
+            
+            // 计算主成分方向（用于锚点生成）
+            computeClusterPrincipalNormal(cluster);
+            
+            clusters.push_back(cluster);
+        }
+    }
+}
+
+void FrontierViewpointGenerator::computeClusterPrincipalNormal(FrontierCluster& cluster)
+{
+    if (cluster.surface_points.size() < 3) {
+        cluster.principal_direction = Eigen::Vector3f::UnitX();
+        return;
+    }
+    
+    // 收集所有法向量
+    std::vector<Eigen::Vector3f> normals;
+    for (const auto& sp : cluster.surface_points) {
+        if (sp.has_normal) {
+            normals.push_back(sp.normal);
+        }
+    }
+    
+    if (normals.size() < 3) {
+        cluster.principal_direction = cluster.normal;
+        return;
+    }
+    
+    // PCA 计算主法线
+    Eigen::Vector3f mean = Eigen::Vector3f::Zero();
+    for (const auto& n : normals) mean += n;
+    mean /= static_cast<float>(normals.size());
+    
+    Eigen::Matrix3f cov = Eigen::Matrix3f::Zero();
+    for (const auto& n : normals) {
+        Eigen::Vector3f diff = n - mean;
+        cov += diff * diff.transpose();
+    }
+    cov /= static_cast<float>(normals.size());
+    
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3f> solver(cov);
+    if (solver.info() == Eigen::Success) {
+        // 最大特征值对应的特征向量（最后一列）
+        cluster.principal_direction = solver.eigenvectors().col(2);
+    } else {
+        cluster.principal_direction = cluster.normal;
+    }
+}
+
+void FrontierViewpointGenerator::sampleViewpointsSpherical(
+    const FrontierCluster& cluster,
+    std::vector<ExplorationViewpoint>& viewpoints)
+{
+    // 球扇形采样参数
+    // 注意：采样半径应该大于等于最小传感器距离
+    float r_min = config_.sensor_range_min;
+    float r_max = std::max(config_.sphere_sample_radius, config_.sensor_range_min + 1.0f);
+    float theta_max = config_.sphere_theta_max;
+    int sample_num = config_.sphere_sample_num * 3;  // 增加采样数量
+    
+    // 构建局部坐标系：z 轴沿主法线的反方向（指向自由空间）
+    // 因为 cluster.normal 指向未知区域，我们需要在相反方向（自由空间）采样视点
+    Eigen::Vector3f z_axis = -cluster.normal.normalized();
+    
+    // 找一个不平行于 z 的向量来构建 x 轴
+    Eigen::Vector3f temp = (std::abs(z_axis.z()) < 0.9f) ? 
+                           Eigen::Vector3f::UnitZ() : Eigen::Vector3f::UnitX();
+    Eigen::Vector3f x_axis = z_axis.cross(temp).normalized();
+    Eigen::Vector3f y_axis = z_axis.cross(x_axis);
+    
+    // 旋转矩阵：从局部坐标系到世界坐标系
+    Eigen::Matrix3f R;
+    R.col(0) = x_axis;
+    R.col(1) = y_axis;
+    R.col(2) = z_axis;
+    
+    // 随机数生成器
+    static std::mt19937 gen(std::random_device{}());
+    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+    
+    std::vector<ExplorationViewpoint> candidates;
+    
+    // 调试计数器
+    int rejected_safety = 0;
+    int rejected_distance = 0;
+    int rejected_utility = 0;
+    
+    for (int i = 0; i < sample_num; ++i) {
+        // 均匀球扇形采样（SFExplorer 公式 4）
+        float u1 = dist(gen);
+        float u2 = dist(gen);
+        float u3 = dist(gen);
+        
+        // r 在 [r_min, r_max] 范围内均匀采样（体积均匀）
+        // r = (r_min^3 + u1 * (r_max^3 - r_min^3))^(1/3)
+        float r_min_cubed = r_min * r_min * r_min;
+        float r_max_cubed = r_max * r_max * r_max;
+        float r = std::cbrt(r_min_cubed + u1 * (r_max_cubed - r_min_cubed));
+        
+        // θ = arccos(1 - u2*(1 - cos(θ_max)))
+        float cos_theta = 1.0f - u2 * (1.0f - std::cos(theta_max));
+        float theta = std::acos(std::max(-1.0f, std::min(1.0f, cos_theta)));
+        
+        // φ = 2π * u3
+        float phi = 2.0f * PI * u3;
+        
+        // 球坐标转笛卡尔坐标（局部坐标系）
+        float sin_theta = std::sin(theta);
+        Eigen::Vector3f local_pos(
+            r * sin_theta * std::cos(phi),
+            r * sin_theta * std::sin(phi),
+            r * std::cos(theta)
+        );
+        
+        // 转换到世界坐标系
+        Eigen::Vector3f world_pos = cluster.centroid + R * local_pos;
+        
+        // 将视点高度钳制到允许范围内（重要：球扇形采样后高度可能超出范围）
+        world_pos.z() = std::max(config_.viewpoint_height_min + 0.1f,
+                                 std::min(config_.viewpoint_height_max - 0.1f, world_pos.z()));
+        
+        // 安全检查 - 对于球扇形采样，允许UNKNOWN区域
+        // 因为我们是朝未知方向探索，视点可能在边界附近
+        bool safe = isPositionSafeForExploration(world_pos);
+        if (!safe) {
+            rejected_safety++;
+            continue;
+        }
+        
+        // 计算朝向（朝向簇中心）
+        Eigen::Vector3f to_cluster = cluster.centroid - world_pos;
+        float yaw = std::atan2(to_cluster.y(), to_cluster.x());
+        
+        // 距离检查
+        float dist_to_cluster = to_cluster.norm();
+        if (dist_to_cluster < config_.sensor_range_min || 
+            dist_to_cluster > config_.sensor_range_max) {
+            rejected_distance++;
+            continue;
+        }
+        
+        // 计算效用评分
+        float utility = computeUtilityScore(world_pos, cluster);
+        
+        if (utility > 0.01f) {  // 降低效用阈值
+            ExplorationViewpoint vp;
+            vp.position = world_pos;
+            vp.target_center = cluster.centroid;
+            vp.yaw = yaw;
+            vp.pitch = 0.0f;
+            vp.cluster_id = cluster.cluster_id;
+            vp.score = utility;
+            vp.is_valid = true;
+            
+            candidates.push_back(vp);
+        } else {
+            rejected_utility++;
+        }
+    }
+    
+    // 输出调试信息
+    ROS_INFO_THROTTLE(1.0, "[ViewpointGen-SF] Cluster %d (center=[%.1f,%.1f,%.1f]): candidates=%zu, "
+              "reject(safety=%d, distance=%d, utility=%d) / total=%d",
+              cluster.cluster_id, cluster.centroid.x(), cluster.centroid.y(), cluster.centroid.z(),
+              candidates.size(), rejected_safety, rejected_distance, rejected_utility, sample_num);
+    
+    // 可见性检查，选择最佳视点
+    if (!candidates.empty()) {
+        // 按效用排序
+        std::sort(candidates.begin(), candidates.end(),
+            [](const ExplorationViewpoint& a, const ExplorationViewpoint& b) {
+                return a.score > b.score;
+            });
+        
+        // 对 top-K 进行可见性检查
+        int top_k = std::min(5, static_cast<int>(candidates.size()));
+        bool found_good_visibility = false;
+        for (int i = 0; i < top_k; ++i) {
+            float visibility = computeVisibilityScore(candidates[i].position, cluster);
+            if (visibility >= config_.min_visibility_ratio) {
+                candidates[i].score = candidates[i].score * 0.7f + visibility * 0.3f;
+                viewpoints.push_back(candidates[i]);
+                found_good_visibility = true;
+                break;  // 只选择一个最佳视点
+            }
+        }
+        
+        // 如果所有候选点可见性都不够，选择效用最高的那个作为回退
+        if (!found_good_visibility && !candidates.empty()) {
+            ROS_DEBUG("[ViewpointGen-SF] Cluster %d: no good visibility, using best utility candidate",
+                     cluster.cluster_id);
+            viewpoints.push_back(candidates[0]);
+        }
+    }
+}
+
+float FrontierViewpointGenerator::computeUtilityScore(
+    const Eigen::Vector3f& viewpoint,
+    const FrontierCluster& cluster)
+{
+    // SFExplorer 效用函数：U(vp) = Σ (n_k · (vp - f_k)) / (||n_k|| * ||vp - f_k||)
+    // 综合考虑覆盖度和观测视角质量
+    
+    float utility = 0.0f;
+    int visible_count = 0;
+    
+    // 遍历簇内所有带法向量的前沿点
+    for (const auto& sp : cluster.surface_points) {
+        if (!sp.has_normal) continue;
+        
+        Eigen::Vector3f vp_to_frontier = sp.position - viewpoint;
+        float dist = vp_to_frontier.norm();
+        
+        // 距离检查
+        if (dist < config_.sensor_range_min || dist > config_.sensor_range_max) continue;
+        
+        // 射线可见性检查（简化：只检查采样点）
+        if (!checkRayVisibility(viewpoint, sp.position)) continue;
+        
+        visible_count++;
+        
+        // 计算 cos(θ) = |n · d| / (||n|| * ||d||)
+        // 其中 d 是从前沿点到视点的方向
+        // 注意：法向量可能指向任意方向，我们取绝对值确保正贡献
+        Eigen::Vector3f view_dir = -vp_to_frontier.normalized();
+        float cos_theta = std::abs(sp.normal.dot(view_dir));
+        
+        // cos_theta 越大（越接近 1），观测视角越垂直于表面，质量越高
+        utility += cos_theta;
+    }
+    
+    // 如果没有表面点，使用簇的法向量和质心
+    if (cluster.surface_points.empty() || visible_count == 0) {
+        Eigen::Vector3f vp_to_centroid = cluster.centroid - viewpoint;
+        float centroid_dist = vp_to_centroid.norm();
+        
+        if (centroid_dist >= config_.sensor_range_min && centroid_dist <= config_.sensor_range_max) {
+            Eigen::Vector3f view_dir = -vp_to_centroid.normalized();
+            // 取绝对值，因为法向量方向可能不确定
+            float cos_theta = std::abs(cluster.normal.dot(view_dir));
+            utility = cos_theta;
+        }
+    }
+    
+    // 返回平均效用（如果有多个可见点）
+    if (visible_count > 0) {
+        utility /= visible_count;
+    }
+    
+    return utility;
+}
+
+void FrontierViewpointGenerator::clusterViewpointsIncremental(
+    const std::vector<ExplorationViewpoint>& viewpoints,
+    std::vector<ExplorationViewpoint>& unclustered,
+    std::vector<ViewpointCluster>& clusters)
+{
+    unclustered.clear();
+    clusters.clear();
+    
+    if (viewpoints.empty()) return;
+    
+    // 获取 UAV 位置
+    Eigen::Vector3f uav_pos = uav_state_.position;
+    float cluster_min_dist = config_.vp_cluster_min_dist;
+    float cluster_dist = config_.vp_cluster_distance;
+    float cluster_radius = config_.vp_cluster_radius;
+    
+    // 分离近处和远处视点
+    std::vector<ExplorationViewpoint> far_viewpoints;
+    
+    for (const auto& vp : viewpoints) {
+        float dist = (vp.position - uav_pos).norm();
+        if (dist < cluster_min_dist) {
+            // 近处视点不聚类
+            unclustered.push_back(vp);
+        } else {
+            far_viewpoints.push_back(vp);
+        }
+    }
+    
+    if (far_viewpoints.empty()) return;
+    
+    // 增量聚类远处视点
+    std::vector<bool> clustered(far_viewpoints.size(), false);
+    
+    for (size_t i = 0; i < far_viewpoints.size(); ++i) {
+        if (clustered[i]) continue;
+        
+        ViewpointCluster cluster;
+        cluster.cluster_id = next_vp_cluster_id_++;
+        cluster.viewpoints.push_back(far_viewpoints[i]);
+        clustered[i] = true;
+        
+        // 尝试将其他视点加入聚类
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            
+            for (size_t j = 0; j < far_viewpoints.size(); ++j) {
+                if (clustered[j]) continue;
+                
+                const auto& vp = far_viewpoints[j];
+                
+                // 条件1：与聚类内所有视点的距离 < d_c
+                bool dist_ok = true;
+                for (const auto& cvp : cluster.viewpoints) {
+                    if ((vp.position - cvp.position).norm() > cluster_dist) {
+                        dist_ok = false;
+                        break;
+                    }
+                }
+                if (!dist_ok) continue;
+                
+                // 条件2：加入后外接圆半径 < r_c
+                // 计算当前质心
+                Eigen::Vector3f sum = Eigen::Vector3f::Zero();
+                for (const auto& cvp : cluster.viewpoints) sum += cvp.position;
+                sum += vp.position;
+                Eigen::Vector3f new_centroid = sum / static_cast<float>(cluster.viewpoints.size() + 1);
+                
+                float max_radius = 0.0f;
+                for (const auto& cvp : cluster.viewpoints) {
+                    max_radius = std::max(max_radius, (cvp.position - new_centroid).norm());
+                }
+                max_radius = std::max(max_radius, (vp.position - new_centroid).norm());
+                
+                if (max_radius > cluster_radius) continue;
+                
+                // 条件3：与聚类内视点无障碍
+                bool no_obstacle = true;
+                for (const auto& cvp : cluster.viewpoints) {
+                    if (hasObstacleBetween(vp.position, cvp.position)) {
+                        no_obstacle = false;
+                        break;
+                    }
+                }
+                if (!no_obstacle) continue;
+                
+                // 满足所有条件，加入聚类
+                cluster.viewpoints.push_back(vp);
+                clustered[j] = true;
+                changed = true;
+            }
+        }
+        
+        // 处理聚类结果
+        if (cluster.viewpoints.size() >= 2) {
+            // 计算聚类属性并生成锚点
+            Eigen::Vector3f sum = Eigen::Vector3f::Zero();
+            for (const auto& cvp : cluster.viewpoints) sum += cvp.position;
+            cluster.centroid = sum / static_cast<float>(cluster.viewpoints.size());
+            
+            float max_r = 0.0f;
+            for (const auto& cvp : cluster.viewpoints) {
+                max_r = std::max(max_r, (cvp.position - cluster.centroid).norm());
+            }
+            cluster.radius = max_r;
+            
+            generateAnchorPoints(cluster);
+            clusters.push_back(cluster);
+        } else {
+            // 单个视点不形成聚类
+            unclustered.push_back(cluster.viewpoints[0]);
+        }
+    }
+}
+
+void FrontierViewpointGenerator::generateAnchorPoints(ViewpointCluster& cluster)
+{
+    if (cluster.viewpoints.size() < 2) {
+        cluster.anchor_entry = cluster.centroid;
+        cluster.anchor_exit = cluster.centroid;
+        return;
+    }
+    
+    // PCA 计算主方向
+    Eigen::Vector3f mean = cluster.centroid;
+    
+    Eigen::Matrix3f cov = Eigen::Matrix3f::Zero();
+    for (const auto& vp : cluster.viewpoints) {
+        Eigen::Vector3f diff = vp.position - mean;
+        cov += diff * diff.transpose();
+    }
+    cov /= static_cast<float>(cluster.viewpoints.size());
+    
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3f> solver(cov);
+    if (solver.info() == Eigen::Success) {
+        // 最大特征值对应的特征向量（主方向）
+        cluster.principal_direction = solver.eigenvectors().col(2);
+        
+        // 第一主成分方向的标准差
+        float sigma = std::sqrt(solver.eigenvalues()(2));
+        float l_1 = sigma;  // 锚点距离
+        
+        // 生成锚点：ap_a = p_c - l_1*v_1, ap_b = p_c + l_1*v_1
+        cluster.anchor_entry = cluster.centroid - l_1 * cluster.principal_direction;
+        cluster.anchor_exit = cluster.centroid + l_1 * cluster.principal_direction;
+    } else {
+        cluster.anchor_entry = cluster.centroid;
+        cluster.anchor_exit = cluster.centroid;
+    }
 }
 
 } // namespace rog_map

@@ -4,7 +4,8 @@
 #include <iostream>
 #include <ros/ros.h>
 #include <Eigen/Eigen>
-#include "rog_map/rog_map.h"
+// 使用新的 STAR-MVF 地图系统
+#include "star_mvf/star_mvf.h"
 #include <queue>
 #include <vector>
 
@@ -52,7 +53,7 @@ public:
 class AStar
 {
 private:
-  rog_map::ROGMap::Ptr rog_map_;
+  star_mvf::MapManager::Ptr map_manager_;
 
   inline void coord2gridIndexFast(const double x, const double y, const double z, int &id_x, int &id_y, int &id_z);
 
@@ -67,7 +68,10 @@ private:
   inline bool Coord2Index(const Eigen::Vector3d &pt, Eigen::Vector3i &idx) const;
 
   inline int checkOccupancy(const Eigen::Vector3d &pos) { 
-    return rog_map_->isOccupiedInflate(pos) ? 1 : 0;
+    star_mvf::Position pos_f(static_cast<float>(pos.x()), 
+                             static_cast<float>(pos.y()), 
+                             static_cast<float>(pos.z()));
+    return map_manager_->isOccupiedInflate(pos_f) ? 1 : 0;
   }
 
   std::vector<GridNodePtr> retrievePath(GridNodePtr current);
@@ -90,7 +94,7 @@ public:
   AStar(){};
   ~AStar();
 
-  void initGridMap(rog_map::ROGMap::Ptr occ_map, const Eigen::Vector3i pool_size);
+  void initGridMap(star_mvf::MapManager::Ptr map_manager, const Eigen::Vector3i pool_size);
 
   ASTAR_RET AstarSearch(const double step_size, Eigen::Vector3d start_pt, Eigen::Vector3d end_pt);
 

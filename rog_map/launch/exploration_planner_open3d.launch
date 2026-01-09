@@ -2,7 +2,7 @@
   统一探索规划 Launch 文件 (Open3D 仿真版本)
   
   特点：
-  1. 单一 ROG-Map 实例（EGO-Planner 和 探索FSM 共享）
+  1. 单一 STAR-MVF MapManager 实例（EGO-Planner 和 探索FSM 共享）
   2. 数据同步，无延迟
   3. 减少内存占用
   
@@ -42,7 +42,7 @@
         args="-d $(find rog_map)/config/exploration_open3d.rviz"/>
 
     <!-- ========================================================== -->
-    <!--         统一探索规划节点（共享ROG-Map实例）                    -->
+    <!--    统一探索规划节点（共享STAR-MVF MapManager实例）            -->
     <!-- ========================================================== -->
     
     <node pkg="rog_map" type="exploration_planner_node" name="exploration_planner_node" output="screen">
@@ -60,9 +60,9 @@
         <param name="fsm/sim_mode" value="$(arg sim_mode)"/>
         <param name="fsm/auto_start_preset" value="$(arg auto_start)"/>
         
-        <!-- ROG-Map 话题重映射 -->
-        <param name="rog_map/ros_callback/odom_topic" value="$(arg odom_topic)"/>
-        <param name="rog_map/ros_callback/cloud_topic" value="$(arg cloud_topic)"/>
+        <!-- STAR-MVF MapManager 话题配置 -->
+        <param name="rog_map/lidar_topic" value="$(arg cloud_topic)"/>
+        <param name="rog_map/odom_topic" value="$(arg odom_topic)"/>
         
         <!-- 探索参数（被动可视化模式） -->
         <param name="exploration/auto_start" value="false"/>

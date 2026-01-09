@@ -2,7 +2,7 @@
   EGO-Planner 轨迹规划 Launch 文件 (MINCO Trajectory)
   
   功能:
-  1. 启动 ROG-Map 地图服务
+  1. 启动 STAR-MVF MapManager 地图服务
   2. 启动规划 FSM（状态机管理）
   3. 启动轨迹服务器（发布控制命令）
   
@@ -48,9 +48,9 @@
         <param name="fsm/flight_type" value="$(arg flight_type)"/>
         <param name="fsm/auto_start_preset" value="$(arg auto_start)"/>
         
-        <!-- ROG-Map 话题重映射 -->
-        <param name="rog_map/ros_callback/odom_topic" value="$(arg odom_topic)"/>
-        <param name="rog_map/ros_callback/cloud_topic" value="$(arg cloud_topic)"/>
+        <!-- STAR-MVF MapManager 话题配置 -->
+        <param name="rog_map/lidar_topic" value="$(arg cloud_topic)"/>
+        <param name="rog_map/odom_topic" value="$(arg odom_topic)"/>
     </node>
     
     <!-- ========== 轨迹服务器 ========== -->

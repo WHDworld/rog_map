@@ -11,7 +11,7 @@
   
   配置文件:
   - 所有参数统一在 config/exploration_config.yaml 中配置
-  - 包含: ROG-Map参数、EGO-Planner参数、探索状态机参数
+  - 包含: STAR-MVF MapManager参数、EGO-Planner参数、探索状态机参数
   
   话题:
   - 输入:
@@ -67,9 +67,9 @@
         <param name="fsm/flight_type" value="$(arg flight_type)"/>
         <param name="fsm/auto_start_preset" value="$(arg auto_start)"/>
         
-        <!-- ROG-Map 话题重映射 -->
-        <param name="rog_map/ros_callback/odom_topic" value="$(arg odom_topic)"/>
-        <param name="rog_map/ros_callback/cloud_topic" value="$(arg cloud_topic)"/>
+        <!-- STAR-MVF MapManager 话题配置 -->
+        <param name="rog_map/lidar_topic" value="$(arg cloud_topic)"/>
+        <param name="rog_map/odom_topic" value="$(arg odom_topic)"/>
     </node>
     
     <!-- 轨迹服务器（发布控制命令） -->
@@ -96,9 +96,9 @@
         <!-- 话题重映射 -->
         <remap from="~odom" to="$(arg odom_topic)"/>
         
-        <!-- ROG-Map 话题重映射 -->
-        <param name="rog_map/ros_callback/odom_topic" value="$(arg odom_topic)"/>
-        <param name="rog_map/ros_callback/cloud_topic" value="$(arg cloud_topic)"/>
+        <!-- STAR-MVF MapManager 话题配置 -->
+        <param name="rog_map/lidar_topic" value="$(arg cloud_topic)"/>
+        <param name="rog_map/odom_topic" value="$(arg odom_topic)"/>
         
         <!-- 探索参数覆盖（被动可视化模式） -->
         <param name="exploration/auto_start" value="false"/>

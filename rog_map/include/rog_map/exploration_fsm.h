@@ -31,11 +31,15 @@
 #include <thread>
 #include <atomic>
 
-#include "rog_map/rog_map.h"
-#include "rog_map/global_map.h"
+// 使用新的 STAR-MVF 地图系统
+#include "star_mvf/star_mvf.h"
 #include "rog_map/frontier_viewpoint_generator.h"
 
 namespace rog_map {
+
+// 使用 star_mvf 类型
+using MapManager = star_mvf::MapManager;
+using GlobalMap = star_mvf::GlobalMap;
 
 // ==================== 探索状态枚举 ====================
 enum class ExplorationState {
@@ -137,8 +141,10 @@ public:
     
     /**
      * @brief 初始化状态机
+     * @param nh 节点句柄
+     * @param map_manager 地图管理器（替代旧的 ROGMap）
      */
-    void init(ros::NodeHandle& nh, ROGMap::Ptr rog_map, GlobalMap::Ptr global_map);
+    void init(ros::NodeHandle& nh, MapManager::Ptr map_manager);
     
     /**
      * @brief 获取当前状态
@@ -257,8 +263,8 @@ private:
     ros::Publisher exploration_state_pub_;   // 探索状态
     
     // 地图模块
-    ROGMap::Ptr rog_map_;
-    GlobalMap::Ptr global_map_;
+    MapManager::Ptr map_manager_;
+    GlobalMap::Ptr global_map_;  // 从 map_manager_ 获取
     FrontierViewpointGenerator::Ptr viewpoint_generator_;
     
     // 状态

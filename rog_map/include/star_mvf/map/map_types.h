@@ -1,0 +1,359 @@
+/**
+ * @file map_types.h
+ * @brief STAR-MVF 地图系统核心数据类型定义
+ * 
+ * 参考项目：EDEN, FALCON
+ */
+
+#ifndef STAR_MVF_MAP_TYPES_H
+#define STAR_MVF_MAP_TYPES_H
+
+#include <Eigen/Dense>
+#include <cstdint>
+#include <functional>
+#include <unordered_set>
+#include <unordered_map>
+#include <vector>
+#include <queue>
+#include <mutex>
+
+namespace star_mvf {
+
+// ==================== 基础类型别名 ====================
+using Position = Eigen::Vector3f;
+using Positiond = Eigen::Vector3d;
+using Quaternion = Eigen::Quaternionf;
+
+// 兼容旧ROG-Map类型
+using Vec3f = Eigen::Vector3f;
+using Vec3d = Eigen::Vector3d;
+using Vec3i = Eigen::Vector3i;
+
+// ==================== 体素索引 ====================
+struct VoxelIndex {
+    int64_t x, y, z;
+    
+    VoxelIndex() : x(0), y(0), z(0) {}
+    VoxelIndex(int64_t x_, int64_t y_, int64_t z_) : x(x_), y(y_), z(z_) {}
+    
+    bool operator==(const VoxelIndex& other) const {
+        return x == other.x && y == other.y && z == other.z;
+    }
+    
+    bool operator!=(const VoxelIndex& other) const {
+        return !(*this == other);
+    }
+    
+    VoxelIndex operator+(const VoxelIndex& other) const {
+        return VoxelIndex(x + other.x, y + other.y, z + other.z);
+    }
+    
+    VoxelIndex operator-(const VoxelIndex& other) const {
+        return VoxelIndex(x - other.x, y - other.y, z - other.z);
+    }
+};
+
+// 兼容旧名称
+using GlobalVoxelIndex = VoxelIndex;
+
+// 体素索引哈希函数
+struct VoxelIndexHash {
+    std::size_t operator()(const VoxelIndex& idx) const {
+        // 使用黄金比例哈希
+        constexpr std::size_t prime1 = 73856093ULL;
+        constexpr std::size_t prime2 = 19349663ULL;
+        constexpr std::size_t prime3 = 83492791ULL;
+        return (static_cast<std::size_t>(idx.x) * prime1) ^
+               (static_cast<std::size_t>(idx.y) * prime2) ^
+               (static_cast<std::size_t>(idx.z) * prime3);
+    }
+};
+
+using GlobalVoxelIndexHash = VoxelIndexHash;
+
+// ==================== 体素状态（位掩码设计） ====================
+using VoxelState = uint8_t;
+using GlobalVoxelState = VoxelState;
+
+/**
+ * @brief 体素状态位定义
+ * 
+ * 使用位掩码设计，支持多维度状态组合：
+ * - 几何层（Bit 0-1）：UNKNOWN=0, FREE=1, OCCUPIED=2
+ * - 视觉层（Bit 2）：VISITED=4 （是否被相机观测过）
+ * - 语义层（Bit 3）：TARGET=8 （是否为感兴趣目标）
+ * - 前沿层（Bit 4）：FRONTIER=16 （是否为前沿体素）
+ */
+namespace VoxelStateBits {
+    // 几何状态（2位）
+    constexpr VoxelState GEO_UNKNOWN  = 0b00000000;  // 0: 未知
+    constexpr VoxelState GEO_FREE     = 0b00000001;  // 1: 自由
+    constexpr VoxelState GEO_OCCUPIED = 0b00000010;  // 2: 占据
+    constexpr VoxelState MASK_GEO     = 0b00000011;  // 几何层掩码
+    
+    // 视觉状态（1位）
+    constexpr VoxelState VISITED      = 0b00000100;  // 4: 已访问
+    constexpr VoxelState MASK_VISUAL  = 0b00000100;
+    
+    // 语义状态（1位）
+    constexpr VoxelState TARGET       = 0b00001000;  // 8: 目标
+    constexpr VoxelState MASK_SEMANTIC = 0b00001000;
+    
+    // 前沿状态（1位）
+    constexpr VoxelState FRONTIER     = 0b00010000;  // 16: 前沿
+    constexpr VoxelState MASK_FRONTIER = 0b00010000;
+    
+    // 辅助函数
+    inline VoxelState getGeoState(VoxelState state) { return state & MASK_GEO; }
+    inline bool isUnknown(VoxelState state) { return getGeoState(state) == GEO_UNKNOWN; }
+    inline bool isFree(VoxelState state) { return getGeoState(state) == GEO_FREE; }
+    inline bool isOccupied(VoxelState state) { return getGeoState(state) == GEO_OCCUPIED; }
+    inline bool isVisited(VoxelState state) { return (state & VISITED) != 0; }
+    inline bool isTarget(VoxelState state) { return (state & TARGET) != 0; }
+    inline bool isFrontier(VoxelState state) { return (state & FRONTIER) != 0; }
+    // 状态修改
+    inline void setGeoState(VoxelState& state, VoxelState geo) {
+        state = (state & ~MASK_GEO) | (geo & MASK_GEO);
+    }
+    inline void setVisited(VoxelState& state, bool visited) {
+        if (visited) state |= VISITED;
+        else state &= ~VISITED;
+    }
+    inline void setFrontier(VoxelState& state, bool frontier) {
+        if (frontier) state |= FRONTIER;
+        else state &= ~FRONTIER;
+    }
+}
+
+// ==================== 子网格索引 ====================
+struct SubGridIndex {
+    int x, y;
+    
+    SubGridIndex() : x(0), y(0) {}
+    SubGridIndex(int x_, int y_) : x(x_), y(y_) {}
+    
+    int toLinearIndex(int grid_x_num) const {
+        return y * grid_x_num + x;
+    }
+    
+    bool operator==(const SubGridIndex& other) const {
+        return x == other.x && y == other.y;
+    }
+};
+
+// ==================== 子网格结构 ====================
+struct SubGrid {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    
+    // 边界信息
+    VoxelIndex global_min_idx, global_max_idx;
+    Position world_min, world_max;
+    Position center;
+    SubGridIndex grid_idx;
+    
+    // 统计信息
+    int total_voxels = 0;
+    int unknown_count = 0;
+    int occupied_count = 0;
+    int free_count = 0;
+    float exploration_rate = 0.0f;
+    float unknown_rate = 1.0f;
+    
+    // 前沿信息
+    bool has_frontier = false;
+    int frontier_count = 0;
+    bool frontier_dirty = true;
+    bool was_frontier_last_time = false;
+    
+    // ========== 优化的体素存储结构 ==========
+    // FREE体素列表（用于前沿检测）
+    std::vector<VoxelIndex> free_voxels_list_;
+    // 映射表：VoxelIndex -> free_voxels_list_中的位置（-1表示不在列表中）
+    std::unordered_map<VoxelIndex, int, VoxelIndexHash> free_to_list_pos_;
+    
+    // UNKNOWN体素列表（可选，用于其他用途）
+    std::vector<VoxelIndex> unknown_voxels_list_;
+    std::unordered_map<VoxelIndex, int, VoxelIndexHash> unknown_to_list_pos_;
+    
+    // ==================== 3. OCCUPIED 体素结构 (新增：视觉规划专用) ====================
+    // [A] 未被视觉观测的占据体素 (Yaw规划的重点目标)
+    std::vector<VoxelIndex> occ_unobserved_list_;
+    std::unordered_map<VoxelIndex, int, VoxelIndexHash> occ_unobserved_map_;
+    // [B] 已被视觉观测的占据体素 (避免重复观测)
+    std::vector<VoxelIndex> occ_observed_list_;
+    std::unordered_map<VoxelIndex, int, VoxelIndexHash> occ_observed_map_;
+
+    // 前沿体素集合（保持unordered_set，因为需要快速查找和去重）
+    std::unordered_set<VoxelIndex, VoxelIndexHash> sub_grid_frontier_voxels_;
+        
+    /**
+     * @brief 添加FREE体素到列表（O(1)）
+     */
+     void addFreeVoxel(const VoxelIndex& idx) {
+        if (free_to_list_pos_.count(idx)) return;
+        
+        free_voxels_list_.push_back(idx);
+        free_to_list_pos_[idx] = static_cast<int>(free_voxels_list_.size() - 1);
+        free_count++;
+    }
+    
+    /**
+     * @brief 从FREE列表中移除体素（O(1) Swap-and-Pop）
+     */
+    void removeFreeVoxel(const VoxelIndex& idx) {
+        auto it = free_to_list_pos_.find(idx);
+        if (it == free_to_list_pos_.end()) return;  // 不在列表中
+        
+        int pos = it->second;
+        int last_pos = static_cast<int>(free_voxels_list_.size() - 1);
+        
+        // Swap-and-Pop优化
+        if (pos != last_pos) {
+            VoxelIndex last_idx = free_voxels_list_[last_pos];
+            free_voxels_list_[pos] = last_idx;
+            free_to_list_pos_[last_idx] = pos;  // 更新被搬运元素的映射
+        }
+        
+        free_voxels_list_.pop_back();
+        free_to_list_pos_.erase(it);
+        free_count--;
+    }
+        /**
+     * @brief 添加UNKNOWN体素到列表（O(1)）
+     */
+     void addUnknownVoxel(const VoxelIndex& idx) {
+        auto it = unknown_to_list_pos_.find(idx);
+        if (it != unknown_to_list_pos_.end()) return;
+        
+        unknown_voxels_list_.push_back(idx);
+        unknown_to_list_pos_[idx] = static_cast<int>(unknown_voxels_list_.size() - 1);
+        unknown_count++;
+    }
+    
+    /**
+     * @brief 从UNKNOWN列表中移除体素（O(1) Swap-and-Pop）
+     */
+    void removeUnknownVoxel(const VoxelIndex& idx) {
+        auto it = unknown_to_list_pos_.find(idx);
+        if (it == unknown_to_list_pos_.end()) return;
+        
+        int pos = it->second;
+        int last_pos = static_cast<int>(unknown_voxels_list_.size() - 1);
+        
+        if (pos != last_pos) {
+            VoxelIndex last_idx = unknown_voxels_list_[last_pos];
+            unknown_voxels_list_[pos] = last_idx;
+            unknown_to_list_pos_[last_idx] = pos;
+        }
+        
+        unknown_voxels_list_.pop_back();
+        unknown_to_list_pos_.erase(it);
+        unknown_count--;
+    }
+    
+    /**
+     * @brief 检查体素是否在FREE列表中
+     */
+    bool isFreeVoxel(const VoxelIndex& idx) const {
+        return free_to_list_pos_.find(idx) != free_to_list_pos_.end();
+    }
+    
+    /**
+     * @brief 检查体素是否在UNKNOWN列表中
+     */
+    bool isUnknownVoxel(const VoxelIndex& idx) const {
+        return unknown_to_list_pos_.find(idx) != unknown_to_list_pos_.end();
+    }
+    
+    float getExplorationRate() const {
+        if (total_voxels == 0) return 0.0f;
+        int explored = free_count + occupied_count;
+        return static_cast<float>(explored) / total_voxels;
+    }
+
+    float getUnknownRate() const {
+        if (total_voxels == 0) return 0.0f;
+        return static_cast<float>(unknown_count) / total_voxels;
+    }
+    
+    bool should_iterate_explored() {
+        return exploration_rate < 0.5f;
+    }
+};
+
+// ==================== 子网格前沿信息（用于视点生成） ====================
+struct SubGridFrontierInfo {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    int subgrid_id;
+    Position subgrid_center;
+    Position subgrid_min;
+    Position subgrid_max;
+    std::vector<Position> frontier_points;
+};
+
+// ==================== 6邻域偏移 ====================
+const VoxelIndex neighbor_offsets_6[6] = {
+    VoxelIndex(1, 0, 0), VoxelIndex(-1, 0, 0),
+    VoxelIndex(0, 1, 0), VoxelIndex(0, -1, 0),
+    VoxelIndex(0, 0, 1), VoxelIndex(0, 0, -1)
+};
+
+// ==================== 26邻域偏移 ====================
+const VoxelIndex neighbor_offsets_26[26] = {
+    // 6 面邻居
+    VoxelIndex(1, 0, 0), VoxelIndex(-1, 0, 0),
+    VoxelIndex(0, 1, 0), VoxelIndex(0, -1, 0),
+    VoxelIndex(0, 0, 1), VoxelIndex(0, 0, -1),
+    // 12 边邻居
+    VoxelIndex(1, 1, 0), VoxelIndex(1, -1, 0),
+    VoxelIndex(-1, 1, 0), VoxelIndex(-1, -1, 0),
+    VoxelIndex(1, 0, 1), VoxelIndex(1, 0, -1),
+    VoxelIndex(-1, 0, 1), VoxelIndex(-1, 0, -1),
+    VoxelIndex(0, 1, 1), VoxelIndex(0, 1, -1),
+    VoxelIndex(0, -1, 1), VoxelIndex(0, -1, -1),
+    // 8 角邻居
+    VoxelIndex(1, 1, 1), VoxelIndex(1, 1, -1),
+    VoxelIndex(1, -1, 1), VoxelIndex(1, -1, -1),
+    VoxelIndex(-1, 1, 1), VoxelIndex(-1, 1, -1),
+    VoxelIndex(-1, -1, 1), VoxelIndex(-1, -1, -1)
+};
+
+// ==================== 膨胀地图配置 ====================
+struct InflationConfig {
+    float inflation_radius = 0.3f;      // 膨胀半径 (m)
+    float inflation_resolution = 0.1f;  // 膨胀地图分辨率
+    int inflation_grid_radius = 3;      // 膨胀格子数
+    bool enable_inflation = true;
+};
+
+// ==================== ESDF配置 ====================
+struct ESDFConfig {
+    bool enable_esdf = false;
+    float esdf_resolution = 0.1f;
+    float esdf_max_distance = 3.0f;
+    float local_update_range_x = 10.0f;
+    float local_update_range_y = 10.0f;
+    float local_update_range_z = 5.0f;
+};
+
+// ==================== 机器人状态 ====================
+struct RobotState {
+    Position position = Position::Zero();
+    Position velocity = Position::Zero();
+    Quaternion orientation = Quaternion::Identity();
+    float yaw = 0.0f;
+    double timestamp = 0.0;
+};
+
+// ==================== 网格类型（兼容旧代码）====================
+enum class GridType {
+    UNKNOWN = 0,
+    KNOWN_FREE = 1,
+    OCCUPIED = 2,
+    OUT_OF_MAP = 3
+};
+
+}  // namespace star_mvf
+
+#endif  // STAR_MVF_MAP_TYPES_H
+

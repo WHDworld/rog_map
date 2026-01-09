@@ -16,13 +16,19 @@
 
 #include <ros/ros.h>
 #include <Eigen/Dense>
+#include <Eigen/Eigenvalues>
 #include <vector>
 #include <mutex>
 #include <algorithm>
+#include <random>
+#include <cmath>
 
-#include "rog_map/global_map.h"
+// 使用新的 STAR-MVF 地图系统
+#include "star_mvf/star_mvf.h"
 
 namespace rog_map {
+
+// GlobalMap 和 SubGridFrontierInfo 已通过 star_mvf.h 提供
 
 constexpr float PI = 3.14159265358979323846f;
 
@@ -63,14 +69,49 @@ struct HistoryNode {
     Eigen::Vector3f position;                     // 节点位置
     float timestamp;                              // 创建时间戳
     std::vector<int> associated_subgrid_ids;      // 关联的子网格ID列表
+    std::vector<int> neighbors;                   // 邻居节点ID列表（双向连接）
+    int parent_node_id;                           // 创建时的父节点（从哪个节点飞来的）
     
     HistoryNode()
         : node_id(-1)
         , position(Eigen::Vector3f::Zero())
-        , timestamp(0.0f) {}
+        , timestamp(0.0f)
+        , parent_node_id(-1) {}
     
     HistoryNode(int id, const Eigen::Vector3f& pos, float ts)
-        : node_id(id), position(pos), timestamp(ts) {}
+        : node_id(id), position(pos), timestamp(ts), parent_node_id(-1) {}
+    
+    // 添加邻居（双向连接）
+    void addNeighbor(int neighbor_id) {
+        if (std::find(neighbors.begin(), neighbors.end(), neighbor_id) == neighbors.end()) {
+            neighbors.push_back(neighbor_id);
+        }
+    }
+    
+    bool hasNeighbor(int neighbor_id) const {
+        return std::find(neighbors.begin(), neighbors.end(), neighbor_id) != neighbors.end();
+    }
+};
+
+/**
+ * @brief 带法向量的表面前沿点（SFExplorer策略）
+ */
+struct SurfaceFrontierPoint {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    
+    Eigen::Vector3f position;            // 位置
+    Eigen::Vector3f normal;              // 表面法向量（指向未知区域）
+    bool has_normal;                     // 是否成功计算法向量
+    
+    SurfaceFrontierPoint()
+        : position(Eigen::Vector3f::Zero())
+        , normal(Eigen::Vector3f::UnitZ())
+        , has_normal(false) {}
+        
+    SurfaceFrontierPoint(const Eigen::Vector3f& pos)
+        : position(pos)
+        , normal(Eigen::Vector3f::UnitZ())
+        , has_normal(false) {}
 };
 
 /**
@@ -83,17 +124,22 @@ struct FrontierCluster {
     int subgrid_id;                      // 所属子网格ID
     int history_node_id;                 // 关联的历史节点ID
     Eigen::Vector3f centroid;            // 簇中心
-    Eigen::Vector3f normal;              // 法向量
+    Eigen::Vector3f normal;              // 法向量（主法线方向）
+    Eigen::Vector3f principal_direction; // 主成分方向（用于锚点生成）
     int point_count;                     // 点数
     float extent;                        // 范围（用于判断是否需要分裂）
     
     // 前沿点位置列表（用于可视化）
     std::vector<Eigen::Vector3f> points;
     
+    // 带法向量的前沿点列表（SFExplorer策略）
+    std::vector<SurfaceFrontierPoint> surface_points;
+    
     FrontierCluster()
         : cluster_id(-1), subgrid_id(-1), history_node_id(-1)
         , centroid(Eigen::Vector3f::Zero())
         , normal(Eigen::Vector3f::UnitZ())
+        , principal_direction(Eigen::Vector3f::UnitX())
         , point_count(0), extent(0.0f) {}
     
     int size() const { return point_count; }
@@ -121,6 +167,31 @@ struct ExplorationViewpoint {
 };
 
 /**
+ * @brief 视点聚类（用于增量聚类和锚点生成，SFExplorer策略）
+ */
+struct ViewpointCluster {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    
+    int cluster_id;                               // 聚类ID
+    std::vector<ExplorationViewpoint> viewpoints; // 聚类内的视点
+    Eigen::Vector3f centroid;                     // 聚类中心
+    Eigen::Vector3f principal_direction;          // 主成分方向
+    float radius;                                 // 外接圆半径
+    
+    // 锚点（入口和出口）
+    Eigen::Vector3f anchor_entry;                 // 入口锚点
+    Eigen::Vector3f anchor_exit;                  // 出口锚点
+    
+    ViewpointCluster()
+        : cluster_id(-1)
+        , centroid(Eigen::Vector3f::Zero())
+        , principal_direction(Eigen::Vector3f::UnitX())
+        , radius(0.0f)
+        , anchor_entry(Eigen::Vector3f::Zero())
+        , anchor_exit(Eigen::Vector3f::Zero()) {}
+};
+
+/**
  * @brief UAV状态
  */
 struct UAVState {
@@ -134,13 +205,18 @@ struct UAVState {
  * @brief 配置参数
  */
 struct ViewpointGeneratorConfig {
+    // ========== 策略选择开关 ==========
+    bool use_surface_frontier = false;    // 是否使用表面前沿（SFExplorer策略）
+    bool use_spherical_sampling = false;  // 是否使用球扇形采样（SFExplorer策略）
+    bool use_viewpoint_clustering = false;// 是否使用增量视点聚类（SFExplorer策略）
+    
     // ========== 传感器参数 ==========
     float sensor_range_min = 0.5f;       // 最小感知距离 [m]
     float sensor_range_max = 5.0f;       // 最大感知距离 [m]
     float sensor_fov_h = 1.57f;          // 水平FOV [rad] (~90°)
     float sensor_fov_v = 1.22f;          // 垂直FOV [rad] (~70°)
     
-    // ========== 视点采样参数 ==========
+    // ========== 视点采样参数（圆周采样 - 原有策略） ==========
     float viewpoint_height = 1.0f;       // 视点基准高度（用于起飞检测）
     float viewpoint_height_min = 0.8f;   // 视点最小采样高度 [m]
     float viewpoint_height_max = 1.2f;   // 视点最大采样高度 [m]
@@ -151,11 +227,20 @@ struct ViewpointGeneratorConfig {
     float candidate_dphi = 0.5f;         // 角度采样间隔 [rad]
     float optimal_distance = 3.0f;       // 最优观测距离
     
+    // ========== 球扇形采样参数（SFExplorer策略） ==========
+    float sphere_sample_radius = 2.5f;    // 球扇形采样半径（传感器量程的一半）
+    float sphere_theta_max = 0.785f;      // 最大极角 [rad] (~45°)
+    int sphere_sample_num = 20;           // 球扇形内采样点数
+    
     // ========== 前沿簇参数 ==========
     float cluster_eps = 1.0f;            // 聚类半径
     int min_cluster_size = 10;           // 最小簇大小
     float cluster_split_threshold = 3.0f;// 簇分裂阈值
     int max_clusters = 20;               // 最大簇数
+    
+    // ========== 表面前沿聚类参数（SFExplorer策略） ==========
+    float normal_angle_threshold = 0.785f;// 法向量聚类角度阈值 [rad] (~45°)
+    int normal_pca_k = 10;                // PCA计算法向量时的邻域点数
     
     // ========== 安全参数 ==========
     float uav_radius = 0.35f;
@@ -175,9 +260,13 @@ struct ViewpointGeneratorConfig {
     float ground_offset = 0.1f;          // 地面偏移（过滤地面噪声）[m]
     
     // ========== 头顶区域过滤参数 ==========
-    // 策略：在簇级别过滤，如果簇中心比无人机高且水平距离近，则认为是头顶区域
-    float overhead_height_threshold = 0.5f;   // 头顶高度阈值：簇中心比无人机高多少算头顶 [m]
-    float overhead_distance_threshold = 2.0f; // 头顶距离阈值：水平距离多近时过滤 [m]
+    float overhead_height_threshold = 0.5f;   // 头顶高度阈值 [m]
+    float overhead_distance_threshold = 2.0f; // 头顶距离阈值 [m]
+    
+    // ========== 增量视点聚类参数（SFExplorer策略） ==========
+    float vp_cluster_distance = 3.0f;     // 视点聚类距离阈值 [m]
+    float vp_cluster_radius = 5.0f;       // 视点聚类外接圆半径阈值 [m]
+    float vp_cluster_min_dist = 4.0f;     // 视点需要聚类的最小距离（近处不聚类）[m]
 };
 
 // ==================== 主类 ====================
@@ -346,10 +435,101 @@ private:
      */
     void optimizeViewpointYaw(std::vector<ExplorationViewpoint>& viewpoints);
     
+    // ==================== SFExplorer 策略函数 ====================
+    
+    /**
+     * @brief 获取表面前沿点（SFExplorer策略）
+     * 
+     * 表面前沿定义：同时存在"占用态邻居"和"自由态邻居"的未知态体素
+     * 与传统前沿（仅需自由邻居）不同，聚焦于环境表面信息
+     * 
+     * @param surface_frontiers 输出的带法向量的表面前沿点
+     */
+    void extractSurfaceFrontiers(std::vector<SurfaceFrontierPoint>& surface_frontiers);
+    
+    /**
+     * @brief 计算表面前沿点的法向量（SFExplorer策略）
+     * 
+     * 使用 PCA 分析邻域点云，提取表面法向量（指向未知区域）
+     * 
+     * @param point 前沿点
+     * @param normal 输出的法向量
+     * @return 是否成功计算法向量
+     */
+    bool computeSurfaceNormal(const Eigen::Vector3f& point, Eigen::Vector3f& normal);
+    
+    /**
+     * @brief 基于法向量相似性的区域生长聚类（SFExplorer策略）
+     * 
+     * 聚类条件：法向量夹角 < normal_angle_threshold
+     * 
+     * @param surface_points 带法向量的前沿点
+     * @param clusters 输出的前沿簇
+     */
+    void clusterByNormalSimilarity(const std::vector<SurfaceFrontierPoint>& surface_points,
+                                   std::vector<FrontierCluster>& clusters);
+    
+    /**
+     * @brief 计算簇的主法线（SFExplorer策略）
+     * 
+     * 对簇内所有法向量做 PCA，提取主法线方向
+     */
+    void computeClusterPrincipalNormal(FrontierCluster& cluster);
+    
+    /**
+     * @brief 球扇形区域均匀采样视点（SFExplorer策略）
+     * 
+     * 在"以簇质心为原点、主法线为z轴"的球坐标系中采样
+     * 公式：r = r_s * u1^(1/3), θ = arccos(1 - u2*(1 - cos(θ_max))), φ = 2π*u3
+     * 
+     * @param cluster 前沿簇
+     * @param viewpoints 输出的视点
+     */
+    void sampleViewpointsSpherical(const FrontierCluster& cluster,
+                                   std::vector<ExplorationViewpoint>& viewpoints);
+    
+    /**
+     * @brief SFExplorer 效用函数评估视点（SFExplorer策略）
+     * 
+     * U(vp) = Σ (n_k · (vp - f_k)) / (||n_k|| * ||vp - f_k||)
+     * 综合考虑覆盖度（可见前沿数）和观测视角质量（法向量与视线夹角）
+     * 
+     * @param viewpoint 视点位置
+     * @param cluster 目标簇
+     * @return 效用值
+     */
+    float computeUtilityScore(const Eigen::Vector3f& viewpoint,
+                              const FrontierCluster& cluster);
+    
+    /**
+     * @brief 增量视点聚类（SFExplorer策略）
+     * 
+     * 对远距离视点聚类，用锚点替代聚类内视点，降低路径规划复杂度
+     * 聚类条件：距离 < d_c，外接圆半径 < r_c，视点间无障碍物
+     * 
+     * @param viewpoints 输入视点
+     * @param unclustered 输出未聚类的视点（近处视点）
+     * @param clusters 输出视点聚类
+     */
+    void clusterViewpointsIncremental(const std::vector<ExplorationViewpoint>& viewpoints,
+                                      std::vector<ExplorationViewpoint>& unclustered,
+                                      std::vector<ViewpointCluster>& clusters);
+    
+    /**
+     * @brief 生成视点聚类的锚点（SFExplorer策略）
+     * 
+     * 使用 PCA 提取聚类主方向，在质心两侧生成入口/出口锚点
+     * ap_a = p_c - l_1*v_1, ap_b = p_c + l_1*v_1
+     * 
+     * @param cluster 视点聚类
+     */
+    void generateAnchorPoints(ViewpointCluster& cluster);
+    
     // ==================== 辅助函数 ====================
     
     bool isPositionSafe(const Eigen::Vector3f& pos);
     bool isPositionFree(const Eigen::Vector3f& pos);
+    bool isPositionSafeForExploration(const Eigen::Vector3f& pos);  // 用于球扇形采样的宽松检查
     
     /**
      * @brief 计算视点的覆盖评分
@@ -406,9 +586,14 @@ private:
     int next_node_id_ = 0;
     Eigen::Vector3f last_node_position_ = Eigen::Vector3f::Zero();
     bool first_node_created_ = false;
+    int last_connected_node_idx_ = -1;  // 追踪 UAV 最后经过的节点索引
     
     // 子网格关联信息（用于可视化）
     std::vector<AssociatedSubgrid> associated_subgrids_;
+    
+    // SFExplorer: 增量视点聚类（跨帧持久化）
+    std::vector<ViewpointCluster> viewpoint_clusters_;
+    int next_vp_cluster_id_ = 0;
 };
 
 } // namespace rog_map

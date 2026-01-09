@@ -697,7 +697,7 @@ namespace ego_planner
             }
         }
         else
-          ROS_WARN("Failed to generate direction. It doesn't matter.");
+          ROS_WARN_THROTTLE(5.0, "Failed to generate direction. It doesn't matter.");
       }
 
       force_stop_type_ = STOP_FOR_REBOUND;
@@ -1107,13 +1107,13 @@ namespace ego_planner
              enable_height_keeping_ ? "ON" : "OFF", wei_height_, height_tolerance_);
   }
 
-  void PolyTrajOptimizer::setEnvironment(const rog_map::ROGMap::Ptr &map)
+  void PolyTrajOptimizer::setEnvironment(const star_mvf::MapManager::Ptr &map)
   {
-    rog_map_ = map;
-    resolution_ = rog_map_->getResolution();
+    map_manager_ = map;
+    resolution_ = map_manager_->getResolution();
 
     a_star_.reset(new AStar);
-    a_star_->initGridMap(rog_map_, Eigen::Vector3i(100, 100, 100));
+    a_star_->initGridMap(map_manager_, Eigen::Vector3i(100, 100, 100));
     
     ROS_INFO("[PolyTrajOptimizer] Environment set with resolution: %.3f", resolution_);
   }

@@ -1,0 +1,136 @@
+=============================================================
+  STAR-Searcher Performance & System Log
+  Started: 2026-01-09 11:35:33
+=============================================================
+
+[0.000] [ROS] [INFO] [RosLogRedirect] ROS log redirect initialized
+[0.000] [NODE] [INFO] ===========================================
+[0.000] [NODE] [INFO]     Unified Exploration Planner Node       
+[0.000] [NODE] [INFO]     (STAR-MVF Map System)                  
+[0.000] [NODE] [INFO] ===========================================
+[0.000] [ROS] [INFO] ===========================================
+[0.001] [ROS] [INFO]     Unified Exploration Planner Node       
+[0.001] [ROS] [INFO]     (STAR-MVF Map System)                  
+[0.001] [ROS] [INFO] ===========================================
+[0.001] [ROS] [INFO]   Architecture:
+[0.001] [ROS] [INFO]   - Single STAR-MVF MapManager instance (shared)
+[0.001] [ROS] [INFO]   - EGO-Planner for trajectory planning
+[0.001] [ROS] [INFO]   - Exploration FSM for viewpoint generation
+[0.001] [ROS] [INFO] ===========================================
+[0.001] [ROS] [INFO] [ExplorationPlannerNode] Creating STAR-MVF MapManager...
+[0.011] [ROS] [INFO] [LocalMap] Initialized: half_size_i=(50,50,15), map_size_i=(101,101,31), total=316231 voxels
+[0.015] [ROS] [INFO] [GlobalMap] Inflation config: enable=1, radius=2 grids (0.40m)
+[0.015] [ROS] [INFO] [GlobalMap] Map Voxels: [250 x 250 x 10]
+[0.015] [ROS] [INFO] [GlobalMap] SubGrids: 33 x 33 (Base Size: 7 x 7 voxels)
+[0.056] [ROS] [INFO] [GlobalMap] Initialization Done. Created 1089 subgrids.
+[0.056] [ROS] [INFO] [GlobalMap] Initialized inflation offsets: radius=2, neighbors=33
+[0.058] [ROS] [INFO] [GlobalMap] Initialized: resolution=0.200, range=[(-25.0,-25.0,-0.0), (25.0,25.0,2.0)]
+[0.063] [ROS] [INFO] [MapManager] Initialized with lidar_topic=/livox/lidar, odom_topic=/uav_simulator/odometry
+[0.063] [ROS] [INFO] [MapManager] Creating sync_timer with rate=10.0 Hz
+[0.063] [ROS] [INFO] [MapManager] Creating viz_timer with rate=5.0 Hz
+[0.064] [ROS] [INFO] [MapManager] Started - timers created
+[0.064] [ROS] [INFO] [ExplorationPlannerNode] MapManager initialized (shared instance)
+[0.064] [ROS] [INFO] [ExplorationPlannerNode] Initializing EGO-Planner...
+[0.070] [ROS] [INFO] [PolyTrajOptimizer] Parameters loaded:
+[0.070] [ROS] [INFO]   cps_num_prePiece: 5
+[0.071] [ROS] [INFO]   wei_obs: 50000.0, wei_obs_soft: 5000.0
+[0.071] [ROS] [INFO]   wei_feas: 10000.0, wei_sqrvar: 1000.0, wei_time: 100.0
+[0.071] [ROS] [INFO]   obs_clearance: 1.25, obs_clearance_soft: 0.75
+[0.071] [ROS] [INFO]   max_vel: 1.0, max_acc: 1.0
+[0.071] [ROS] [INFO]   height_keeping: ON, wei_height: 500000.0, height_tol: 0.10
+[0.118] [ROS] [INFO] [PolyTrajOptimizer] Environment set with resolution: 0.200
+[0.118] [ROS] [INFO] [EGOPlannerManager] Initialized with:
+[0.118] [ROS] [INFO]   max_vel: 1.00, max_acc: 1.00
+[0.118] [ROS] [INFO]   planning_horizon: 12.00, piece_length: 1.50
+[0.126] [ROS] [INFO] [EGOReplanFSM] Initialized with target_type=1, sim_mode=OPEN3D
+[0.126] [ROS] [INFO] [ExplorationPlannerNode] EGO-Planner initialized
+[0.126] [ROS] [INFO] [ExplorationPlannerNode] Initializing Exploration FSM...
+[0.138] [ROS] [INFO] [ExplorationFSM] Viewpoint config: height=[0.50, 2.00]x1, r=[2.0, 5.0], sensor=[2.0, 5.0], fov_h=1.57
+[0.138] [ROS] [INFO] [ExplorationFSM] History node: dist=3.0, radius=20.0 | Ground filter: -0.01+0.10
+[0.138] [ROS] [INFO] [ExplorationFSM] Overhead filter: height_th=0.30, dist_th=3.00
+[0.142] [ROS] [INFO] [ExplorationFSM] Initialized successfully
+[0.142] [ROS] [INFO] [ExplorationPlannerNode] Exploration FSM initialized
+[0.142] [ROS] [INFO] ===========================================
+[0.142] [ROS] [INFO]   All modules share the same MapManager!
+[0.142] [ROS] [INFO]   -----------------------------------
+[0.142] [ROS] [INFO]   Usage:
+[0.142] [ROS] [INFO]   1. UAV will auto-takeoff and follow waypoints
+[0.142] [ROS] [INFO]   2. Exploration visualizes frontiers & viewpoints
+[0.142] [ROS] [INFO]   3. Use '2D Nav Goal' in RViz to trigger manual target
+[0.142] [ROS] [INFO]   -----------------------------------
+[0.142] [ROS] [INFO]   RViz Topics:
+[0.142] [ROS] [INFO]   - Planner: /ego_planner/trajectory_vis
+[0.142] [ROS] [INFO]   - Frontiers: /exploration/frontier_clusters
+[0.142] [ROS] [INFO]   - Viewpoints: /exploration/viewpoints
+[0.142] [ROS] [INFO] ===========================================
+[0.152] [ROS] [INFO] [ExplorationFSM] Waiting for odometry...
+[0.257] [ROS] [INFO] [MapManager] First odom received!
+[0.262] [ROS] [INFO] [ExplorationFSM] Initializing (0.1/2.0 s)...
+[0.264] [ROS] [INFO] [EGOReplanFSM] Open3D mode: skipping PRE_ARM, starting takeoff to z=1.00
+[0.264] [PLAN] [STATE_CHANGE] INIT -> TAKEOFF (by FSM), pos=(0.00,0.00,0.00), have_target=0, have_trigger=0
+[0.264] [ROS] [INFO] [EGOReplanFSM] State: INIT -> TAKEOFF (by FSM)
+[0.274] [ROS] [INFO] [EGOReplanFSM] Takeoff in progress: z=0.00 / 1.00
+[1.142] [GEN] [INFO] ========== Starting viewpoint generation cycle ==========
+[1.142] [HIST] [CREATE_FIRST] id=0, pos=(0.00,0.00,0.95)
+[1.142] [GEN] [FILTER_POINTS] Raw=2818, After=2818, Removed=0
+[1.142] [GEN] [INFO] HistoryNodes=1, FrontierGroups=1
+[1.159] [GEN] [CLUSTERS] formed=1 from 1 groups
+[1.159] [GEN] [SPLIT] after_split=8 clusters
+[1.160] [GEN] [CLUSTER_STATS] total=8, covered=0, no_viewpoint=8, produced=0
+[1.160] [GEN] [SAMPLING] covered=0, no_vp=8, produced=0, L1L2_candidates=0
+[1.160] [GEN] [DEDUP] After_dedup=0
+[1.160] [GEN] [FINAL] viewpoints=0, clusters=8, gen_time=17.31ms
+[1.160] [GEN] [TIME] TOTAL_GENERATE: 17.324 ms
+[1.265] [PLAN] [STATE_CHANGE] TAKEOFF -> WAIT_TARGET (by FSM), pos=(0.00,0.00,1.00), have_target=0, have_trigger=0
+[1.265] [ROS] [INFO] [EGOReplanFSM] State: TAKEOFF -> WAIT_TARGET (by FSM)
+[1.265] [ROS] [INFO] [EGOReplanFSM] Open3D mode: Takeoff complete (z=1.00), waiting for target
+[1.272] [ROS] [INFO] [ExplorationFSM] Initializing (1.1/2.0 s)...
+[2.142] [ROS] [INFO] [ExplorationFSM] Takeoff complete (z=1.00), waiting for trigger (use 2D Nav Goal in RViz)
+[2.152] [FSM] [STATE_CHANGE] INIT -> WAIT_TRIGGER
+[5.188] [PLAN] [STATE_INFO] current=WAIT_TARGET
+[8.142] [GEN] [INFO] ========== Starting viewpoint generation cycle ==========
+[8.143] [GEN] [FILTER_POINTS] Raw=7184, After=7184, Removed=0
+[8.143] [GEN] [INFO] HistoryNodes=1, FrontierGroups=1
+[8.211] [GEN] [CLUSTERS] formed=23 from 1 groups
+[8.211] [GEN] [SPLIT] after_split=32 clusters
+[8.211] [GEN] [OVERHEAD_FILTER] removed=4, remaining=28
+[8.213] [GEN] [CLUSTER_STATS] total=28, covered=0, no_viewpoint=28, produced=0
+[8.213] [GEN] [SAMPLING] covered=0, no_vp=28, produced=0, L1L2_candidates=0
+[8.213] [GEN] [DEDUP] After_dedup=0
+[8.213] [GEN] [FINAL] viewpoints=0, clusters=28, gen_time=70.58ms
+[8.213] [GEN] [TIME] TOTAL_GENERATE: 70.597 ms
+[10.245] [PLAN] [STATE_INFO] current=WAIT_TARGET
+[14.143] [GEN] [INFO] ========== Starting viewpoint generation cycle ==========
+[14.143] [GEN] [FILTER_POINTS] Raw=4087, After=4087, Removed=0
+[14.143] [GEN] [INFO] HistoryNodes=1, FrontierGroups=1
+[14.167] [GEN] [CLUSTERS] formed=22 from 1 groups
+[14.167] [GEN] [SPLIT] after_split=26 clusters
+[14.167] [GEN] [OVERHEAD_FILTER] removed=3, remaining=23
+[14.175] [GEN] [CLUSTER_STATS] total=23, covered=0, no_viewpoint=4, produced=19
+[14.175] [GEN] [SAMPLING] covered=0, no_vp=4, produced=19, L1L2_candidates=19
+[14.175] [GEN] [DEDUP] After_dedup=10
+[14.175] [GEN] [YAW_OPT] checked=9 pairs, adjusted=2
+[14.175] [GEN] [FINAL] viewpoints=10, clusters=23, gen_time=32.35ms
+[14.175] [GEN] [TIME] TOTAL_GENERATE: 32.359 ms
+[14.175] [ROS] [INFO] [ExplorationFSM] Passive mode: 23 clusters, 10 viewpoints
+[15.300] [PLAN] [STATE_INFO] current=WAIT_TARGET
+[20.357] [PLAN] [STATE_INFO] current=WAIT_TARGET
+[25.416] [PLAN] [STATE_INFO] current=WAIT_TARGET
+[30.474] [PLAN] [STATE_INFO] current=WAIT_TARGET
+[35.533] [PLAN] [STATE_INFO] current=WAIT_TARGET
+[40.591] [PLAN] [STATE_INFO] current=WAIT_TARGET
+[45.647] [PLAN] [STATE_INFO] current=WAIT_TARGET
+[50.706] [PLAN] [STATE_INFO] current=WAIT_TARGET
+[55.763] [PLAN] [STATE_INFO] current=WAIT_TARGET
+[55.964] [MAP] [UPDATE_VOXELS] occ=136, free=72, inflate=42, time=0.25ms
+[60.822] [PLAN] [STATE_INFO] current=WAIT_TARGET
+[65.879] [PLAN] [STATE_INFO] current=WAIT_TARGET
+[70.938] [PLAN] [STATE_INFO] current=WAIT_TARGET
+[75.996] [PLAN] [STATE_INFO] current=WAIT_TARGET
+[81.059] [PLAN] [STATE_INFO] current=WAIT_TARGET
+[86.117] [PLAN] [STATE_INFO] current=WAIT_TARGET
+[91.176] [PLAN] [STATE_INFO] current=WAIT_TARGET
+[96.234] [PLAN] [STATE_INFO] current=WAIT_TARGET
+[97.426] [NODE] [INFO] Shutting down exploration planner node...
+
+=== Log Closed ===

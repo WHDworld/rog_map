@@ -8,7 +8,7 @@ namespace ego_planner
 
   EGOPlannerManager::~EGOPlannerManager() { std::cout << "EGOPlannerManager destroyed" << std::endl; }
 
-  void EGOPlannerManager::initPlanModules(ros::NodeHandle &nh, rog_map::ROGMap::Ptr map)
+  void EGOPlannerManager::initPlanModules(ros::NodeHandle &nh, star_mvf::MapManager::Ptr map)
   {
     /* 从统一的 dynamics 部分读取参数，若无则从 manager 部分读取（向后兼容） */
     if (!nh.getParam("dynamics/max_vel", pp_.max_vel_)) {
@@ -23,11 +23,11 @@ namespace ego_planner
     nh.param("manager/planning_horizon", pp_.planning_horizen_, 7.5);
     nh.param("manager/use_distinctive_trajs", pp_.use_distinctive_trajs, false);
 
-    rog_map_ = map;
+    map_manager_ = map;
 
     ploy_traj_opt_.reset(new PolyTrajOptimizer);
     ploy_traj_opt_->setParam(nh);
-    ploy_traj_opt_->setEnvironment(rog_map_);
+    ploy_traj_opt_->setEnvironment(map_manager_);
 
     ROS_INFO("[EGOPlannerManager] Initialized with:");
     ROS_INFO("  max_vel: %.2f, max_acc: %.2f", pp_.max_vel_, pp_.max_acc_);

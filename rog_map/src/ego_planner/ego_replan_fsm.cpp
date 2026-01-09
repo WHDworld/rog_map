@@ -2,10 +2,13 @@
 #include <cmath>
 #include <tf/transform_datatypes.h>
 
+// 性能监控
+#include "utils/perf_logger.hpp"
+
 namespace ego_planner
 {
 
-  void EGOReplanFSM::init(ros::NodeHandle &nh, rog_map::ROGMap::Ptr map)
+  void EGOReplanFSM::init(ros::NodeHandle &nh, star_mvf::MapManager::Ptr map)
   {
     exec_state_ = FSM_EXEC_STATE::INIT;
     have_target_ = false;
@@ -20,11 +23,11 @@ namespace ego_planner
     end_vel_ = Eigen::Vector3d::Zero();
     end_yaw_ = 0.0;
 
-    rog_map_ = map;
+    map_manager_ = map;
 
     /* initialize main modules */
     planner_manager_.reset(new EGOPlannerManager);
-    planner_manager_->initPlanModules(nh, rog_map_);
+    planner_manager_->initPlanModules(nh, map_manager_);
 
     /*  fsm param  */
     nh.param("fsm/flight_type", target_type_, 1);
@@ -415,8 +418,53 @@ namespace ego_planner
       }
       
       publishHoverCmd();
-      ROS_WARN_THROTTLE(1.0, "[EGOReplanFSM] EMERGENCY STOP! Hovering at (%.2f, %.2f, %.2f)",
-                        hover_pos_.x(), hover_pos_.y(), hover_pos_.z());
+      
+      // 计数并记录日志
+      static int estop_count = 0;
+      static ros::Time estop_start_time;
+      if (estop_count == 0) {
+        estop_start_time = ros::Time::now();
+      }
+      estop_count++;
+      
+      double estop_duration = (ros::Time::now() - estop_start_time).toSec();
+      
+      if (PERF_LOG.isInitialized()) {
+          PERF_LOG.logf("PLAN", "EMERGENCY_STOP", "count=%d, duration=%.1fs, hover=(%.2f,%.2f,%.2f), have_target=%d",
+                        estop_count, estop_duration, hover_pos_.x(), hover_pos_.y(), hover_pos_.z(), have_target_);
+      }
+      ROS_WARN_THROTTLE(10.0, "[EGOReplanFSM] EMERGENCY STOP! Hovering at (%.2f, %.2f, %.2f) for %.1fs (see log for details)",
+                        hover_pos_.x(), hover_pos_.y(), hover_pos_.z(), estop_duration);
+      
+      // ========== 恢复逻辑 ==========
+      // 1. 检查当前位置是否安全
+      star_mvf::Position curr_pos_f(static_cast<float>(odom_pos_.x()), 
+                                    static_cast<float>(odom_pos_.y()), 
+                                    static_cast<float>(odom_pos_.z()));
+      bool current_pos_safe = !map_manager_->isOccupiedInflate(curr_pos_f);
+      
+      // 2. 悬停至少1秒后，如果当前位置安全且有新目标，尝试恢复
+      if (estop_duration >= 1.0 && current_pos_safe && have_target_ && have_new_target_)
+      {
+        PERF_LOG.logf("PLAN", "ESTOP_RECOVERY", "Attempting recovery after %.1fs, pos_safe=%d, target=(%.2f,%.2f,%.2f)",
+                      estop_duration, current_pos_safe, end_pt_.x(), end_pt_.y(), end_pt_.z());
+        ROS_WARN("[EGOReplanFSM] Recovering from EMERGENCY_STOP after %.1fs - generating new trajectory", estop_duration);
+        
+        estop_count = 0;  // 重置计数
+        have_new_target_ = false;
+        changeFSMExecState(GEN_NEW_TRAJ, "RECOVERY");
+      }
+      // 3. 悬停超过5秒，即使没有新目标也检查是否可以切换到 WAIT_TARGET
+      else if (estop_duration >= 5.0 && current_pos_safe)
+      {
+        PERF_LOG.logf("PLAN", "ESTOP_TIMEOUT", "Timeout after %.1fs, switching to WAIT_TARGET", estop_duration);
+        ROS_WARN("[EGOReplanFSM] EMERGENCY_STOP timeout (%.1fs) - returning to WAIT_TARGET", estop_duration);
+        
+        estop_count = 0;  // 重置计数
+        have_target_ = false;
+        have_trigger_ = false;
+        changeFSMExecState(WAIT_TARGET, "TIMEOUT_RECOVERY");
+      }
       break;
     }
     }
@@ -433,15 +481,32 @@ namespace ego_planner
     int pre_s = static_cast<int>(exec_state_);
     exec_state_ = new_state;
     
-    ROS_INFO("[EGOReplanFSM] State: %s -> %s (by %s)",
-             state_str[pre_s].c_str(), state_str[static_cast<int>(new_state)].c_str(), pos_call.c_str());
+    // 详细状态转换日志（到性能日志文件）
+    PERF_LOG.logf("PLAN", "STATE_CHANGE", "%s -> %s (by %s), pos=(%.2f,%.2f,%.2f), have_target=%d, have_trigger=%d",
+                  state_str[pre_s].c_str(), state_str[static_cast<int>(new_state)].c_str(), pos_call.c_str(),
+                  odom_pos_.x(), odom_pos_.y(), odom_pos_.z(), have_target_, have_trigger_);
+    
+    // 终端只输出重要的状态转换
+    if (new_state == EMERGENCY_STOP || pre_s == static_cast<int>(EMERGENCY_STOP) || 
+        pos_call == "RECOVERY" || pos_call == "TIMEOUT_RECOVERY")
+    {
+      ROS_WARN("[EGOReplanFSM] State: %s -> %s (by %s)",
+               state_str[pre_s].c_str(), state_str[static_cast<int>(new_state)].c_str(), pos_call.c_str());
+    }
+    else
+    {
+      ROS_INFO("[EGOReplanFSM] State: %s -> %s (by %s)",
+               state_str[pre_s].c_str(), state_str[static_cast<int>(new_state)].c_str(), pos_call.c_str());
+    }
   }
 
   void EGOReplanFSM::printFSMExecState()
   {
     static std::string state_str[8] = {"INIT", "PRE_ARM", "TAKEOFF", "WAIT_TARGET",
                                        "GEN_NEW_TRAJ", "REPLAN_TRAJ", "EXEC_TRAJ", "EMERGENCY_STOP"};
-    ROS_INFO("[EGOReplanFSM] Current state: %s", state_str[static_cast<int>(exec_state_)].c_str());
+    // 减少终端输出频率
+    PERF_LOG.logf("PLAN", "STATE_INFO", "current=%s", state_str[static_cast<int>(exec_state_)].c_str());
+    ROS_DEBUG("[EGOReplanFSM] Current state: %s", state_str[static_cast<int>(exec_state_)].c_str());
   }
 
   std::pair<int, EGOReplanFSM::FSM_EXEC_STATE> EGOReplanFSM::timesOfConsecutiveStateCalls()
@@ -461,11 +526,32 @@ namespace ego_planner
       for (double t = t_cur; t < std::min(info->duration, t_cur + emergency_time_); t += 0.05)
       {
         Eigen::Vector3d pos = info->traj.getPos(t);
-        if (rog_map_->isOccupiedInflate(pos))
+        star_mvf::Position pos_f(static_cast<float>(pos.x()), 
+                                 static_cast<float>(pos.y()), 
+                                 static_cast<float>(pos.z()));
+        if (map_manager_->isOccupiedInflate(pos_f))
         {
           if (enable_fail_safe_)
           {
-            ROS_ERROR("[EGOReplanFSM] Collision detected at t=%.2f, emergency stop!", t);
+            // 详细碰撞日志
+            PERF_LOG.logf("PLAN", "COLLISION_DETECT", 
+                          "t=%.2f, traj_pos=(%.2f,%.2f,%.2f), odom_pos=(%.2f,%.2f,%.2f), "
+                          "t_cur=%.2f, duration=%.2f, emergency_time=%.2f",
+                          t, pos.x(), pos.y(), pos.z(),
+                          odom_pos_.x(), odom_pos_.y(), odom_pos_.z(),
+                          t_cur, info->duration, emergency_time_);
+            
+            // 检查当前位置是否也碰撞
+            star_mvf::Position odom_pos_f(static_cast<float>(odom_pos_.x()), 
+                                          static_cast<float>(odom_pos_.y()), 
+                                          static_cast<float>(odom_pos_.z()));
+            bool odom_collision = map_manager_->isOccupiedInflate(odom_pos_f);
+            PERF_LOG.logf("PLAN", "COLLISION_DETAIL", 
+                          "current_pos_collision=%d, will_stop_at=(%.2f,%.2f,%.2f)",
+                          odom_collision, odom_pos_.x(), odom_pos_.y(), odom_pos_.z());
+            
+            ROS_ERROR("[EGOReplanFSM] Collision detected at t=%.2f, pos=(%.2f,%.2f,%.2f), emergency stop!", 
+                      t, pos.x(), pos.y(), pos.z());
             callEmergencyStop(odom_pos_);
             changeFSMExecState(EMERGENCY_STOP, "SAFETY");
           }
@@ -537,6 +623,8 @@ namespace ego_planner
     // 这确保了 viewpointCallback 中设置的起点状态被保留
     // 全局轨迹的起点已经在 viewpointCallback/waypointCallback 中正确计算过了
     
+    double t_plan_start = ros::Time::now().toSec();
+    
     GlobalTrajData *global_info = &planner_manager_->traj_.global_traj;
     if (global_info->traj.getPieceNum() > 0)
     {
@@ -551,7 +639,20 @@ namespace ego_planner
     else
     {
       // 后备：如果没有全局轨迹，使用里程计数据
-      double t_plan_start = ros::Time::now().toSec();
+      start_pt_ = odom_pos_;
+      start_vel_ = odom_vel_;
+      start_acc_ = Eigen::Vector3d::Zero();
+      planner_manager_->setReplanStartTime(t_plan_start + replan_duration_);
+    }
+    
+    // 安全检查：如果起点位置在障碍物内，使用当前里程计位置
+    star_mvf::Position start_pos_f(static_cast<float>(start_pt_.x()), 
+                                    static_cast<float>(start_pt_.y()), 
+                                    static_cast<float>(start_pt_.z()));
+    if (map_manager_ && map_manager_->isOccupiedInflate(start_pos_f))
+    {
+      ROS_WARN("[EGOReplanFSM] Global traj start (%.2f,%.2f,%.2f) is in obstacle, using odom position",
+               start_pt_.x(), start_pt_.y(), start_pt_.z());
       start_pt_ = odom_pos_;
       start_vel_ = odom_vel_;
       start_acc_ = Eigen::Vector3d::Zero();
@@ -582,6 +683,19 @@ namespace ego_planner
     start_pt_ = info->traj.getPos(t_predict);
     start_vel_ = info->traj.getVel(t_predict);
     start_acc_ = info->traj.getAcc(t_predict);
+    
+    // 安全检查：如果预测的起点位置在障碍物内，使用当前里程计位置
+    star_mvf::Position start_pos_f(static_cast<float>(start_pt_.x()), 
+                                    static_cast<float>(start_pt_.y()), 
+                                    static_cast<float>(start_pt_.z()));
+    if (map_manager_ && map_manager_->isOccupiedInflate(start_pos_f))
+    {
+      ROS_WARN("[EGOReplanFSM] Predicted start (%.2f,%.2f,%.2f) is in obstacle, using odom position",
+               start_pt_.x(), start_pt_.y(), start_pt_.z());
+      start_pt_ = odom_pos_;
+      start_vel_ = odom_vel_;
+      start_acc_ = Eigen::Vector3d::Zero();
+    }
     
     // 设置新轨迹的精确 start_time（与预测状态匹配）
     // start_time = 规划开始时间 + replan_duration（而非规划完成时间 + replan_duration）
@@ -708,13 +822,20 @@ namespace ego_planner
     have_trigger_ = true;
     have_new_target_ = true;
 
-    ROS_INFO("[EGOReplanFSM] Received viewpoint: pos=(%.2f, %.2f, %.2f), yaw=%.2f, vel=(%.2f, %.2f, %.2f)", 
-             end_pt_.x(), end_pt_.y(), end_pt_.z(), end_yaw_,
-             end_vel_.x(), end_vel_.y(), end_vel_.z());
+    PERF_LOG.logf("PLAN", "RECV_VP", "pos=(%.2f,%.2f,%.2f), yaw=%.2f, vel=(%.2f,%.2f,%.2f), state=%d", 
+                  end_pt_.x(), end_pt_.y(), end_pt_.z(), end_yaw_,
+                  end_vel_.x(), end_vel_.y(), end_vel_.z(), static_cast<int>(exec_state_));
 
     if (exec_state_ == EXEC_TRAJ || exec_state_ == REPLAN_TRAJ)
     {
       changeFSMExecState(GEN_NEW_TRAJ, "VIEWPOINT");
+    }
+    else if (exec_state_ == EMERGENCY_STOP)
+    {
+      // 在 EMERGENCY_STOP 状态下收到新视点，标记为待恢复
+      // 恢复逻辑在 EMERGENCY_STOP case 中处理
+      PERF_LOG.logf("PLAN", "RECV_VP_ESTOP", "New target received during EMERGENCY_STOP, waiting for recovery");
+      ROS_INFO("[EGOReplanFSM] New viewpoint received during EMERGENCY_STOP - will attempt recovery");
     }
   }
 
@@ -797,12 +918,18 @@ namespace ego_planner
     have_trigger_ = true;
     have_new_target_ = true;
     
-    ROS_INFO("[EGOReplanFSM] Received viewpoint path with %zu waypoints, target=(%.2f, %.2f, %.2f), yaw=%.2f",
-             wps_.size(), end_pt_.x(), end_pt_.y(), end_pt_.z(), end_yaw_);
+    PERF_LOG.logf("PLAN", "RECV_VP_PATH", "waypoints=%zu, target=(%.2f,%.2f,%.2f), yaw=%.2f, state=%d",
+                  wps_.size(), end_pt_.x(), end_pt_.y(), end_pt_.z(), end_yaw_, static_cast<int>(exec_state_));
     
     if (exec_state_ == EXEC_TRAJ || exec_state_ == REPLAN_TRAJ)
     {
       changeFSMExecState(GEN_NEW_TRAJ, "VIEWPOINT_PATH");
+    }
+    else if (exec_state_ == EMERGENCY_STOP)
+    {
+      // 在 EMERGENCY_STOP 状态下收到新路径，标记为待恢复
+      PERF_LOG.logf("PLAN", "RECV_VP_PATH_ESTOP", "New path received during EMERGENCY_STOP, waiting for recovery");
+      ROS_INFO("[EGOReplanFSM] New viewpoint path received during EMERGENCY_STOP - will attempt recovery");
     }
   }
 

@@ -1,7 +1,9 @@
 cmake_minimum_required(VERSION 2.8.3)
 project(rog_map)
 
-set(CMAKE_CXX_STANDARD 14)
+# 使用 C++17 以支持结构化绑定等特性
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 #set(CMAKE_BUILD_TYPE "Debug")
 set(CMAKE_BUILD_TYPE "Release")
 set(CMAKE_CXX_FLAGS "-O3 -Wall -g -fPIC")
@@ -25,6 +27,7 @@ find_package(catkin REQUIRED COMPONENTS
         message_generation
         visualization_msgs
         message_filters
+        sensor_msgs
         quadrotor_msgs    # GCOPTER 轨迹服务器需要
         mavros_msgs       # PX4 模式切换和解锁
         tf                # 姿态转换
@@ -89,6 +92,7 @@ set(THIRD_PARTY
 file(GLOB_RECURSE lib_srcs 
         CONFIGURE_DEPENDS 
         src/rog_map/*.cpp 
+        src/star_mvf/*.cpp           # STAR-MVF 新地图模块
         src/fast_planner/bspline/*.cpp
         src/fast_planner/polynomial/*.cpp
         src/fast_planner/planner_manager.cpp
@@ -99,29 +103,41 @@ file(GLOB_RECURSE lib_srcs
         include/*.cpp
     )
 
+# 排除旧的地图实现（已被 star_mvf 取代）
+list(FILTER lib_srcs EXCLUDE REGEX ".*/rog_map/global_map\\.cpp$")
+list(FILTER lib_srcs EXCLUDE REGEX ".*map_adapter\\.cpp$")
+list(FILTER lib_srcs EXCLUDE REGEX ".*/rog_map/rog_map\\.cpp$")
+list(FILTER lib_srcs EXCLUDE REGEX ".*/rog_map/prob_map\\.cpp$")
+list(FILTER lib_srcs EXCLUDE REGEX ".*/rog_map/sliding_map\\.cpp$")
+list(FILTER lib_srcs EXCLUDE REGEX ".*/rog_map/inf_map\\.cpp$")
+list(FILTER lib_srcs EXCLUDE REGEX ".*/rog_map/counter_map\\.cpp$")
+list(FILTER lib_srcs EXCLUDE REGEX ".*/rog_map/esdf_map\\.cpp$")
+list(FILTER lib_srcs EXCLUDE REGEX ".*/rog_map/unified_map\\.cpp$")
+
 add_library(rog_map STATIC ${lib_srcs})
 add_dependencies(rog_map ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_include_directories(rog_map PUBLIC include)
 target_link_libraries(rog_map PUBLIC ${THIRD_PARTY})
 
-add_executable(test_planner src/test_explore/test_planner.cpp)
-add_dependencies(test_planner ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-target_link_libraries(test_planner 
-        rog_map
-        ${THIRD_PARTY}
-        ${catkin_LIBRARIES}
-        nlopt  # B-spline 优化器依赖
-        )
+# test_planner 暂时注释掉（源文件不存在）
+# add_executable(test_planner src/test_explore/test_planner.cpp)
+# add_dependencies(test_planner ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+# target_link_libraries(test_planner 
+#         rog_map
+#         ${THIRD_PARTY}
+#         ${catkin_LIBRARIES}
+#         nlopt  # B-spline 优化器依赖
+#         )
 
-# Fast Planner 规划节点
-add_executable(fast_planner_node src/fast_planner/fast_planner_node.cpp)
-add_dependencies(fast_planner_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-target_link_libraries(fast_planner_node 
-        rog_map
-        ${THIRD_PARTY}
-        ${catkin_LIBRARIES}
-        nlopt  # B-spline 优化器依赖
-        )
+# Fast Planner 规划节点（暂时注释掉，源文件不存在）
+# add_executable(fast_planner_node src/fast_planner/fast_planner_node.cpp)
+# add_dependencies(fast_planner_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+# target_link_libraries(fast_planner_node 
+#         rog_map
+#         ${THIRD_PARTY}
+#         ${catkin_LIBRARIES}
+#         nlopt  # B-spline 优化器依赖
+#         )
 
 # ===========================================================
 # EGO Planner (MINCO Trajectory) 规划器
@@ -180,6 +196,15 @@ add_executable(exploration_planner_node src/rog_map/exploration_planner_node.cpp
 add_dependencies(exploration_planner_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(exploration_planner_node 
         ego_planner_lib
+        rog_map
+        ${THIRD_PARTY}
+        ${catkin_LIBRARIES}
+)
+
+# Map Test Node - 单独测试地图同步
+add_executable(map_test_node src/star_mvf/map_test_node.cpp)
+add_dependencies(map_test_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+target_link_libraries(map_test_node 
         rog_map
         ${THIRD_PARTY}
         ${catkin_LIBRARIES}

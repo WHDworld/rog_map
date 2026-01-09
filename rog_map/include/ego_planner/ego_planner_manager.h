@@ -8,12 +8,13 @@
 #include "ego_planner/poly_traj_optimizer.h"
 #include "ego_planner/plan_container.hpp"
 #include "ego_planner/optimizer/poly_traj_utils.hpp"
-#include <rog_map/rog_map.h>
+// 使用新的 STAR-MVF 地图系统
+#include "star_mvf/star_mvf.h"
 
 namespace ego_planner
 {
 
-  // EGO Planner Manager for ROG-Map
+  // EGO Planner Manager for STAR-MVF Map
   // Key algorithms of mapping and planning are called
 
   class EGOPlannerManager
@@ -25,7 +26,7 @@ namespace ego_planner
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
     /* main planning interface */
-    void initPlanModules(ros::NodeHandle &nh, rog_map::ROGMap::Ptr map);
+    void initPlanModules(ros::NodeHandle &nh, star_mvf::MapManager::Ptr map);
     
     bool computeInitState(
         const Eigen::Vector3d &start_pt, const Eigen::Vector3d &start_vel,
@@ -67,7 +68,7 @@ namespace ego_planner
     inline void setReplanStartTime(double time) { replan_start_time_ = time; use_precise_start_time_ = true; }
 
     PlanParameters pp_;
-    rog_map::ROGMap::Ptr rog_map_;
+    star_mvf::MapManager::Ptr map_manager_;
     TrajContainer traj_;
 
   private:

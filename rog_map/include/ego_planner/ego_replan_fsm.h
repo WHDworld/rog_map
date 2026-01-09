@@ -21,6 +21,8 @@
 
 #include "ego_planner/ego_planner_manager.h"
 #include "rog_map/PolyTraj.h"
+// 使用新的 STAR-MVF 地图系统
+#include "star_mvf/star_mvf.h"
 
 using std::vector;
 
@@ -33,7 +35,7 @@ namespace ego_planner
     EGOReplanFSM() {}
     ~EGOReplanFSM() {}
 
-    void init(ros::NodeHandle &nh, rog_map::ROGMap::Ptr map);
+    void init(ros::NodeHandle &nh, star_mvf::MapManager::Ptr map);
 
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
@@ -65,7 +67,7 @@ namespace ego_planner
 
     /* planning utils */
     EGOPlannerManager::Ptr planner_manager_;
-    rog_map::ROGMap::Ptr rog_map_;
+    star_mvf::MapManager::Ptr map_manager_;
 
     /* FSM parameters */
     int target_type_;

@@ -6,7 +6,32 @@
 #include "rog_map/exploration_fsm.h"
 #include <tf/transform_datatypes.h>
 
+// 性能监控
+#include "utils/perf_logger.hpp"
+
 namespace rog_map {
+
+using MapManager = star_mvf::MapManager;
+
+// ==================== 颜色辅助函数 ====================
+// 用于确保viewpoints, frustums, clusters使用相同的颜色
+static const std::vector<std::array<float, 4>> kClusterColors = {
+    {1.0f, 0.2f, 0.2f, 0.8f},   // 红色
+    {0.2f, 1.0f, 0.2f, 0.8f},   // 绿色
+    {0.2f, 0.4f, 1.0f, 0.8f},   // 蓝色
+    {1.0f, 1.0f, 0.2f, 0.8f},   // 黄色
+    {1.0f, 0.2f, 1.0f, 0.8f},   // 品红
+    {0.2f, 1.0f, 1.0f, 0.8f},   // 青色
+    {1.0f, 0.6f, 0.2f, 0.8f},   // 橙色
+    {0.6f, 0.2f, 1.0f, 0.8f},   // 紫色
+    {0.8f, 0.8f, 0.2f, 0.8f},   // 橄榄色
+    {0.2f, 0.8f, 0.6f, 0.8f},   // 青绿色
+};
+
+static std::array<float, 4> getClusterColor(int cluster_id) {
+    if (cluster_id < 0) cluster_id = 0;
+    return kClusterColors[cluster_id % kClusterColors.size()];
+}
 
 // ==================== 析构函数 ====================
 ExplorationFSM::~ExplorationFSM() {
@@ -17,10 +42,10 @@ ExplorationFSM::~ExplorationFSM() {
 }
 
 // ==================== 初始化 ====================
-void ExplorationFSM::init(ros::NodeHandle& nh, ROGMap::Ptr rog_map, GlobalMap::Ptr global_map) {
+void ExplorationFSM::init(ros::NodeHandle& nh, MapManager::Ptr map_manager) {
     nh_ = nh;
-    rog_map_ = rog_map;
-    global_map_ = global_map;
+    map_manager_ = map_manager;
+    global_map_ = map_manager->getGlobalMap();
     
     // 初始化状态
     state_ = ExplorationState::INIT;
@@ -113,6 +138,32 @@ void ExplorationFSM::init(ros::NodeHandle& nh, ROGMap::Ptr rog_map, GlobalMap::P
     nh_.param("exploration/overhead_height_threshold", vp_config.overhead_height_threshold, 0.5f);
     nh_.param("exploration/overhead_distance_threshold", vp_config.overhead_distance_threshold, 2.0f);
     
+    // ==================== SFExplorer 策略参数 ====================
+    // 策略开关
+    nh_.param("exploration/use_surface_frontier", vp_config.use_surface_frontier, false);
+    nh_.param("exploration/use_spherical_sampling", vp_config.use_spherical_sampling, false);
+    nh_.param("exploration/use_viewpoint_clustering", vp_config.use_viewpoint_clustering, false);
+    
+    // 表面前沿聚类参数
+    nh_.param("exploration/normal_angle_threshold", vp_config.normal_angle_threshold, 0.785f);
+    nh_.param("exploration/normal_pca_k", vp_config.normal_pca_k, 10);
+    
+    // 球扇形采样参数
+    nh_.param("exploration/sphere_sample_radius", vp_config.sphere_sample_radius, 2.5f);
+    nh_.param("exploration/sphere_theta_max", vp_config.sphere_theta_max, 0.785f);
+    nh_.param("exploration/sphere_sample_num", vp_config.sphere_sample_num, 20);
+    
+    // 增量视点聚类参数
+    nh_.param("exploration/vp_cluster_distance", vp_config.vp_cluster_distance, 3.0f);
+    nh_.param("exploration/vp_cluster_radius", vp_config.vp_cluster_radius, 5.0f);
+    nh_.param("exploration/vp_cluster_min_dist", vp_config.vp_cluster_min_dist, 6.0f);
+    
+    // 打印 SFExplorer 策略状态
+    if (vp_config.use_surface_frontier || vp_config.use_spherical_sampling || vp_config.use_viewpoint_clustering) {
+        ROS_INFO("[ExplorationFSM] SFExplorer strategies: surface=%d, spherical=%d, vp_cluster=%d",
+                 vp_config.use_surface_frontier, vp_config.use_spherical_sampling, vp_config.use_viewpoint_clustering);
+    }
+    
     ROS_INFO("[ExplorationFSM] Viewpoint config: height=[%.2f, %.2f]x%d, r=[%.1f, %.1f], sensor=[%.1f, %.1f], fov_h=%.2f",
              vp_config.viewpoint_height_min, vp_config.viewpoint_height_max, vp_config.viewpoint_height_num,
              vp_config.candidate_rmin, vp_config.candidate_rmax,
@@ -182,7 +233,22 @@ std::string ExplorationFSM::getStateString() const {
 
 // ==================== FSM主回调 ====================
 void ExplorationFSM::fsmCallback(const ros::TimerEvent& e) {
+    // 性能监控：状态机周期计时
+    perf::ScopeTimer fsm_timer("FSM", "CYCLE", 1.0);  // 仅记录超过1ms的周期
+    
     std::lock_guard<std::mutex> lock(state_mutex_);
+    
+    // 记录状态转换（仅当状态变化时）
+    static ExplorationState last_state = ExplorationState::INIT;
+    if (state_ != last_state) {
+        const char* state_names[] = {"INIT", "WAIT_TRIGGER", "UPDATE_FRONTIER", 
+                                     "PLAN_VIEWPOINTS", "EXEC_EXPLORATION", 
+                                     "FINISH", "EMERGENCY_STOP"};
+        PERF_LOG.logf("FSM", "STATE_CHANGE", "%s -> %s",
+                      state_names[static_cast<int>(last_state)],
+                      state_names[static_cast<int>(state_)]);
+        last_state = state_;
+    }
     
     switch (state_) {
         case ExplorationState::INIT:
@@ -269,20 +335,32 @@ void ExplorationFSM::processPlanViewpoints() {
     
     if (planExplorationViewpoints()) {
         double plan_time = (ros::Time::now() - plan_start).toSec();
-        ROS_INFO("[ExplorationFSM] Viewpoint planning took %.2f ms", plan_time * 1000.0);
+        // 性能监控（不输出到终端，只输出到日志文件）
+        PERF_LOG.logf("FSM", "PLAN_VP", "time=%.2fms, viewpoints=%lu",
+                      plan_time * 1000.0, 
+                      expl_data_.current_viewpoints.size());
         
         // 选择下一个视点
         if (selectNextViewpoint()) {
             state_ = ExplorationState::EXEC_EXPLORATION;
             last_replan_time_ = ros::Time::now();
             expl_data_.viewpoint_published = false;  // 重置标志，确保新视点会被发布
+            
+            PERF_LOG.logf("FSM", "SELECT_VP", "pos=(%.2f,%.2f,%.2f), yaw=%.2f, score=%.3f",
+                          expl_data_.next_viewpoint.position.x(),
+                          expl_data_.next_viewpoint.position.y(),
+                          expl_data_.next_viewpoint.position.z(),
+                          expl_data_.next_viewpoint.yaw,
+                          expl_data_.next_viewpoint.score);
         } else {
             state_ = ExplorationState::UPDATE_FRONTIER;
             ROS_WARN("[ExplorationFSM] No valid viewpoint selected, re-updating frontiers");
+            PERF_WARN("FSM", "No valid viewpoint selected, re-updating frontiers");
         }
     } else {
         state_ = ExplorationState::FINISH;
         ROS_WARN("[ExplorationFSM] Viewpoint planning failed, exploration finished");
+        PERF_WARN("FSM", "Viewpoint planning failed, exploration finished");
     }
 }
 
@@ -335,7 +413,7 @@ void ExplorationFSM::processExecExploration() {
     if (expl_data_.viewpoint_published) {
         // ========== 触发条件1：目标前视簇被覆盖（Falcon: t > replan_thresh2_） ==========
         if (t_cur > config_.replan_thresh_frontier && checkFrontierCovered()) {
-            ROS_INFO("[ExplorationFSM] Replan: cluster covered (t=%.2fs)", t_cur);
+            PERF_LOG.logf("FSM", "REPLAN", "reason=cluster_covered, t=%.2fs", t_cur);
             need_replan = true;
             replan_type = 1;
         }
@@ -343,14 +421,13 @@ void ExplorationFSM::processExecExploration() {
         // 只在 traj_duration_ > 0 且 t_cur > 0 时才检查（确保已正确初始化）
         else if (traj_duration_ > 0.1 && t_cur > 0.1 && 
                  (traj_duration_ - t_cur) < config_.replan_thresh_traj_remain) {
-            ROS_INFO("[ExplorationFSM] Replan: trajectory almost done (remaining=%.2fs)", 
-                     traj_duration_ - t_cur);
+            PERF_LOG.logf("FSM", "REPLAN", "reason=traj_done, remaining=%.2fs", traj_duration_ - t_cur);
             need_replan = true;
             replan_type = 2;
         }
         // ========== 触发条件3：周期性重规划（Falcon: t > replan_thresh3_） ==========
         else if (elapsed_since_replan > config_.replan_thresh_time) {
-            ROS_INFO("[ExplorationFSM] Replan: periodic call (%.1fs elapsed)", elapsed_since_replan);
+            PERF_LOG.logf("FSM", "REPLAN", "reason=periodic, elapsed=%.1fs", elapsed_since_replan);
             need_replan = true;
             replan_type = 3;
         }
@@ -682,15 +759,8 @@ bool ExplorationFSM::checkFrontierCovered() {
 }
 
 int ExplorationFSM::countTotalFrontiers() const {
-    std::vector<int> frontier_subgrids;
-    global_map_->getFrontierSubGrids(frontier_subgrids);
-    
-    int total = 0;
-    for (int sg_id : frontier_subgrids) {
-        const SubGrid& sg = global_map_->getSubGrid(sg_id);
-        total += static_cast<int>(sg.sub_grid_frontier_voxels_.size());
-    }
-    return total;
+    // 使用新的适配器接口
+    return global_map_->getTotalFrontierCount();
 }
 
 // ==================== 视点规划 ====================
@@ -714,8 +784,8 @@ bool ExplorationFSM::planExplorationViewpoints() {
     // 重置索引
     expl_data_.current_viewpoint_idx = 0;
     
-    ROS_INFO("[ExplorationFSM] Planned %lu clusters, %lu viewpoints (greedy sorted)",
-             frontier_clusters_.size(), expl_data_.current_viewpoints.size());
+    PERF_LOG.logf("FSM", "PLAN_RESULT", "clusters=%lu, viewpoints=%lu",
+                  frontier_clusters_.size(), expl_data_.current_viewpoints.size());
     
     return true;
 }
@@ -732,13 +802,13 @@ bool ExplorationFSM::selectNextViewpoint() {
     // 选择当前视点
     expl_data_.next_viewpoint = expl_data_.current_viewpoints[expl_data_.current_viewpoint_idx];
     
-    ROS_INFO("[ExplorationFSM] Selected viewpoint %d/%lu: (%.2f, %.2f, %.2f) yaw=%.2f",
-             expl_data_.current_viewpoint_idx + 1,
-             expl_data_.current_viewpoints.size(),
-             expl_data_.next_viewpoint.position.x(),
-             expl_data_.next_viewpoint.position.y(),
-             expl_data_.next_viewpoint.position.z(),
-             expl_data_.next_viewpoint.yaw);
+    PERF_LOG.logf("FSM", "SELECT_VP", "idx=%d/%lu, pos=(%.2f,%.2f,%.2f), yaw=%.2f",
+                  expl_data_.current_viewpoint_idx + 1,
+                  expl_data_.current_viewpoints.size(),
+                  expl_data_.next_viewpoint.position.x(),
+                  expl_data_.next_viewpoint.position.y(),
+                  expl_data_.next_viewpoint.position.z(),
+                  expl_data_.next_viewpoint.yaw);
     
     return true;
 }
@@ -853,8 +923,8 @@ void ExplorationFSM::sortViewpointsByGreedy() {
     sorted.push_back(viewpoints[best_idx]);
     visited[best_idx] = true;
     
-    ROS_INFO("[ExplorationFSM] Selected first viewpoint %d: direct_dist=%.2f, yaw_diff=%.2f, total_cost=%.2f",
-             best_idx, best_direct_dist, best_yaw_diff, best_cost);
+    PERF_LOG.logf("FSM", "SELECT_FIRST", "idx=%d, dist=%.2f, yaw_diff=%.2f, cost=%.2f",
+                  best_idx, best_direct_dist, best_yaw_diff, best_cost);
     
     // 后续视点：每次选择综合代价最低的未访问视点
     while (sorted.size() < viewpoints.size()) {
@@ -978,22 +1048,12 @@ void ExplorationFSM::visualizeFrontierClusters() {
     delete_marker.action = visualization_msgs::Marker::DELETEALL;
     markers.markers.push_back(delete_marker);
     
-    // 颜色列表
-    std::vector<std::array<float, 4>> colors = {
-        {1.0f, 0.0f, 0.0f, 0.8f},  // Red
-        {0.0f, 1.0f, 0.0f, 0.8f},  // Green
-        {0.0f, 0.0f, 1.0f, 0.8f},  // Blue
-        {1.0f, 1.0f, 0.0f, 0.8f},  // Yellow
-        {1.0f, 0.0f, 1.0f, 0.8f},  // Magenta
-        {0.0f, 1.0f, 1.0f, 0.8f},  // Cyan
-        {1.0f, 0.5f, 0.0f, 0.8f},  // Orange
-        {0.5f, 0.0f, 1.0f, 0.8f},  // Purple
-    };
-    
     // 使用直接聚类的前沿簇（与前沿点云一致）
     for (size_t i = 0; i < frontier_clusters_.size(); ++i) {
         const auto& cluster = frontier_clusters_[i];
-        auto& color = colors[i % colors.size()];
+        // 使用cluster_id作为颜色索引，确保与viewpoints和frustums颜色一致
+        int color_idx = cluster.cluster_id >= 0 ? cluster.cluster_id : static_cast<int>(i);
+        auto color = getClusterColor(color_idx);
         
         // ========== 1. 簇范围（透明球体，表示覆盖区域） ==========
         visualization_msgs::Marker extent_marker;
@@ -1054,7 +1114,7 @@ void ExplorationFSM::visualizeFrontierClusters() {
         text_marker.color.b = 1.0;
         text_marker.color.a = 1.0;
         // 显示簇ID和点数
-        text_marker.text = "C" + std::to_string(i) + " (" + std::to_string(cluster.point_count) + ")";
+        text_marker.text = "C" + std::to_string(cluster.cluster_id) + " (" + std::to_string(cluster.point_count) + ")";
         markers.markers.push_back(text_marker);
         
         // ========== 4. 前沿点（小立方体，不同簇不同颜色） ==========
@@ -1114,6 +1174,9 @@ void ExplorationFSM::visualizeViewpoints() {
             bool is_current = (static_cast<int>(i) == expl_data_.current_viewpoint_idx);
             bool is_visited = (static_cast<int>(i) < expl_data_.current_viewpoint_idx);
             
+            // 使用cluster_id获取与对应聚类相同的颜色
+            auto cluster_color = getClusterColor(vp.cluster_id);
+            
             // 视点位置（球体）
             visualization_msgs::Marker sphere;
             sphere.header.frame_id = "map";
@@ -1129,22 +1192,16 @@ void ExplorationFSM::visualizeViewpoints() {
             sphere.scale.y = config_.viewpoint_sphere_radius * 2;
             sphere.scale.z = config_.viewpoint_sphere_radius * 2;
             
-            // 颜色：当前目标=绿色，已访问=灰色，待访问=蓝色
+            // 颜色：使用聚类颜色，但根据状态调整透明度
+            sphere.color.r = cluster_color[0];
+            sphere.color.g = cluster_color[1];
+            sphere.color.b = cluster_color[2];
             if (is_current) {
-                sphere.color.r = 0.0;
-                sphere.color.g = 1.0;
-                sphere.color.b = 0.0;
-                sphere.color.a = 0.9;
+                sphere.color.a = 1.0;  // 当前目标完全不透明
             } else if (is_visited) {
-                sphere.color.r = 0.5;
-                sphere.color.g = 0.5;
-                sphere.color.b = 0.5;
-                sphere.color.a = 0.5;
+                sphere.color.a = 0.3;  // 已访问半透明
             } else {
-                sphere.color.r = 0.2;
-                sphere.color.g = 0.4;
-                sphere.color.b = 1.0;
-                sphere.color.a = 0.8;
+                sphere.color.a = 0.8;  // 待访问略透明
             }
             
             markers.markers.push_back(sphere);
@@ -1161,28 +1218,19 @@ void ExplorationFSM::visualizeViewpoints() {
             text.pose.position.y = vp.position.y();
             text.pose.position.z = vp.position.z() + 0.5;  // 在视点上方显示
             text.scale.z = 0.4;  // 文字高度
+            // 显示序号和cluster_id
             text.text = std::to_string(viewpoint_order);
             
-            // 文字颜色
-            if (is_current) {
-                text.color.r = 0.0;
-                text.color.g = 1.0;
-                text.color.b = 0.0;
-            } else if (is_visited) {
-                text.color.r = 0.6;
-                text.color.g = 0.6;
-                text.color.b = 0.6;
-            } else {
-                text.color.r = 1.0;
-                text.color.g = 1.0;
-                text.color.b = 1.0;
-            }
-            text.color.a = 1.0;
+            // 文字颜色：使用白色以便在任何背景下可见
+            text.color.r = 1.0;
+            text.color.g = 1.0;
+            text.color.b = 1.0;
+            text.color.a = is_visited ? 0.5 : 1.0;
             
             markers.markers.push_back(text);
             viewpoint_order++;
             
-            // 视线方向（箭头）
+            // 视线方向（箭头）- 使用与聚类相同的颜色
             visualization_msgs::Marker arrow;
             arrow.header.frame_id = "map";
             arrow.header.stamp = ros::Time::now();
@@ -1207,21 +1255,11 @@ void ExplorationFSM::visualizeViewpoints() {
             arrow.scale.y = 0.1;
             arrow.scale.z = 0.1;
             
-            // 箭头颜色与视点一致
-            if (is_current) {
-                arrow.color.r = 0.0;
-                arrow.color.g = 1.0;
-                arrow.color.b = 0.0;
-            } else if (is_visited) {
-                arrow.color.r = 0.5;
-                arrow.color.g = 0.5;
-                arrow.color.b = 0.5;
-            } else {
-                arrow.color.r = 1.0;
-                arrow.color.g = 1.0;
-                arrow.color.b = 0.0;
-            }
-            arrow.color.a = is_visited ? 0.5 : 1.0;
+            // 箭头颜色与聚类一致
+            arrow.color.r = cluster_color[0];
+            arrow.color.g = cluster_color[1];
+            arrow.color.b = cluster_color[2];
+            arrow.color.a = is_visited ? 0.4 : 0.9;
             
             markers.markers.push_back(arrow);
     }
@@ -1262,17 +1300,37 @@ void ExplorationFSM::visualizeFrustums() {
     visualization_msgs::MarkerArray markers;
     int marker_id = 0;
     
-    // 使用直接生成的视点
+    // 先清除旧marker
+    visualization_msgs::Marker delete_marker;
+    delete_marker.header.frame_id = "map";
+    delete_marker.header.stamp = ros::Time::now();
+    delete_marker.ns = "";
+    delete_marker.action = visualization_msgs::Marker::DELETEALL;
+    markers.markers.push_back(delete_marker);
+    
+    // 使用直接生成的视点，与对应的cluster使用相同颜色
     for (size_t i = 0; i < expl_data_.current_viewpoints.size(); ++i) {
         const auto& vp = expl_data_.current_viewpoints[i];
         if (!vp.is_valid) continue;
         
-        // 第一个视点用绿色，其他用蓝色
+        // 判断视点状态
+        bool is_current = (static_cast<int>(i) == expl_data_.current_viewpoint_idx);
+        bool is_visited = (static_cast<int>(i) < expl_data_.current_viewpoint_idx);
+        
+        // 使用cluster_id获取与对应聚类相同的颜色
+        auto cluster_color = getClusterColor(vp.cluster_id);
+        
+        // 根据状态调整透明度
         std::array<float, 4> color;
-        if (i == 0) {
-            color = {0.0f, 1.0f, 0.0f, 0.6f};
+        color[0] = cluster_color[0];
+        color[1] = cluster_color[1];
+        color[2] = cluster_color[2];
+        if (is_current) {
+            color[3] = 0.7f;  // 当前目标的视锥体更明显
+        } else if (is_visited) {
+            color[3] = 0.2f;  // 已访问的视锥体很淡
         } else {
-            color = {0.0f, 0.5f, 1.0f, 0.4f};
+            color[3] = 0.4f;  // 待访问的视锥体中等透明度
         }
         
         createFrustumMarker(vp.position, vp.yaw, vp.pitch,
@@ -1363,9 +1421,12 @@ void ExplorationFSM::createFrustumMarker(
 }
 
 void ExplorationFSM::visualizeRegionRoute() {
-    // 简化后不再使用区域路由，发布空marker
-    visualization_msgs::MarkerArray markers;
-    route_marker_pub_.publish(markers);
+    // 区域路由可视化：历史节点+关联子网格+连线
+    // 此功能已在 visualizeHistoryNodes 中实现，这里不重复发布
+    // 如果需要单独发布区域路由，可以在这里添加逻辑
+    
+    // 发布历史节点和关联子网格的可视化
+    visualizeHistoryNodes();
 }
 
 void ExplorationFSM::visualizeExplorationInfo() {
@@ -1412,6 +1473,8 @@ void ExplorationFSM::visualizeHistoryNodes() {
     
     // 清除旧marker
     visualization_msgs::Marker delete_marker;
+    delete_marker.header.frame_id = "map";
+    delete_marker.header.stamp = ros::Time::now();
     delete_marker.action = visualization_msgs::Marker::DELETEALL;
     delete_marker.ns = "history_nodes";
     markers.markers.push_back(delete_marker);
@@ -1428,25 +1491,12 @@ void ExplorationFSM::visualizeHistoryNodes() {
     delete_marker.ns = "node_subgrid_links";
     markers.markers.push_back(delete_marker);
     
-    // 颜色表（不同历史节点使用不同颜色）
-    static const std::vector<std::array<float, 4>> node_colors = {
-        {1.0f, 0.2f, 0.2f, 0.4f},   // 红色
-        {0.2f, 1.0f, 0.2f, 0.4f},   // 绿色
-        {0.2f, 0.2f, 1.0f, 0.4f},   // 蓝色
-        {1.0f, 1.0f, 0.2f, 0.4f},   // 黄色
-        {1.0f, 0.2f, 1.0f, 0.4f},   // 品红
-        {0.2f, 1.0f, 1.0f, 0.4f},   // 青色
-        {1.0f, 0.6f, 0.2f, 0.4f},   // 橙色
-        {0.6f, 0.2f, 1.0f, 0.4f},   // 紫色
-    };
-    
     // 绘制关联的子网格区域（立方体线框）
     for (const auto& asg : associated_subgrids) {
         if (asg.history_node_id < 0) continue;  // 跳过未关联的
         
-        // 获取该节点对应的颜色
-        int color_idx = asg.history_node_id % static_cast<int>(node_colors.size());
-        const auto& color = node_colors[color_idx];
+        // 获取该节点对应的颜色（使用与clusters相同的颜色表）
+        auto color = getClusterColor(asg.history_node_id);
         
         // 绘制子网格边界框（使用LINE_LIST绘制立方体线框）
         visualization_msgs::Marker cube;
@@ -1533,8 +1583,7 @@ void ExplorationFSM::visualizeHistoryNodes() {
     
     // 绘制历史节点（球体，使用与子网格相同的颜色）
     for (const auto& node : history_nodes) {
-        int color_idx = node.node_id % static_cast<int>(node_colors.size());
-        const auto& color = node_colors[color_idx];
+        auto color = getClusterColor(node.node_id);
         
         visualization_msgs::Marker sphere;
         sphere.header.frame_id = "map";
@@ -1652,8 +1701,17 @@ bool ExplorationFSM::publishViewpointTarget(const ExplorationViewpoint& vp) {
                 ROS_INFO("[ExplorationFSM] Obstacle detected, using %zu intermediate waypoints",
                          intermediate_waypoints.size());
             } else {
-                ROS_WARN("[ExplorationFSM] Obstacle detected but no path found via history nodes, skip this viewpoint");
-                return false;  // 无法找到有效路径，跳过这个视点
+                // 关键修复：不要直接跳过！EGO-Planner 有自己的避障能力
+                // 只有当目标位置本身处于障碍物内才跳过
+                if (map_manager_ && map_manager_->isOccupiedInflate(
+                        star_mvf::Position(vp.position.x(), vp.position.y(), vp.position.z()))) {
+                    ROS_WARN("[ExplorationFSM] Viewpoint at (%.2f,%.2f,%.2f) is in obstacle, skipping",
+                             vp.position.x(), vp.position.y(), vp.position.z());
+                    return false;
+                }
+                // 目标位置是自由的，让 EGO-Planner 尝试规划（它有避障能力）
+                ROS_INFO("[ExplorationFSM] History node path failed, but EGO-Planner will try direct planning");
+                obstacle_detected = false;  // 重置，让 EGO-Planner 直接规划
             }
         }
     }

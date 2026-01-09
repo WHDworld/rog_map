@@ -15,13 +15,48 @@
 # ============================================================
 
 # ============================================================
-#                    ROG-Map 地图配置
+#                    ROG-Map / STAR-MVF 地图配置
 # ============================================================
 rog_map:
+  # ---------- 话题配置 ----------
+  lidar_topic: "/cloud_registered"
+  odom_topic: "/odom"
+  camera_pose_topic: "/camera/pose"
+  camera_rgb_topic: "/camera/color/image_raw"
+  frame_id: "map"
+  
+  # ---------- 更新频率 ----------
+  sync_rate: 10.0                   # 局部地图同步到全局地图频率 [Hz]
+  viz_rate: 5.0                     # 可视化更新频率 [Hz]
+  visualization_en: true
+  visualization_range: [20.0, 20.0, 6.0]
+  
   # ---------- 基础地图参数 ----------
   resolution: 0.2                   # 体素分辨率 [m]
   map_size: [20, 20, 6]             # 局部地图尺寸 [m]
   fix_map_origin: [0, 0, 0]         # 固定地图原点
+  
+  # ---------- 局部地图配置 (STAR-MVF LocalMap) ----------
+  local_map:
+    size: [20.0, 20.0, 6.0]         # 局部地图尺寸 [m]
+    log_odds_hit: 0.85              # 命中时的log-odds更新
+    log_odds_miss: -0.4             # 未命中时的log-odds更新
+    log_odds_min: -2.0              # 最小log-odds值
+    log_odds_max: 3.5               # 最大log-odds值
+    log_odds_occ_thresh: 0.0        # 占用阈值
+    use_raycast: true               # 使用射线追踪
+    raycast_step: 0.1               # 射线步长 [m]
+  
+  # ---------- 传感器配置 ----------
+  sensor:
+    lidar_max_range: 20.0           # LiDAR最大感知距离 [m]
+    lidar_min_range: 0.2            # LiDAR最小感知距离 [m]
+    camera_max_range: 5.0           # 相机最大感知距离 [m]
+    camera_min_range: 0.5           # 相机最小感知距离 [m]
+    camera_fov_h_deg: 90.0          # 相机水平FOV [度]
+    camera_fov_v_deg: 60.0          # 相机垂直FOV [度]
+    camera_ray_step: 0.1            # 相机射线步长 [m]
+    camera_angular_resolution_deg: 1.0  # 相机角分辨率 [度]
   
   # ---------- 膨胀地图 ----------
   inflation_resolution: 0.2         # 膨胀分辨率 [m]
@@ -278,6 +313,35 @@ exploration:
   # ---------- 头顶区域过滤参数 ----------
   overhead_height_threshold: 0.3    # 头顶高度阈值 [m]
   overhead_distance_threshold: 3.0  # 头顶水平距离阈值 [m]
+  
+  # ============================================================
+  #     SFExplorer 策略参数（可选功能开关）
+  # ============================================================
+  # 参考论文: SFExplorer - Surface-Frontier-based Efficient UAV Exploration
+  # 
+  # 核心优势:
+  # 1. 表面前沿：聚焦环境表面信息，避免空区域无效探索
+  # 2. 球扇形采样：在主法线方向采样，提高观测质量
+  # 3. 增量聚类：对远距离视点聚类，用锚点替代，降低规划复杂度
+  
+  # ---------- 策略开关 ----------
+  use_surface_frontier: false       # 是否使用表面前沿聚类（基于法向量相似性）
+  use_spherical_sampling: false     # 是否使用球扇形均匀采样（否则使用圆周采样）
+  use_viewpoint_clustering: false   # 是否使用增量视点聚类（生成锚点）
+  
+  # ---------- 表面前沿聚类参数 ----------
+  normal_angle_threshold: 0.785     # 法向量聚类角度阈值 [rad] (~45°)
+  normal_pca_k: 10                  # PCA计算法向量时的邻域点数
+  
+  # ---------- 球扇形采样参数 ----------
+  sphere_sample_radius: 2.5         # 球扇形采样半径 [m]（约传感器量程的一半）
+  sphere_theta_max: 0.785           # 最大极角 [rad] (~45°)
+  sphere_sample_num: 20             # 球扇形内采样点数
+  
+  # ---------- 增量视点聚类参数 ----------
+  vp_cluster_distance: 3.0          # 视点聚类距离阈值 [m]
+  vp_cluster_radius: 5.0            # 视点聚类外接圆半径阈值 [m]
+  vp_cluster_min_dist: 6.0          # 视点需要聚类的最小距离 [m]（近处视点不聚类）
 
 
 # ============================================================

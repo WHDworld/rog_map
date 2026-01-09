@@ -7,7 +7,8 @@
 #include "ego_planner/plan_container.hpp"
 #include "ego_planner/optimizer/lbfgs.hpp"
 #include "ego_planner/optimizer/poly_traj_utils.hpp"
-#include <rog_map/rog_map.h>
+// 使用新的 STAR-MVF 地图系统
+#include "star_mvf/star_mvf.h"
 
 namespace ego_planner
 {
@@ -65,7 +66,7 @@ namespace ego_planner
   {
 
   private:
-    rog_map::ROGMap::Ptr rog_map_;
+    star_mvf::MapManager::Ptr map_manager_;
     AStar::Ptr a_star_;
     poly_traj::MinJerkOpt jerkOpt_;
     ConstraintPoints cps_;
@@ -115,7 +116,7 @@ namespace ego_planner
 
     /* set variables */
     void setParam(ros::NodeHandle &nh);
-    void setEnvironment(const rog_map::ROGMap::Ptr &map);
+    void setEnvironment(const star_mvf::MapManager::Ptr &map);
     void setControlPoints(const Eigen::MatrixXd &points);
     void setIfTouchGoal(const bool touch_goal);
     void setConstraintPoints(ConstraintPoints cps);
@@ -144,10 +145,14 @@ namespace ego_planner
     /* multi-topo support */
     std::vector<ConstraintPoints> distinctiveTrajs(std::vector<std::pair<int, int>> segments);
     
-    /* occupancy check using rog_map */
+    /* occupancy check using map_manager */
     inline bool getInflateOccupancy(const Eigen::Vector3d &pos) const
     {
-      return rog_map_->isOccupiedInflate(pos);
+      // 转换为 float 类型以兼容 star_mvf::Position
+      star_mvf::Position pos_f(static_cast<float>(pos.x()), 
+                               static_cast<float>(pos.y()), 
+                               static_cast<float>(pos.z()));
+      return map_manager_->isOccupiedInflate(pos_f);
     }
 
   private:

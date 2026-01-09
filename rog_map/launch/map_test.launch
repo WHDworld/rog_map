@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- Map Test Node - 单独测试地图同步功能 -->
+    <!-- 使用已有的参数文件和 RViz 配置 -->
+    <!-- 节点命名为 exploration_planner_node 以匹配 RViz 话题配置 -->
+    
+    <!-- 参数覆盖（如需要） -->
+    <arg name="odom_topic" default="/uav_simulator/odometry"/>
+    <arg name="lidar_topic" default="/livox/lidar"/>
+    
+    <!-- RViz - 使用已有的配置 -->
+    <node name="rviz_map_test" pkg="rviz" type="rviz" 
+          args="-d $(find rog_map)/config/exploration_open3d.rviz" output="screen"/>
+    
+    <!-- Map Test Node - 命名为 exploration_planner_node 以匹配 RViz 话题 -->
+    <node name="exploration_planner_node" pkg="rog_map" type="map_test_node" output="screen">
+        <!-- 加载参数文件 -->
+        <rosparam file="$(find rog_map)/config/exploration_open3d.yaml" command="load"/>
+        
+        <!-- 覆盖话题配置 -->
+        <param name="rog_map/odom_topic" value="$(arg odom_topic)"/>
+        <param name="rog_map/lidar_topic" value="$(arg lidar_topic)"/>
+    </node>
+</launch>

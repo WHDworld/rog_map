@@ -14,7 +14,7 @@ AStar::~AStar()
                 delete GridNodeMap_[i][j][k];
 }
 
-void AStar::initGridMap(rog_map::ROGMap::Ptr occ_map, const Eigen::Vector3i pool_size)
+void AStar::initGridMap(star_mvf::MapManager::Ptr map_manager, const Eigen::Vector3i pool_size)
 {
     POOL_SIZE_ = pool_size;
     CENTER_IDX_ = pool_size / 2;
@@ -33,7 +33,7 @@ void AStar::initGridMap(rog_map::ROGMap::Ptr occ_map, const Eigen::Vector3i pool
         }
     }
 
-    rog_map_ = occ_map;
+    map_manager_ = map_manager;
 }
 
 double AStar::getDiagHeu(GridNodePtr node1, GridNodePtr node2)
