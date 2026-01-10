@@ -5,6 +5,7 @@
 
 #include "rog_map/history_graph.h"
 #include "rog_map/viewpoint_manager.h"
+#include "rog_map/dtg_history_graph.h"
 #include <algorithm>
 
 // 简化日志宏
@@ -19,19 +20,14 @@ HistoryGraph::HistoryGraph() {}
 void HistoryGraph::init(ros::NodeHandle& nh, GlobalMap::Ptr global_map) {
     nh_ = nh;
     global_map_ = global_map;
-    
-    // 加载配置（使用 history_graph/ 命名空间，与 yaml 文件一致）
-    nh_.param("history_graph/history_node_distance", config_.history_node_distance, 3.0f);
-    nh_.param("history_graph/max_connection_distance", config_.max_connection_distance, 8.0f);
-    nh_.param("history_graph/raycast_step", config_.raycast_step, 0.1f);
-    nh_.param("history_graph/consecutive_occupied_threshold", config_.consecutive_occupied_threshold, 2);
-    nh_.param("history_graph/viewpoint_connection_radius", config_.viewpoint_connection_radius, 10.0f);
+
+    // DTG init (new)
+    dtg_.init(nh_, "dtg/history", global_map_, nullptr);
     
     // 初始化可视化发布器（使用与老架构相同的话题名称）
     history_graph_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/exploration/region_route", 1);
-    
-    HIST_INFO("Initialized: node_dist=%.1f, max_conn=%.1f",
-              config_.history_node_distance, config_.max_connection_distance);
+
+    HIST_INFO("Initialized (DTG mode)");
 }
 
 void HistoryGraph::start() {
@@ -56,67 +52,17 @@ void HistoryGraph::stop() {
 }
 
 void HistoryGraph::timerCallback(const ros::TimerEvent& e) {
+    if (!has_uav_pos_) return;
+
     ros::Time t_start = ros::Time::now();
-    
-    int vp_updated_count = 0;
-    double t_update_vp = 0;
-    
-    // 检查ViewpointManager是否有视点更新
-    if (viewpoint_manager_ && viewpoint_manager_->hasViewpointUpdates()) {
-        ros::Time t_vp_start = ros::Time::now();
-        
-        // 获取最新的簇数据
-        std::vector<FrontierCluster> clusters = viewpoint_manager_->getClusters();
-        
-        // 转换为视点列表
-        std::vector<ViewpointNode> new_viewpoints;
-        for (const auto& cluster : clusters) {
-            if (!cluster.has_viewpoint) continue;
-            
-            ViewpointNode vp;
-            vp.position = cluster.viewpoint_position;
-            vp.yaw = cluster.viewpoint_yaw;
-            vp.cluster_id = cluster.cluster_id;
-            vp.score = cluster.viewpoint_score;
-            
-            new_viewpoints.push_back(vp);
-        }
-        
-        // 更新视点并构建连接
-        updateViewpoints(new_viewpoints);
-        
-        // 清除更新标志
-        viewpoint_manager_->clearViewpointUpdates();
-        
-        vp_updated_count = static_cast<int>(new_viewpoints.size());
-        t_update_vp = (ros::Time::now() - t_vp_start).toSec() * 1000.0;
-    }
-    
-    // 定期清理无效视点
-    ros::Time t_cleanup_start = ros::Time::now();
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        cleanupViewpoints();
-    }
-    double t_cleanup = (ros::Time::now() - t_cleanup_start).toSec() * 1000.0;
-    
+
+    // DTG update
+    dtg_.updateRobotPos(current_uav_pos_.cast<double>());
+
     double t_total = (ros::Time::now() - t_start).toSec() * 1000.0;
-    
-    // 获取统计信息
-    size_t node_count, edge_count, vp_count;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        node_count = history_nodes_.size();
-        edge_count = 0;
-        for (const auto& n : history_nodes_) {
-            edge_count += n.neighbors.size();
-        }
-        edge_count /= 2;  // 双向边只算一次
-        vp_count = viewpoints_.size();
-    }
-    
-    ROS_INFO_THROTTLE(1.0, "[HistGraph] Update: nodes=%zu, edges=%zu, viewpoints=%zu | vp_update=%d (%.1fms), cleanup=%.1fms, total=%.1fms",
-                      node_count, edge_count, vp_count, vp_updated_count, t_update_vp, t_cleanup, t_total);
+
+    ROS_INFO_THROTTLE(1.0, "[HistGraph][DTG] Update: H=%zu, F=%zu | total=%.1fms",
+                      dtg_.getHNodeCount(), dtg_.getFNodeCount(), t_total);
 }
 
 // ==================== 历史节点管理 ====================
@@ -358,22 +304,11 @@ int HistoryGraph::connectViewpointToGraph(ViewpointNode& vp) {
 }
 
 void HistoryGraph::markViewpointExplored(int viewpoint_id) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    
-    auto it = viewpoints_.find(viewpoint_id);
-    if (it != viewpoints_.end()) {
-        it->second.explored = true;
-        HIST_DEBUG("Viewpoint %d marked as explored", viewpoint_id);
-    }
+    dtg_.markViewpointExplored(viewpoint_id);
 }
 
 void HistoryGraph::markViewpointInvalid(int viewpoint_id) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    
-    auto it = viewpoints_.find(viewpoint_id);
-    if (it != viewpoints_.end()) {
-        it->second.valid = false;
-    }
+    dtg_.markViewpointInvalid(viewpoint_id);
 }
 
 void HistoryGraph::cleanupViewpoints() {
@@ -389,15 +324,7 @@ void HistoryGraph::cleanupViewpoints() {
 }
 
 std::vector<ViewpointNode> HistoryGraph::getValidViewpoints() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    
-    std::vector<ViewpointNode> result;
-    for (const auto& kv : viewpoints_) {
-        if (kv.second.valid && !kv.second.explored) {
-            result.push_back(kv.second);
-        }
-    }
-    return result;
+    return dtg_.getValidViewpoints();
 }
 
 bool HistoryGraph::getViewpointInfo(int viewpoint_id, Eigen::Vector3f& position, float& yaw) const {
@@ -426,86 +353,11 @@ const ViewpointNode* HistoryGraph::getViewpoint(int viewpoint_id) const {
 
 PathResult HistoryGraph::findPathToViewpoint(const Eigen::Vector3f& start_pos, int viewpoint_id) {
     PathResult result;
-    
-    std::lock_guard<std::mutex> lock(mutex_);
-    
-    auto it = viewpoints_.find(viewpoint_id);
-    if (it == viewpoints_.end() || !it->second.valid) {
-        HIST_WARN("Viewpoint %d not found or invalid", viewpoint_id);
+
+    // DTG path query
+    if (!dtg_.findPathToViewpoint(start_pos, viewpoint_id, result)) {
         return result;
     }
-    
-    const ViewpointNode& vp = it->second;
-    result.target_viewpoint_id = viewpoint_id;
-    
-    // 如果直接可达，返回视点路径
-    if (!hasObstacleBetween(start_pos, vp.position)) {
-        result.success = true;
-        result.waypoints.push_back(vp.position);
-        result.total_distance = (vp.position - start_pos).norm();
-        return result;
-    }
-    
-    // 需要通过历史节点
-    if (vp.connected_history_node < 0 || history_nodes_.empty()) {
-        HIST_WARN("Viewpoint not connected to history graph");
-        return result;
-    }
-    
-    // 找起点最近的可达历史节点
-    int start_node_id = -1;
-    float min_start_dist = std::numeric_limits<float>::max();
-    
-    for (const auto& node : history_nodes_) {
-        float d = (node.position - start_pos).norm();
-        if (d < min_start_dist && !hasObstacleBetween(start_pos, node.position)) {
-            min_start_dist = d;
-            start_node_id = node.node_id;
-        }
-    }
-    
-    if (start_node_id < 0) {
-        HIST_WARN("Cannot find reachable start node");
-        return result;
-    }
-    
-    // BFS搜索从start_node到vp.connected_history_node
-    std::vector<int> node_path;
-    if (!bfsSearchPath(start_node_id, vp.connected_history_node, node_path)) {
-        HIST_WARN("BFS failed to find path");
-        return result;
-    }
-    
-    // 简化路径
-    simplifyPath(node_path);
-    
-    // 构建航点列表
-    result.success = true;
-    result.total_distance = min_start_dist;
-    result.history_node_path = node_path;
-    
-    for (int nid : node_path) {
-        for (const auto& node : history_nodes_) {
-            if (node.node_id == nid) {
-                result.waypoints.push_back(node.position);
-                break;
-            }
-        }
-    }
-    
-    // 添加视点作为最终目标
-    result.waypoints.push_back(vp.position);
-    
-    // 计算总距离
-    Eigen::Vector3f prev = start_pos;
-    for (const auto& wp : result.waypoints) {
-        result.total_distance += (wp - prev).norm();
-        prev = wp;
-    }
-    
-    HIST_DEBUG("Found path with %zu waypoints, dist=%.2f",
-               result.waypoints.size(), result.total_distance);
-    
     return result;
 }
 

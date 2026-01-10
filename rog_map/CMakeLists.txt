@@ -79,6 +79,7 @@ include_directories(
         ${Eigen3_INCLUDE_DIRS}
         ${PCL_INCLUDE_DIRS}
         ${OMPL_INCLUDE_DIRS}
+
 )
 
 set(THIRD_PARTY
@@ -92,6 +93,7 @@ file(GLOB_RECURSE lib_srcs
         CONFIGURE_DEPENDS 
         src/rog_map/*.cpp 
         src/star_mvf/*.cpp           # STAR-MVF 新地图模块
+
         include/*.h 
         include/*.hpp 
         include/*.cpp

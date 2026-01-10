@@ -34,6 +34,7 @@
 
 // 使用新的 STAR-MVF 地图系统
 #include "star_mvf/star_mvf.h"
+#include "rog_map/dtg_history_graph.h"
 
 namespace rog_map {
 
@@ -141,6 +142,9 @@ public:
     
     HistoryGraph();
     ~HistoryGraph() = default;
+
+    // DTG实现（新）
+    dtg::DtgHistoryGraph dtg_;
     
     /**
      * @brief 初始化
@@ -155,6 +159,8 @@ public:
      */
     void setViewpointManager(ViewpointManager* vp_manager) {
         viewpoint_manager_ = vp_manager;
+        // 让DTG层也能获取视点更新
+        dtg_.init(nh_, "dtg/history", global_map_, viewpoint_manager_);
     }
     
     /**
