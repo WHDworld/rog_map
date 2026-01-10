@@ -50,7 +50,6 @@ struct GlobalMapConfig {
     float fov_v_deg = 60.0f;
     float camera_max_dist = 5.0f;
     float camera_min_dist = 0.3f;
-    bool enable_camera_map = false;
     
     // 前沿参数
     float frontier_height_min = 0.9f;
@@ -408,7 +407,6 @@ protected:
     float fov_v_rad_ = 0.0f;
     float tan_half_fov_h_ = 0.0f;
     float tan_half_fov_v_ = 0.0f;
-    float ray_step_ = 0.0f;
     
     // 膨胀地图数据
     std::unordered_map<VoxelIndex, int16_t, VoxelIndexHash> inflation_count_;  // 每个体素的膨胀计数

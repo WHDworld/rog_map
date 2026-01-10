@@ -53,7 +53,6 @@ struct MapManagerConfig {
     std::string frame_id = "map";
     
     // 更新频率
-    float sync_rate = 10.0f;      // 局部->全局同步频率
     float viz_rate = 5.0f;        // 可视化频率
     
     // 可视化配置
@@ -163,7 +162,6 @@ public:
     }
     
     // ==================== 射线/路径检测（规划器需要）====================
-    
     /**
      * @brief 检查路径是否自由（使用膨胀地图）
      * @param start 起点
@@ -225,15 +223,6 @@ public:
     }
     Position getLocalMapSize() const {
         return global_map_->getLocalMapSize();
-    }
-    
-    // ==================== ESDF接口 ====================
-    
-    double getESDFDistance(const Position& pos) const {
-        return global_map_->getESDFDistance(pos);
-    }
-    bool isESDFEnabled() const {
-        return global_map_->isESDFEnabled();
     }
     
     // ==================== 状态查询 ====================
@@ -299,14 +288,11 @@ protected:
     void odomCallback(const nav_msgs::OdometryConstPtr& msg);
     void cameraOdomCallback(const nav_msgs::OdometryConstPtr& msg);
     void cameraRgbCallback(const sensor_msgs::ImageConstPtr& msg);
-    void syncTimerCallback(const ros::TimerEvent& event);
     void vizTimerCallback(const ros::TimerEvent& event);
     
     // 同步局部地图到全局地图
     void syncLocalToGlobal();
     
-    // 可视化辅助函数
-    void publishVisualization();
 };
 
 }  // namespace star_mvf

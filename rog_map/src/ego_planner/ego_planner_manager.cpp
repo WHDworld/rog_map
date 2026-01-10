@@ -11,13 +11,10 @@ namespace ego_planner
   void EGOPlannerManager::initPlanModules(ros::NodeHandle &nh, star_mvf::MapManager::Ptr map)
   {
     /* 从统一的 dynamics 部分读取参数，若无则从 manager 部分读取（向后兼容） */
-    if (!nh.getParam("dynamics/max_vel", pp_.max_vel_)) {
-      nh.param("manager/max_vel", pp_.max_vel_, 2.0);
-    }
-    if (!nh.getParam("dynamics/max_acc", pp_.max_acc_)) {
-      nh.param("manager/max_acc", pp_.max_acc_, 2.0);
-    }
-    
+    nh.param("manager/max_vel", pp_.max_vel_, 2.0);
+    nh.param("manager/max_acc", pp_.max_acc_, 2.0);
+    // nh.param("manager/max_yaw_rate", pp_.max_yaw_rate_, 1.0);
+    // nh.param("manager/max_yaw_acc", pp_.max_yaw_acc_, 1.0);
     nh.param("manager/feasibility_tolerance", pp_.feasibility_tolerance_, 0.05);
     nh.param("manager/polyTraj_piece_length", pp_.polyTraj_piece_length, 1.5);
     nh.param("manager/planning_horizon", pp_.planning_horizen_, 7.5);
@@ -247,19 +244,15 @@ namespace ego_planner
       const Eigen::Vector3d &local_target_vel, const bool flag_polyInit,
       const bool flag_randomPolyTraj, const bool touch_goal)
   {
-
-    // static int count = 0;
-    // printf("\033[47;30m\n[replan %d]==============================================\033[0m\n",
-    //        count++);
+    // 检查优化器是否初始化
+    if (!ploy_traj_opt_) {
+      ROS_ERROR("[EGO_REPLAN] ploy_traj_opt_ is NULL!");
+      return false;
+    }
 
     ploy_traj_opt_->setIfTouchGoal(touch_goal);
 
-    if ((start_pt - local_target_pt).norm() < 0.2)
-    {
-      ROS_INFO("Close to goal");
-    }
-
-    ros::WallTime t_start = ros::WallTime::now();  // Use wall time for accurate profiling in simulation
+    ros::WallTime t_start = ros::WallTime::now();
     ros::WallDuration t_init, t_opt;
 
     /*** STEP 1: INIT ***/
@@ -274,7 +267,8 @@ namespace ego_planner
 
     Eigen::MatrixXd cstr_pts = initMJO.getInitConstraintPoints(ploy_traj_opt_->get_cps_num_prePiece_());
     std::vector<std::pair<int, int>> segments;
-    if (ploy_traj_opt_->finelyCheckAndSetConstraintPoints(segments, initMJO, true) == PolyTrajOptimizer::CHK_RET::ERR)
+    auto check_ret = ploy_traj_opt_->finelyCheckAndSetConstraintPoints(segments, initMJO, true);
+    if (check_ret == PolyTrajOptimizer::CHK_RET::ERR)
     {
       return false;
     }
@@ -289,6 +283,7 @@ namespace ego_planner
 
     poly_traj::Trajectory initTraj = initMJO.getTraj();
     int PN = initTraj.getPieceNum();
+    
     Eigen::MatrixXd all_pos = initTraj.getPositions();
     Eigen::MatrixXd innerPts = all_pos.block(0, 1, 3, PN - 1);
     Eigen::Matrix<double, 3, 3> headState, tailState;
@@ -303,7 +298,6 @@ namespace ego_planner
     t_opt = ros::WallTime::now() - t_start;
 
     // save and display planned results
-    // ROS_INFO("plan_success=%d", flag_success);
     if (!flag_success)
     {
       continous_failures_count_++;

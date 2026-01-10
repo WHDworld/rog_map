@@ -1084,12 +1084,8 @@ namespace ego_planner
     nh.param("optimization/obstacle_clearance", obs_clearance_, 0.3);
     nh.param("optimization/obstacle_clearance_soft", obs_clearance_soft_, 0.5);
     // 从统一的 dynamics 部分读取，若无则从 optimization 部分读取（向后兼容）
-    if (!nh.getParam("dynamics/max_vel", max_vel_)) {
-      nh.param("optimization/max_vel", max_vel_, 2.0);
-    }
-    if (!nh.getParam("dynamics/max_acc", max_acc_)) {
-      nh.param("optimization/max_acc", max_acc_, 2.0);
-    }
+    nh.param("manager/max_vel", max_vel_, 2.0);
+    nh.param("manager/max_acc", max_acc_, 2.0);
     
     // 高度保持参数
     nh.param("optimization/enable_height_keeping", enable_height_keeping_, false);

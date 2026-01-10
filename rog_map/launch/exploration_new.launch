@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<launch>
+    <!-- 
+    新架构探索规划系统启动文件
+    
+    架构特点：
+    1. 地图更新在 lidarCallback 中完成（~10Hz）
+    2. 视点生成由 ViewpointManager 定时器处理（5Hz）
+    3. 历史节点由 HistoryGraph 定时器处理（2Hz）
+    4. 探索状态机为4状态设计（100Hz）
+    5. 规划器直接在状态机中调用，不再有单独的规划状态机
+    -->
+    
+    <!-- ========== 参数 ========== -->
+    <arg name="map_name" default="octa_maze"/>
+    <arg name="sim_mode" default="1"/>  <!-- 0=Gazebo, 1=Open3D, 2=Real -->
+    <arg name="auto_start" default="false"/>
+    
+    <!-- ========== 新架构探索规划节点 ========== -->
+    <node pkg="rog_map" type="exploration_planner_node_new" name="exploration_planner_node" output="screen">
+        <!-- 加载参数文件到节点的私有命名空间 -->
+        <rosparam file="$(find rog_map)/config/exploration_new.yaml" command="load"/>
+        
+        <!-- 覆盖特定参数 -->
+        <param name="map_name" value="$(arg map_name)"/>
+        <param name="fsm/sim_mode" value="$(arg sim_mode)"/>
+        <param name="exploration/auto_start" value="$(arg auto_start)"/>
+    </node>
+    
+    <!-- ========== 轨迹服务器 ========== -->
+    <node pkg="rog_map" type="ego_traj_server" name="traj_server" output="screen">
+        <remap from="/planning/pos_cmd" to="/planning/pos_cmd"/>
+        <remap from="/traj_server/trajectory" to="/planning/trajectory"/>
+    </node>
+    
+    <!-- ========== RViz 可视化 (可选) ========== -->
+    <arg name="rviz" default="true"/>
+    <node if="$(arg rviz)" pkg="rviz" type="rviz" name="rviz" 
+          args="-d $(find rog_map)/config/exploration_open3d.rviz"/>
+    
+</launch>

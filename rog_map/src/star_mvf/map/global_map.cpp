@@ -53,7 +53,7 @@ void GlobalMap::initFromROS(const std::string& name_space) {
     
     posToIndex(config_.global_min, global_min_idx_);
     posToIndex(config_.global_max, global_max_idx_);
-    
+    ROS_INFO("[GlobalMap] Global Map Size: [%f, %f, %f] - [%f, %f, %f]", config_.global_max.x(), config_.global_max.y(), config_.global_max.z(), config_.global_min.x(), config_.global_min.y(), config_.global_min.z());
     // 子网格配置
     nh_.param(name_space + "/global_map/sub_grid_xy", config_.sub_grid_xy, 0.1f);
     sub_grid_x_ = (config_.global_max.x() - config_.global_min.x()) * config_.sub_grid_xy;
@@ -62,13 +62,11 @@ void GlobalMap::initFromROS(const std::string& name_space) {
     sub_grid_size_y_ = static_cast<int>(sub_grid_y_ * config_.resolution_inv);
     
     // 相机参数
-    nh_.param(name_space + "/camera_map/fov_h_deg", config_.fov_h_deg, 90.0f);
-    nh_.param(name_space + "/camera_map/fov_v_deg", config_.fov_v_deg, 60.0f);
-    nh_.param(name_space + "/camera_map/max_dist", config_.camera_max_dist, 5.0f);
-    nh_.param(name_space + "/camera_map/min_dist", config_.camera_min_dist, 0.3f);
-    nh_.param(name_space + "/camera_map/enable", config_.enable_camera_map, false);
+    nh_.param(name_space + "/sensor/camera_fov_h_deg", config_.fov_h_deg, 90.0f);
+    nh_.param(name_space + "/sensor/camera_fov_v_deg", config_.fov_v_deg, 60.0f);
+    nh_.param(name_space + "/sensor/camera_max_range", config_.camera_max_dist, 5.0f);
+    nh_.param(name_space + "/sensor/camera_min_range", config_.camera_min_dist, 0.3f);
     
-    ray_step_ = 0.5f * config_.resolution;
     constexpr float DEG_TO_RAD = M_PI / 180.0f;
     fov_h_rad_ = config_.fov_h_deg * DEG_TO_RAD;
     fov_v_rad_ = config_.fov_v_deg * DEG_TO_RAD;
@@ -82,7 +80,7 @@ void GlobalMap::initFromROS(const std::string& name_space) {
     // 膨胀配置
     nh_.param(name_space + "/inflation/enable", config_.inflation_config.enable_inflation, true);
     int inflation_step;
-    nh_.param(name_space + "/inflation_step", inflation_step, 2);
+    nh_.param(name_space + "/inflation/inflation_step", inflation_step, 2);
     config_.inflation_config.inflation_grid_radius = inflation_step;
     config_.inflation_config.inflation_radius = config_.resolution * inflation_step;
     

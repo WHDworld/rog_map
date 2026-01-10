@@ -243,7 +243,7 @@ exploration:
   replan_thresh_time: 5.0             # 周期性重规划时间 [s] - Falcon默认3.0
   replan_thresh_frontier: 0.5         # 最小执行时间后才检查覆盖 [s] - Falcon默认0.2
   replan_thresh_traj_remain: 0.5      # 轨迹剩余时间阈值 [s] - Falcon默认0.05
-  frontier_covered_ratio: 0.25        # 前沿覆盖比例触发重规划 [0-1] - Falcon默认0.25
+  frontier_covered_ratio: 0.75        # 前沿覆盖比例触发重规划 [0-1] - Falcon默认0.25
   
   # ---------- ★★★ 探索触发参数 ★★★ ----------
   # auto_start: 是否自动开始探索

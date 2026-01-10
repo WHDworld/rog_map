@@ -25,10 +25,8 @@ void MapManager::initFromROS(const std::string& name_space) {
     nh_private_.param<std::string>(name_space + "/frame_id", config_.frame_id, "map");
     
     // 读取更新频率
-    double sync_rate, viz_rate;
-    nh_private_.param(name_space + "/sync_rate", sync_rate, 10.0);
+    double viz_rate;
     nh_private_.param(name_space + "/viz_rate", viz_rate, 5.0);
-    config_.sync_rate = static_cast<float>(sync_rate);
     config_.viz_rate = static_cast<float>(viz_rate);
     
     // 读取可视化配置
@@ -65,11 +63,21 @@ void MapManager::initFromROS(const std::string& name_space) {
     config_.local_config.log_odds_min = static_cast<float>(log_min);
     config_.local_config.log_odds_max = static_cast<float>(log_max);
     config_.local_config.log_odds_occ_thresh = static_cast<float>(occ_thresh);
-    
+
+    bool use_raycast;
+    double raycast_step;
+    nh_private_.param(name_space + "/local_map/use_raycast", use_raycast, true);
+    nh_private_.param(name_space + "/local_map/raycast_step", raycast_step, 0.1);
+    config_.local_config.use_raycast = use_raycast;
+    config_.local_config.raycast_step = static_cast<float>(raycast_step);
+
     double lidar_sensor_max, lidar_sensor_min;
     double camera_sensor_max, camera_sensor_min;
     nh_private_.param(name_space + "/sensor/lidar_max_range", lidar_sensor_max, 20.0);
     nh_private_.param(name_space + "/sensor/lidar_min_range", lidar_sensor_min, 0.2);
+    int lidar_downsample_filter;
+    nh_private_.param(name_space + "/sensor/lidar_downsample_filter", lidar_downsample_filter, 1);
+
     nh_private_.param(name_space + "/sensor/camera_max_range", camera_sensor_max, 5.0);
     nh_private_.param(name_space + "/sensor/camera_min_range", camera_sensor_min, 0.5);
     double camera_fov_h_deg, camera_fov_v_deg;
@@ -78,8 +86,6 @@ void MapManager::initFromROS(const std::string& name_space) {
     double camera_ray_step, camera_angular_resolution_deg;
     nh_private_.param(name_space + "/sensor/camera_ray_step", camera_ray_step, 0.1);
     nh_private_.param(name_space + "/sensor/camera_angular_resolution_deg", camera_angular_resolution_deg, 1.0);
-    int lidar_downsample_filter;
-    nh_private_.param(name_space + "/sensor/lidar_downsample_filter", lidar_downsample_filter, 1);
     config_.local_config.lidar_max_range = static_cast<float>(lidar_sensor_max);
     config_.local_config.lidar_min_range = static_cast<float>(lidar_sensor_min);
     config_.local_config.lidar_downsample_filter = lidar_downsample_filter;
@@ -87,15 +93,9 @@ void MapManager::initFromROS(const std::string& name_space) {
     config_.local_config.camera_min_range = static_cast<float>(camera_sensor_min);
     config_.local_config.camera_fov_h_deg = static_cast<float>(camera_fov_h_deg);
     config_.local_config.camera_fov_v_deg = static_cast<float>(camera_fov_v_deg);
-    config_.local_config.camera_ray_step = static_cast<float>(camera_ray_step);
+    config_.local_config.camera_ray_step = static_cast<float>(raycast_step);
     config_.local_config.camera_angular_resolution_deg = static_cast<float>(camera_angular_resolution_deg);
 
-    bool use_raycast;
-    double raycast_step;
-    nh_private_.param(name_space + "/local_map/use_raycast", use_raycast, true);
-    nh_private_.param(name_space + "/local_map/raycast_step", raycast_step, 0.1);
-    config_.local_config.use_raycast = use_raycast;
-    config_.local_config.raycast_step = static_cast<float>(raycast_step);
     
     // 初始化局部地图
     local_map_->init(config_.local_config);
@@ -121,26 +121,18 @@ void MapManager::initFromROS(const std::string& name_space) {
 void MapManager::start() {
     if (running_) return;
     running_ = true;
-    
-    ROS_INFO("[MapManager] Creating sync_timer with rate=%.1f Hz", config_.sync_rate);
-    // 启动定时器
-    sync_timer_ = nh_.createTimer(
-        ros::Duration(1.0 / config_.sync_rate),
-        &MapManager::syncTimerCallback, this);
-    
     ROS_INFO("[MapManager] Creating viz_timer with rate=%.1f Hz", config_.viz_rate);
     viz_timer_ = nh_.createTimer(
         ros::Duration(1.0 / config_.viz_rate),
         &MapManager::vizTimerCallback, this);
-    
-    ROS_INFO("[MapManager] Started - timers created");
+    ROS_INFO("[MapManager] Started (new architecture: sync in lidarCallback)");
 }
 
 void MapManager::stop() {
     if (!running_) return;
     running_ = false;
     
-    sync_timer_.stop();
+    // sync_timer_.stop();  // 新架构：不再使用 syncTimer
     viz_timer_.stop();
     
     ROS_INFO("[MapManager] Stopped");
@@ -159,13 +151,29 @@ void MapManager::lidarCallback(const sensor_msgs::PointCloud2ConstPtr& msg) {
         sensor_pos = current_position_;
     }
     
-    // 更新局部地图
+    // === 新架构：在lidarCallback中完成所有地图更新 ===
+    
+    // Step 1: 更新局部地图
     auto t1 = ros::Time::now();
     local_map_->insertPointCloud(*msg, sensor_pos);
     auto t2 = ros::Time::now();
     
-    // ROS_INFO("[MapManager] LiDAR #%d insert took %.1fms", 
-    //          lidar_count, (t2 - t1).toSec() * 1000.0);
+    // Step 2: 同步到全局地图
+    syncLocalToGlobal();
+    auto t3 = ros::Time::now();
+    
+    // Step 3: 提取前沿
+    global_map_->extractGlobalFrontierIncremental();
+    auto t4 = ros::Time::now();
+    
+    // 性能日志（每10帧输出一次）
+    // if (lidar_count % 10 == 0) {
+    //     ROS_INFO("[MapManager] LiDAR #%d: insert=%.1fms, sync=%.1fms, frontier=%.1fms",
+    //              lidar_count,
+    //              (t2 - t1).toSec() * 1000.0,
+    //              (t3 - t2).toSec() * 1000.0,
+    //              (t4 - t3).toSec() * 1000.0);
+    // }
 }
 
 void MapManager::odomCallback(const nav_msgs::OdometryConstPtr& msg) {
@@ -225,14 +233,6 @@ void MapManager::cameraOdomCallback(const nav_msgs::OdometryConstPtr& msg) {
 void MapManager::cameraRgbCallback(const sensor_msgs::ImageConstPtr& msg) {
     // 相机RGB图像回调（预留用于语义分割等）
     // 目前不做处理
-}
-
-void MapManager::syncTimerCallback(const ros::TimerEvent& event) {
-
-    syncLocalToGlobal();
-
-    global_map_->extractGlobalFrontierIncremental();
-
 }
 
 void MapManager::vizTimerCallback(const ros::TimerEvent& event) {

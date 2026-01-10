@@ -528,7 +528,6 @@ bool LocalMap::isOccupied(const Position& pos) const {
 }
 
 // ==================== 相机可视域 ====================
-
 void LocalMap::updateCameraFrustum(const Position& camera_origin, 
                                     const Quaternion& camera_rotation) {
     std::lock_guard<std::mutex> lock(map_mutex_);
