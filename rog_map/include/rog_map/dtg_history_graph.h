@@ -9,14 +9,22 @@
 #include <unordered_set>
 #include <vector>
 
+#include <ros/ros.h>
+#include <visualization_msgs/MarkerArray.h>
+
 #include "rog_map/dtg_lowres_map.h"
-#include "rog_map/history_graph.h"  // reuse ViewpointNode/PathResult definition
+// NOTE: do NOT include history_graph.h here (circular dependency).
+// Forward declarations for lightweight compatibility structs used by FSM.
+namespace rog_map {
+struct ViewpointNode;
+struct PathResult;
+}
 
 namespace rog_map {
 
 class ViewpointManager;
 
-namespace dtg {
+
 
 struct DtgSchNode {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -104,6 +112,8 @@ public:
   size_t getHNodeCount() const;
   size_t getFNodeCount() const;
 
+  void visualize(visualization_msgs::MarkerArray& markers) const;
+
 private:
   // lowres + dtg state
   star_mvf::GlobalMap::Ptr global_map_;
@@ -134,7 +144,6 @@ private:
   double gainExp1(const Eigen::Vector4d& ps, const Eigen::Vector4d& vp, const Eigen::Vector4d& vs, double dist) const;
 };
 
-}  // namespace dtg
 }  // namespace rog_map
 
 #endif

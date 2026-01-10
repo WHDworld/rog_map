@@ -4,7 +4,7 @@
 #include <algorithm>
 
 namespace rog_map {
-namespace dtg {
+
 
 void DtgLowresMap::init(const ros::NodeHandle& nh, const std::string& ns, star_mvf::GlobalMap::Ptr global_map) {
   global_map_ = global_map;
@@ -391,17 +391,17 @@ void DtgLowresMap::voronoiPathRetrieve(std::unordered_map<uint32_t, uint32_t>& h
   }
 }
 
-bool DtgLowresMap::retrieveHPath(const Eigen::Vector3d& start, std::list<Eigen::Vector3d>& path, double& length, bool reverse) {
+bool DtgLowresMap::retrieveHPath(const Eigen::Vector3d& start, std::list<Eigen::Vector3d>& path, double& length, bool reverse_order) {
   path.clear();
   length = 0.0;
   if (blocks_.empty() || !blocks_[0]) return false;
 
   Eigen::Vector3i start_id3;
   posToId3(start, start_id3);
-  return retrieveHPath(start_id3, path, length, reverse);
+  return retrieveHPath(start_id3, path, length, reverse_order);
 }
 
-bool DtgLowresMap::retrieveHPath(const Eigen::Vector3i& start_id3, std::list<Eigen::Vector3d>& path, double& length, bool reverse) {
+bool DtgLowresMap::retrieveHPath(const Eigen::Vector3i& start_id3, std::list<Eigen::Vector3d>& path, double& length, bool reverse_order) {
   path.clear();
   length = 0.0;
   auto& blk = *blocks_[0];
@@ -425,11 +425,10 @@ bool DtgLowresMap::retrieveHPath(const Eigen::Vector3i& start_id3, std::list<Eig
     if (!id3ToIndex(blk, cur_id3, cur_idx)) break; // Should not happen
   }
 
-  if (reverse) {
+  if (reverse_order) {
     path.reverse();
   }
   return true;
 }
 
-}  // namespace dtg
 }  // namespace rog_map

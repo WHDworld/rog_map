@@ -2,10 +2,11 @@
 
 #include <ros/ros.h>
 
+#include "rog_map/history_graph.h"
 #include "rog_map/viewpoint_manager.h"
 
 namespace rog_map {
-namespace dtg {
+
 
 void DtgHistoryGraph::init(const ros::NodeHandle& nh,
                           const std::string& ns,
@@ -23,7 +24,7 @@ void DtgHistoryGraph::init(const ros::NodeHandle& nh,
   nh.param(ns + "/yv_max", cfg_.yv_max, cfg_.yv_max);
   nh.param(ns + "/allow_unknown", cfg_.allow_unknown, cfg_.allow_unknown);
 
-  lrm_.init(nh, ns + "/lowres", global_map_);
+  lrm_.init(nh, "rog_map/lowres", global_map_);
 
   ROS_INFO("[DTG] init: h_thresh=%.2f, sensor_range=%.2f", cfg_.h_thresh, cfg_.sensor_range);
 }
@@ -35,16 +36,15 @@ void DtgHistoryGraph::updateRobotPos(const Eigen::Vector3d& robot_pos) {
 void DtgHistoryGraph::syncViewpointsFromManager() {
   if (!vp_mgr_) return;
 
-  // 当前设计：ViewpointManager 每次更新生成的一组 clusters 视为“本地有效视点”
-  // 其中 has_viewpoint==true 的 cluster 会进入 DTG
   auto clusters = vp_mgr_->getClusters();
+  std::unordered_set<int> current_vp_ids;
 
-  // 这里先只维护一个 vpid->FNode 的字典，后续再做“按subgrid(f_id)分组”
-  // 目前我们用 cluster.cluster_id 直接当 viewpoint_id，便于和现有 HistoryGraph 对齐。
   for (const auto& c : clusters) {
     if (!c.has_viewpoint) continue;
 
     int viewpoint_id = c.cluster_id;
+    current_vp_ids.insert(viewpoint_id);
+
     if (explored_vps_.count(viewpoint_id) || invalid_vps_.count(viewpoint_id)) continue;
 
     auto it = f_nodes_by_vpid_.find(viewpoint_id);
@@ -54,7 +54,6 @@ void DtgHistoryGraph::syncViewpointsFromManager() {
       fn->yaw = c.viewpoint_yaw;
       fn->score = c.viewpoint_score;
 
-      // fid: SubGrid linear index (SubGrid对标EROI)
       if (global_map_) {
         star_mvf::SubGridIndex sg;
         global_map_->posToSubGrid(c.viewpoint_position, sg);
@@ -69,15 +68,15 @@ void DtgHistoryGraph::syncViewpointsFromManager() {
       it->second->pos = c.viewpoint_position;
       it->second->yaw = c.viewpoint_yaw;
       it->second->score = c.viewpoint_score;
+    }
+  }
 
-      if (global_map_) {
-        star_mvf::SubGridIndex sg;
-        global_map_->posToSubGrid(c.viewpoint_position, sg);
-        it->second->fid = static_cast<uint32_t>(global_map_->subGridToLinearIndex(sg));
-      } else {
-        it->second->fid = 0;
-      }
-      it->second->vid = static_cast<uint8_t>(c.cluster_id & 0xFF);
+  // Clean up stale F-nodes
+  for (auto it = f_nodes_by_vpid_.begin(); it != f_nodes_by_vpid_.end(); ) {
+    if (current_vp_ids.find(it->first) == current_vp_ids.end()) {
+      it = f_nodes_by_vpid_.erase(it);
+    } else {
+      ++it;
     }
   }
 }
@@ -95,6 +94,17 @@ void DtgHistoryGraph::connectHF(const std::shared_ptr<HNode>& h,
                                const std::shared_ptr<FNode>& f,
                                const std::list<Eigen::Vector3d>& path,
                                double length) {
+  if (f->hf_edge) {
+      if (f->hf_edge->head == h) { // Same edge, update it
+          f->hf_edge->path = path;
+          f->hf_edge->length = length;
+          return;
+      }
+      // Belongs to another H-node, remove it from old H-node
+      auto& old_h_edges = f->hf_edge->head->hf_edges;
+      old_h_edges.remove(f->hf_edge);
+  }
+
   auto e = std::make_shared<DtgEdge<HNode, FNode>>();
   e->head = h;
   e->tail = f;
@@ -109,6 +119,15 @@ void DtgHistoryGraph::connectHH(const std::shared_ptr<HNode>& h1,
                                const std::shared_ptr<HNode>& h2,
                                const std::list<Eigen::Vector3d>& path,
                                double length) {
+  // Avoid duplicate edges
+  for (const auto& edge : h1->hh_edges) {
+      if (edge->tail == h2) {
+          edge->path = path;
+          edge->length = length;
+          return;
+      }
+  }
+
   auto e = std::make_shared<DtgEdge<HNode, HNode>>();
   e->head = h1;
   e->tail = h2;
@@ -120,24 +139,65 @@ void DtgHistoryGraph::connectHH(const std::shared_ptr<HNode>& h1,
 }
 
 void DtgHistoryGraph::bfUpdate(const Eigen::Vector3d& robot_pos) {
-  // 1) 同步本地视点
   syncViewpointsFromManager();
-
-  // 2) 刷新低分辨率局部地图节点
   lrm_.reloadNodesBf(robot_pos);
 
-  // 3) 创建/更新 root HNode
   if (!root_) {
     root_ = createHnode(robot_pos);
   }
 
-  // TODO: 按EDEN实现：
-  // - GetHnodesBBX
-  // - CheckHHEdges
-  // - VoronoiPartitionSearch
-  // - if(dist_to_nearest_h > H_thresh) CreateHnode
-  // - VoronoiPathRetrieve + ConnectHH
-  // - CreateConnectFnode: RetrieveHPath(vp_pos) + ConnectHF
+  // Create new H-node if needed
+  double min_dist_to_h = 1e9;
+  for (const auto& h : h_list_) {
+    min_dist_to_h = std::min(min_dist_to_h, (h->pos - robot_pos).norm());
+  }
+  if (min_dist_to_h > cfg_.h_thresh) {
+    createHnode(robot_pos);
+  }
+
+  std::list<std::pair<uint32_t, Eigen::Vector3d>> search_origins;
+  std::unordered_map<uint32_t, uint32_t> h_id_to_idx;
+  std::vector<std::shared_ptr<HNode>> h_nodes_vec;
+  for(const auto& h : h_list_){
+      search_origins.push_back({h->id, h->pos});
+      h_id_to_idx[h->id] = h_nodes_vec.size();
+      h_nodes_vec.push_back(h);
+  }
+
+  std::list<Eigen::Vector3i> margins;
+  lrm_.voronoiPartitionSearch(search_origins, margins);
+
+  std::list<std::pair<uint32_t, uint32_t>> hh_indices;
+  std::list<std::list<Eigen::Vector3d>> paths;
+  std::list<double> lengths;
+  lrm_.voronoiPathRetrieve(h_id_to_idx, margins, hh_indices, paths, lengths);
+
+  auto path_it = paths.begin();
+  auto len_it = lengths.begin();
+  for(const auto& hh_idx : hh_indices){
+      connectHH(h_nodes_vec[hh_idx.first], h_nodes_vec[hh_idx.second], *path_it, *len_it);
+      path_it++;
+      len_it++;
+  }
+
+  std::vector<Eigen::Vector3d> f_positions;
+  std::vector<std::shared_ptr<FNode>> f_nodes_to_connect;
+  for (const auto& pair : f_nodes_by_vpid_) {
+      f_positions.push_back(pair.second->pos.cast<double>());
+      f_nodes_to_connect.push_back(pair.second);
+  }
+
+  if (!f_positions.empty()) {
+      std::vector<double> dists;
+      std::vector<std::vector<Eigen::Vector3d>> hf_paths;
+      lrm_.getDists(root_->pos, f_positions, dists, hf_paths);
+
+      for (size_t i = 0; i < f_nodes_to_connect.size(); ++i) {
+          if (dists[i] < 1e9) {
+              connectHF(root_, f_nodes_to_connect[i], std::list<Eigen::Vector3d>(hf_paths[i].begin(), hf_paths[i].end()), dists[i]);
+          }
+      }
+  }
 }
 
 std::vector<ViewpointNode> DtgHistoryGraph::getValidViewpoints() const {
@@ -158,7 +218,7 @@ std::vector<ViewpointNode> DtgHistoryGraph::getValidViewpoints() const {
     vp.score = f->score;
     vp.explored = false;
     vp.valid = true;
-    vp.connected_history_node = -1;
+    vp.connected_history_node = f->hf_edge ? f->hf_edge->head->id : -1;
     out.push_back(vp);
   }
 
@@ -176,14 +236,11 @@ bool DtgHistoryGraph::findPathToViewpoint(const Eigen::Vector3f& start_pos, int 
 
   const auto& f = it->second;
 
-  // 使用低分辨率Dijkstra路径（允许unknown由dtg/lowres/allow_unknown控制）
-  std::vector<Eigen::Vector3d> targets;
-  targets.emplace_back(f->pos.cast<double>());
+  std::vector<Eigen::Vector3d> targets = {f->pos.cast<double>()};
   std::vector<double> dists;
   std::vector<std::vector<Eigen::Vector3d>> paths;
 
-  Eigen::Vector3d origin = start_pos.cast<double>();
-  lrm_.getDists(origin, targets, dists, paths);
+  lrm_.getDists(start_pos.cast<double>(), targets, dists, paths);
 
   if (dists.empty() || paths.empty() || dists[0] > 9e5 || paths[0].empty()) {
     return false;
@@ -216,14 +273,92 @@ size_t DtgHistoryGraph::getFNodeCount() const {
   return f_nodes_by_vpid_.size();
 }
 
-double DtgHistoryGraph::gainExp1(const Eigen::Vector4d& ps,
-                                const Eigen::Vector4d& vp,
-                                const Eigen::Vector4d& vs,
-                                double dist) const {
-  (void)vs;
-  double t = dist / std::max(1e-3, cfg_.v_max);
-  return std::exp(-cfg_.lambda_e * t);
+void DtgHistoryGraph::visualize(visualization_msgs::MarkerArray& markers) const {
+    visualization_msgs::Marker delete_marker;
+    delete_marker.header.frame_id = "map";
+    delete_marker.header.stamp = ros::Time::now();
+    delete_marker.action = visualization_msgs::Marker::DELETEALL;
+    markers.markers.push_back(delete_marker);
+
+    int id = 0;
+
+    for (const auto& h_pair : h_nodes_) {
+        const auto& h = h_pair.second;
+        visualization_msgs::Marker m;
+        m.header.frame_id = "map";
+        m.header.stamp = ros::Time::now();
+        m.ns = "h_nodes";
+        m.id = id++;
+        m.type = visualization_msgs::Marker::SPHERE;
+        m.action = visualization_msgs::Marker::ADD;
+        m.pose.position.x = h->pos.x();
+        m.pose.position.y = h->pos.y();
+        m.pose.position.z = h->pos.z();
+        m.scale.x = 0.4; m.scale.y = 0.4; m.scale.z = 0.4;
+        m.color.r = 1.0; m.color.g = 0.0; m.color.b = 0.0; m.color.a = 0.8;
+        markers.markers.push_back(m);
+    }
+
+    for (const auto& f_pair : f_nodes_by_vpid_) {
+        const auto& f = f_pair.second;
+        visualization_msgs::Marker m;
+        m.header.frame_id = "map";
+        m.header.stamp = ros::Time::now();
+        m.ns = "f_nodes";
+        m.id = id++;
+        m.type = visualization_msgs::Marker::SPHERE;
+        m.action = visualization_msgs::Marker::ADD;
+        m.pose.position.x = f->pos.x();
+        m.pose.position.y = f->pos.y();
+        m.pose.position.z = f->pos.z();
+        m.scale.x = 0.2; m.scale.y = 0.2; m.scale.z = 0.2;
+        m.color.r = 0.0; m.color.g = 1.0; m.color.b = 0.0; m.color.a = 0.8;
+        markers.markers.push_back(m);
+    }
+
+    visualization_msgs::Marker hf_edges;
+    hf_edges.header.frame_id = "map";
+    hf_edges.header.stamp = ros::Time::now();
+    hf_edges.ns = "hf_edges";
+    hf_edges.id = id++;
+    hf_edges.type = visualization_msgs::Marker::LINE_LIST;
+    hf_edges.action = visualization_msgs::Marker::ADD;
+    hf_edges.scale.x = 0.05;
+    hf_edges.color.r = 0.0; hf_edges.color.g = 1.0; hf_edges.color.b = 1.0; hf_edges.color.a = 0.6;
+
+    for (const auto& h_pair : h_nodes_) {
+        for (const auto& edge : h_pair.second->hf_edges) {
+            geometry_msgs::Point p1, p2;
+            p1.x = edge->head->pos.x(); p1.y = edge->head->pos.y(); p1.z = edge->head->pos.z();
+            p2.x = edge->tail->pos.x(); p2.y = edge->tail->pos.y(); p2.z = edge->tail->pos.z();
+            hf_edges.points.push_back(p1);
+            hf_edges.points.push_back(p2);
+        }
+    }
+    if (!hf_edges.points.empty()) markers.markers.push_back(hf_edges);
+
+    visualization_msgs::Marker hh_edges;
+    hh_edges.header.frame_id = "map";
+    hh_edges.header.stamp = ros::Time::now();
+    hh_edges.ns = "hh_edges";
+    hh_edges.id = id++;
+    hh_edges.type = visualization_msgs::Marker::LINE_LIST;
+    hh_edges.action = visualization_msgs::Marker::ADD;
+    hh_edges.scale.x = 0.1;
+    hh_edges.color.r = 1.0; hh_edges.color.g = 1.0; hh_edges.color.b = 0.0; hh_edges.color.a = 0.6;
+
+    for (const auto& h_pair : h_nodes_) {
+        for (const auto& edge : h_pair.second->hh_edges) {
+            if (edge->head->id < edge->tail->id) { // Avoid duplicates
+                geometry_msgs::Point p1, p2;
+                p1.x = edge->head->pos.x(); p1.y = edge->head->pos.y(); p1.z = edge->head->pos.z();
+                p2.x = edge->tail->pos.x(); p2.y = edge->tail->pos.y(); p2.z = edge->tail->pos.z();
+                hh_edges.points.push_back(p1);
+                hh_edges.points.push_back(p2);
+            }
+        }
+    }
+    if (!hh_edges.points.empty()) markers.markers.push_back(hh_edges);
 }
 
-}  // namespace dtg
 }  // namespace rog_map

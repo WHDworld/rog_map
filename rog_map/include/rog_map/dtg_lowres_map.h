@@ -3,6 +3,8 @@
 
 #include <Eigen/Dense>
 #include <cstdint>
+
+#include <ros/ros.h>
 #include <list>
 #include <memory>
 #include <queue>
@@ -12,8 +14,6 @@
 #include "star_mvf/map/global_map.h"
 
 namespace rog_map {
-namespace dtg {
-
 // 说明：这里不直接复用 star_mvf::VoxelState（位掩码设计），因为 LowResMap/DTG 只关心“几何三态”
 // (unknown/free/occupied) + 越界(out)。为避免把 VISITED/TARGET/FRONTIER 等高层位混入几何判断，
 // 低分辨率层使用独立的几何状态枚举。
@@ -83,6 +83,11 @@ public:
                      double& length,
                      bool reverse_order);
 
+bool retrieveHPath(const Eigen::Vector3i& start_id3,
+                   std::list<Eigen::Vector3d>& path,
+                   double& length,
+                   bool reverse_order);
+
   Eigen::Vector3d getStdPos(const Eigen::Vector3d& pos) const;
 
   const LRBlock* localBlock() const { return blocks_.empty() ? nullptr : blocks_[0].get(); }
@@ -109,7 +114,6 @@ private:
   void computeNodeOccupancy(const Eigen::Vector3i& node_id3, LRNode& node) const;
 };
 
-}  // namespace dtg
 }  // namespace rog_map
 
 #endif
