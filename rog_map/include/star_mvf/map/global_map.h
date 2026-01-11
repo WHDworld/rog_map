@@ -209,7 +209,14 @@ public:
     void getFrontierPositionsBySubGrid(std::vector<SubGridFrontierInfo>& subgrid_frontiers) const;
     
     /**
-     * @brief 获取前沿点云
+    * @brief 获取指定子网格内的所有前沿点 (用于 HistoryGraph 局部查询)
+    * @param sg_id 子网格ID
+    * @param out_points 输出的前沿点列表
+    * @return 如果子网格存在且有前沿点返回 true，否则返回 false
+    */
+    bool getSubGridFrontierPoints(int sg_id, std::vector<Eigen::Vector3f>& out_points) const;    /**
+    
+    * @brief 获取前沿点云
      */
     void getFrontierPointCloud(sensor_msgs::PointCloud2& pc_frontier) const;
     

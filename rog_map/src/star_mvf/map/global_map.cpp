@@ -736,6 +736,33 @@ void GlobalMap::getFrontierPositionsBySubGrid(std::vector<SubGridFrontierInfo>& 
     }
 }
 
+bool GlobalMap::getSubGridFrontierPoints(int sg_id, std::vector<Eigen::Vector3f>& out_points) const {
+    std::lock_guard<std::mutex> lock(map_mutex_); // 必须加锁，防止并行读写冲突
+    out_points.clear();
+
+    // 1. 边界检查
+    if (sg_id < 0 || sg_id >= static_cast<int>(sub_grids_.size())) {
+        return false;
+    }
+
+    const SubGrid& sg = sub_grids_[sg_id];
+
+    // 2. 检查该子网格是否活跃（有前沿点）
+    if (sg.sub_grid_frontier_voxels_.empty()) {
+        return false; // 返回 false 方便外部判断是否需要 releaseSubGrid
+    }
+
+    // 3. 提取点并转换坐标
+    out_points.reserve(sg.sub_grid_frontier_voxels_.size());
+    for (const auto& f_idx : sg.sub_grid_frontier_voxels_) 
+    {
+        // indexToPos 返回的是 Position 类型，根据你的定义可能是 Eigen::Vector3d 或 Vector3f
+        // 这里显式转为 float 以匹配 ViewpointManager 的需求
+        out_points.push_back(indexToPos(f_idx).cast<float>()); 
+    }
+    return true;
+}
+
 void GlobalMap::getFrontierPointCloud(sensor_msgs::PointCloud2& pc_frontier) const {
     pcl::PointCloud<pcl::PointXYZ> pcl_cloud;
     std::lock_guard<std::mutex> lock(map_mutex_);
@@ -1435,7 +1462,7 @@ bool GlobalMap::isLineFree(const Position& start, const Position& end,
         VoxelIndex idx = posToIndex(pos);
         
         auto it = voxels_.find(idx);
-        if (it != voxels_.end() && VoxelStateBits::isOccupied(it->second)) {
+        if (it != voxels_.end() && !VoxelStateBits::isFree(it->second)) {
             collision_point = pos;
             return false;
         }
@@ -1452,7 +1479,7 @@ bool GlobalMap::isLineFreeInflate(const Position& start, const Position& end,
     if (length < 1e-6) return true;
     
     dir.normalize();
-    double step = config_.resolution * 0.5;
+    double step = config_.resolution;
     int num_steps = static_cast<int>(length / step) + 1;
     
     for (int i = 0; i <= num_steps; i++) {

@@ -457,6 +457,8 @@ private:
      */
     void filterOverheadClusters(std::vector<FrontierCluster>& clusters);
 
+    FrontierCluster* getClusterById(int id);
+
 private:
     ros::NodeHandle nh_;
     ros::Timer timer_;
@@ -483,10 +485,7 @@ private:
     // 线程安全
     mutable std::mutex mutex_;
     mutable std::mutex uav_mutex_;
-    
-    // 运行状态
-    bool running_ = false;
-    
+        
     // 簇ID计数器
     int next_cluster_id_ = 0;
     

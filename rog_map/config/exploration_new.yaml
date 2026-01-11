@@ -64,7 +64,7 @@ rog_map:
   # ---------- 膨胀地图 ----------
   inflation:
     enable: true
-    inflation_step: 2                 # 膨胀步长（格子数）
+    inflation_step: 1                 # 膨胀步长（格子数）
 
 
 
@@ -124,6 +124,12 @@ viewpoint_manager:
   vp_cluster_radius: 5.0            # 视点聚类外接圆半径阈值 [m]
   vp_cluster_min_dist: 6.0          # 视点需要聚类的最小距离 [m]
 
+# ========== HistoryGraph (2Hz) ==========
+history_graph:
+  update_rate: 2.0                  # Hz
+  node_spacing: 5.0                 # 节点间距 [m]
+  max_assoc_dist: 20.0              # 最大关联距离 [m]
+
 # ========== 探索状态机 (100Hz) ==========
 fsm:
   # 频率
@@ -138,19 +144,18 @@ fsm:
   init_wait_time: 2.0               # 初始化等待时间 [s]
   
   # 到达判断
-  reach_threshold: 0.5              # 到达位置阈值 [m]
-  yaw_threshold: 0.3                # 到达偏航阈值 [rad]
+  reach_threshold: 0.5              # 到达最终视点位置阈值 [m]
+  yaw_threshold: 0.3                # 到达最终视点偏航阈值 [rad]
   
   # 重规划触发
   replan_check_interval: 0.5        # 重规划检查间隔 [s]
   waypoint_approach_dist: 1.5       # 航点接近距离 [m]
   trajectory_timeout: 10.0          # 轨迹超时 [s]
-  coverage_check_interval: 1.0      # 覆盖检查间隔 [s]
   coverage_trigger_ratio: 0.3       # 覆盖触发比例
   
   # 碰撞检测
   collision_check_interval: 0.05    # 碰撞检查间隔 [s]
-  collision_lookahead: 0.5          # 碰撞前瞻时间 [s]
+  collision_lookahead: 1.0          # 碰撞前瞻时间 [s]
   
   # 视点选择
   max_viewpoint_distance: 15.0      # 最大视点距离 [m]
@@ -200,13 +205,6 @@ optimization:
   enable_height_keeping: true       # 是否启用高度保持
   weight_height: 500000.0           # 高度保持权重
   height_tolerance: 0.1             # 高度容差 [m]
-
-# ========== A* 搜索 ==========
-astar:
-  resolution_astar: 0.5             # A*分辨率 [m] - 增大减少搜索节点
-  time_resolution: 0.8              # 时间分辨率 [s]
-  lambda_heu: 10.0                  # 启发式权重 - 增大使搜索更贪婪
-  max_search_time: 0.05             # 最大搜索时间 [s] - 减少超时时间
 
 # ========== 轨迹服务器 ==========
 traj_server:

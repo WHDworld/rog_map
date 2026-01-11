@@ -104,20 +104,13 @@ void ViewpointManager::init(ros::NodeHandle& nh, GlobalMap::Ptr global_map,
 }
 
 void ViewpointManager::start() {
-    if (running_) return;
-    running_ = true;
-    
+
     timer_ = nh_.createTimer(ros::Duration(1.0 / config_.update_rate),
                               &ViewpointManager::timerCallback, this);
-    
-    VP_INFO("Started");
 }
 
 void ViewpointManager::stop() {
-    if (!running_) return;
-    running_ = false;
     timer_.stop();
-    VP_INFO("Stopped");
 }
 
 void ViewpointManager::updateUAVState(const Eigen::Vector3f& position, float yaw) {
@@ -139,6 +132,7 @@ void ViewpointManager::triggerUpdate() {
 // ==================== 主更新函数 ====================
 
 void ViewpointManager::update() {
+    history_graph_->refreshSubGridOwnership();
     ros::Time t_start = ros::Time::now();
     
     if (!global_map_ || !history_graph_) {
@@ -153,42 +147,43 @@ void ViewpointManager::update() {
         uav_pos = uav_position_;
     }
     
-    // Step 1: 获取按子网格分组的前沿点
+    // Step 0: 刷新 HistoryGraph 的子网格权属（确保新生成的节点接管附近的子网格）
+    history_graph_->refreshSubGridOwnership();
+
+    // Step 1 & 2: 从 HistoryGraph 获取活跃节点及其关联的前沿点
+    // 替代了原来的全量 getFrontierPositionsBySubGrid
     ros::Time t_step1 = ros::Time::now();
-    std::vector<star_mvf::SubGridFrontierInfo> subgrid_frontiers;
-    global_map_->getFrontierPositionsBySubGrid(subgrid_frontiers);
     
-    double t_get_frontier = (ros::Time::now() - t_step1).toSec() * 1000.0;
-    
-    if (subgrid_frontiers.empty()) {
-        ROS_INFO_THROTTLE(2.0, "[VP_MGR] No frontier subgrids (took %.1fms)", t_get_frontier);
-        std::lock_guard<std::mutex> lock(mutex_);
-        current_clusters_.clear();
-        return;
-    }
-    
-    // Step 2: 按历史节点分组前沿点
-    ros::Time t_step2 = ros::Time::now();
     std::map<int, std::vector<Eigen::Vector3f>> node_frontiers;
     std::map<int, std::vector<SurfaceFrontierPoint>> node_surface_frontiers;
     
-    size_t total_before = 0, total_after = 0;
-    
-    for (auto& sg_info : subgrid_frontiers) {
-        auto& points = sg_info.frontier_points;
-        total_before += points.size();
-        
-        // 过滤前沿点
-        // filterFrontierPoints(points);
-        total_after += points.size();
-        
-        if (points.empty()) continue;
-        
-        // 关联到历史节点
-        int node_id = history_graph_->findNearestHistoryNode(sg_info.subgrid_center);
-        if (node_id >= 0) {
+    std::vector<int> active_node_ids = history_graph_->getAllNodeIds();
+
+    size_t total_points = 0;
+
+    for (int node_id : active_node_ids) {
+        // 获取该节点管辖的子网格 ID
+        std::vector<int> associated_sg_ids = history_graph_->getAssociatedSubGrids(node_id);
+        if (associated_sg_ids.empty()) continue;
+
+        for (int sg_id : associated_sg_ids) {
+            std::vector<Eigen::Vector3f> points;
+
+            // B. [核心修改] 调用 GlobalMap 的新接口获取局部前沿数据
+            bool has_frontiers = global_map_->getSubGridFrontierPoints(sg_id, points);
+            // C. 闭环管理：如果 GlobalMap 说这个子网格没前沿了，通知 HistoryGraph 释放权属
+            if (!has_frontiers) 
+            {
+                history_graph_->releaseSubGrid(sg_id);
+                continue;
+            }
+
+            if (points.empty()) continue;
+            
+            total_points += points.size();
+
+            // 存入 map
             if (config_.use_surface_frontier) {
-                // 转换为表面前沿点
                 for (const auto& pt : points) {
                     SurfaceFrontierPoint sfp(pt);
                     sfp.has_normal = computeSurfaceNormal(pt, sfp.normal);
@@ -201,11 +196,14 @@ void ViewpointManager::update() {
         }
     }
     
-    double t_group = (ros::Time::now() - t_step2).toSec() * 1000.0;
-    VP_DEBUG("Filtered points: %lu -> %lu, groups=%lu",
-             total_before, total_after, 
-             config_.use_surface_frontier ? node_surface_frontiers.size() : node_frontiers.size());
+    double t_get_frontier = (ros::Time::now() - t_step1).toSec() * 1000.0;
     
+    if (total_points == 0) {
+        // ROS_INFO_THROTTLE(2.0, "[VP_MGR] No active frontiers (took %.1fms)", t_get_frontier);
+        std::lock_guard<std::mutex> lock(mutex_);
+        current_clusters_.clear();
+        return;
+    }    
     // Step 3: 聚类
     ros::Time t_step3 = ros::Time::now();
     std::vector<FrontierCluster> all_clusters;
@@ -1299,7 +1297,6 @@ void ViewpointManager::optimizeViewpointYaw(std::vector<FrontierCluster>& cluste
 }
 
 // ==================== 增量视点聚类 ====================
-
 void ViewpointManager::clusterViewpointsIncremental(
     const std::vector<FrontierCluster>& input_clusters,
     std::vector<FrontierCluster>& unclustered,
@@ -1378,7 +1375,8 @@ void ViewpointManager::clusterViewpointsIncremental(
                 // 条件3：与聚类内视点无障碍
                 bool no_obstacle = true;
                 for (const auto& pos : vpc.viewpoint_positions) {
-                    if (history_graph_ && history_graph_->hasObstacleBetween(vp_pos, pos)) {
+                    // if (history_graph_ && history_graph_->hasObstacleBetween(vp_pos, pos)) {
+                    if (history_graph_) {
                         no_obstacle = false;
                         break;
                     }
@@ -1527,6 +1525,14 @@ int ViewpointManager::getViewpointCount() const {
 bool ViewpointManager::hasValidViewpoints() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return total_viewpoints_ > 0;
+}
+
+FrontierCluster* ViewpointManager::getClusterById(int id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto& cluster : current_clusters_) {
+        if (cluster.cluster_id == id) return &cluster;
+    }
+    return nullptr;
 }
 
 } // namespace rog_map

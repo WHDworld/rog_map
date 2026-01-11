@@ -95,7 +95,6 @@ struct ExplorationFSMConfig {
     double replan_check_interval = 0.5;   // 重规划检查间隔 [s]
     double waypoint_approach_dist = 1.5;  // 接近航点时触发重规划的距离 [m]
     double trajectory_timeout = 10.0;     // 轨迹执行超时 [s]
-    double coverage_check_interval = 1.0; // 覆盖检查间隔 [s]
     double coverage_trigger_ratio = 0.3;  // 触发重规划的覆盖比例
     
     // 碰撞检测
@@ -218,13 +217,7 @@ private:
      * @return true 如果到达
      */
     bool checkReachWaypoint();
-    
-    /**
-     * @brief 检查前沿覆盖（视点是否已探索）
-     * @return true 如果当前视点目标已被覆盖
-     */
-    bool checkCoverage();
-    
+        
     /**
      * @brief 检查轨迹执行是否超时
      * @return true 如果超时
@@ -328,6 +321,8 @@ private:
     std::vector<WaypointInfo> waypoint_queue_; // 航点队列（历史节点+视点）
     int current_waypoint_idx_ = 0;        // 当前航点索引
     
+    std::vector<Eigen::Vector3d> current_global_path_; // 用于长距离导航的拓扑路径
+    bool use_global_path_ = false; // 标志位：当前是否在使用全局拓扑路径导航
     // 轨迹执行状态
     ros::Time trajectory_start_time_;
     ros::Time last_replan_check_time_;

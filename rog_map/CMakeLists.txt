@@ -192,7 +192,6 @@ target_link_libraries(map_test_node
 add_executable(exploration_planner_node_new 
         src/rog_map/exploration_planner_node_new.cpp
         src/rog_map/exploration_fsm_new.cpp
-        src/rog_map/history_graph.cpp
         src/rog_map/viewpoint_manager.cpp
 )
 add_dependencies(exploration_planner_node_new ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})

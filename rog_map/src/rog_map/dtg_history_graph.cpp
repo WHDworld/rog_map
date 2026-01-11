@@ -340,6 +340,8 @@ size_t DtgHistoryGraph::getFNodeCount() const {
 }
 
 void DtgHistoryGraph::visualize(visualization_msgs::MarkerArray& markers) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+
     visualization_msgs::Marker delete_marker;
     delete_marker.header.frame_id = "map";
     delete_marker.header.stamp = ros::Time::now();
