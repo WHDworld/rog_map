@@ -94,6 +94,18 @@ void HistoryGraph::publishVisualization() {
     history_graph_pub_.publish(markers);
 }
 
+void HistoryGraph::pinViewpoint(int viewpoint_id) {
+    dtg_impl_->pinViewpoint(viewpoint_id);
+}
+
+void HistoryGraph::unpinViewpoint(int viewpoint_id) {
+    dtg_impl_->unpinViewpoint(viewpoint_id);
+}
+
+bool HistoryGraph::isViewpointPinned(int viewpoint_id) const {
+    return dtg_impl_->isViewpointPinned(viewpoint_id);
+}
+
 // --- Legacy compatibility implementations ---
 
 int HistoryGraph::findNearestHistoryNode(const Eigen::Vector3f& pos) const {
@@ -104,7 +116,7 @@ int HistoryGraph::findNearestHistoryNode(const Eigen::Vector3f& pos) const {
 
 bool HistoryGraph::hasObstacleBetween(const Eigen::Vector3f& p1, const Eigen::Vector3f& p2) const {
     if (!global_map_) return false;
-    return global_map_->isPathObstructed(p1, p2, 0.2, true);
+    return !global_map_->isLineFreeInflate(p1, p2, true);
 }
 
 bool HistoryGraph::getViewpointInfo(int viewpoint_id, Eigen::Vector3f& pos, float& yaw) const {

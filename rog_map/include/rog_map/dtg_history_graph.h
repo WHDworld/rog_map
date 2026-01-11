@@ -109,12 +109,18 @@ public:
   void markViewpointExplored(int viewpoint_id);
   void markViewpointInvalid(int viewpoint_id);
 
+  void pinViewpoint(int viewpoint_id);
+  void unpinViewpoint(int viewpoint_id);
+  bool isViewpointPinned(int viewpoint_id) const;
+
   size_t getHNodeCount() const;
   size_t getFNodeCount() const;
 
   void visualize(visualization_msgs::MarkerArray& markers) const;
 
 private:
+  mutable std::mutex mutex_;
+
   // lowres + dtg state
   star_mvf::GlobalMap::Ptr global_map_;
   ViewpointManager* vp_mgr_ = nullptr;
@@ -126,6 +132,7 @@ private:
   std::vector<std::shared_ptr<HNode>> h_list_;  // stable iteration list
   uint32_t next_hid_ = 1;
   std::shared_ptr<HNode> root_;
+  std::shared_ptr<HNode> active_h_node_;
 
   // F storage: viewpoint_id -> FNode
   std::unordered_map<int, std::shared_ptr<FNode>> f_nodes_by_vpid_;
@@ -133,6 +140,11 @@ private:
   // viewpoint lifecycle (mirrors HistoryGraph public API)
   std::unordered_set<int> explored_vps_;
   std::unordered_set<int> invalid_vps_;
+  std::unordered_set<int> pinned_vps_;
+
+  // Thread safety and performance cache
+  size_t last_h_count_ = 0;
+  size_t last_f_count_ = 0;
 
   // helpers
   std::shared_ptr<HNode> createHnode(const Eigen::Vector3d& pos);

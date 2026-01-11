@@ -91,7 +91,7 @@ viewpoint_manager:
   
   # ---------- 前沿聚类 ----------
   cluster_eps: 0.25                 # 聚类半径 [m]
-  min_cluster_size: 30              # 最小簇大小
+  min_cluster_size: 40              # 最小簇大小
   cluster_split_threshold: 4.0      # 簇分裂阈值 [m]
   max_clusters: 30                  # 最大簇数量
   

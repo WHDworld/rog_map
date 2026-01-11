@@ -349,10 +349,10 @@ void ViewpointManager::update() {
              all_clusters.size(), generated_count, 
              t_get_frontier, t_group, t_cluster, t_filter, t_gen_vp, t_total);
     
-    if (generated_count > 0) {
-        ROS_INFO("[VP_MGR] Best viewpoint: pos=(%.2f,%.2f,%.2f), score=%.3f",
-                 best_vp_pos.x(), best_vp_pos.y(), best_vp_pos.z(), best_vp_score);
-    }
+    // if (generated_count > 0) {
+    //     ROS_INFO("[VP_MGR] Best viewpoint: pos=(%.2f,%.2f,%.2f), score=%.3f",
+    //              best_vp_pos.x(), best_vp_pos.y(), best_vp_pos.z(), best_vp_score);
+    // }
 }
 
 // ==================== 空间距离聚类 ====================

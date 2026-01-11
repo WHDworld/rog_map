@@ -317,12 +317,16 @@ void ExplorationFSMNew::processLocalPlan() {
                  selected_vp_id, t_plan);
         
         // 标记视点失效，尝试其他视点
+        history_graph_->unpinViewpoint(selected_vp_id);
         history_graph_->markViewpointInvalid(selected_vp_id);
         
         publishHoverCmd();
         return;
     }
     double t_plan = (ros::Time::now() - t_plan_start).toSec() * 1000.0;
+
+    // Pin 当前目标视点，防止 ViewpointManager 刷新后 DTG 把目标视点清掉（方案2）
+    history_graph_->pinViewpoint(selected_vp_id);
     
     // Step 3: 设置当前目标并进入执行状态
     current_viewpoint_id_ = selected_vp_id;
@@ -372,6 +376,8 @@ void ExplorationFSMNew::processExecExploration() {
         last_collision_check_time_ = now;
         if (checkCollision()) {
             LOG_WARN("Collision detected, replanning");
+            history_graph_->unpinViewpoint(current_viewpoint_id_);
+            history_graph_->markViewpointInvalid(current_viewpoint_id_);
             has_trajectory_ = false;
             transitState(ExplorationState::LOCALPLAN, "Collision");
             return;
@@ -389,6 +395,7 @@ void ExplorationFSMNew::processExecExploration() {
             total_viewpoints_visited_++;
             
             // 标记视点已探索
+            history_graph_->unpinViewpoint(current_viewpoint_id_);
             history_graph_->markViewpointExplored(current_viewpoint_id_);
             
             // 返回规划下一个视点
@@ -402,6 +409,8 @@ void ExplorationFSMNew::processExecExploration() {
         // 规划到下一个航点
         if (!planNextWaypoint()) {
             LOG_WARN("Failed to plan next waypoint");
+            history_graph_->unpinViewpoint(current_viewpoint_id_);
+            history_graph_->markViewpointInvalid(current_viewpoint_id_);
             has_trajectory_ = false;
             transitState(ExplorationState::LOCALPLAN, "Waypoint plan failed");
             return;
@@ -420,6 +429,7 @@ void ExplorationFSMNew::processExecExploration() {
         last_coverage_check_time_ = now;
         if (checkCoverage()) {
             LOG_INFO("COVERAGE: Viewpoint covered, replanning");
+            history_graph_->unpinViewpoint(current_viewpoint_id_);
             history_graph_->markViewpointExplored(current_viewpoint_id_);
             has_trajectory_ = false;
             transitState(ExplorationState::LOCALPLAN, "Covered");
@@ -430,6 +440,8 @@ void ExplorationFSMNew::processExecExploration() {
     // 5. 检查超时
     if (checkTimeout()) {
         LOG_WARN("Trajectory timeout, replanning");
+        history_graph_->unpinViewpoint(current_viewpoint_id_);
+        history_graph_->markViewpointInvalid(current_viewpoint_id_);
         has_trajectory_ = false;
         transitState(ExplorationState::LOCALPLAN, "Timeout");
         return;
@@ -500,9 +512,11 @@ bool ExplorationFSMNew::selectBestViewpoint(int& selected_viewpoint_id) {
 
 bool ExplorationFSMNew::planToViewpoint(int viewpoint_id) {
     ros::Time t_start = ros::Time::now();
-    
-    const ViewpointNode* vp = history_graph_->getViewpoint(viewpoint_id);
-    if (!vp) {
+
+    Eigen::Vector3f vp_pos;
+    float vp_yaw;
+    if (!history_graph_->getViewpointInfo(viewpoint_id, vp_pos, vp_yaw)) {
+        ROS_WARN("[FSM_NEW] planToViewpoint: Failed to get info for viewpoint %d", viewpoint_id);
         return false;
     }
     
@@ -523,8 +537,8 @@ bool ExplorationFSMNew::planToViewpoint(int viewpoint_id) {
     // 简化：直接规划到视点，不经过历史节点
     // 这避免了复杂的路径查找
     WaypointInfo wp;
-    wp.position = vp->position.cast<double>();
-    wp.yaw = vp->yaw;
+    wp.position = vp_pos.cast<double>();
+    wp.yaw = vp_yaw;
     wp.is_viewpoint = true;
     wp.id = viewpoint_id;
     waypoint_queue_.push_back(wp);

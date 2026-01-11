@@ -7,11 +7,27 @@
 
 namespace rog_map {
 
+void DtgHistoryGraph::pinViewpoint(int viewpoint_id) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  pinned_vps_.insert(viewpoint_id);
+}
+
+void DtgHistoryGraph::unpinViewpoint(int viewpoint_id) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  pinned_vps_.erase(viewpoint_id);
+}
+
+bool DtgHistoryGraph::isViewpointPinned(int viewpoint_id) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return pinned_vps_.count(viewpoint_id) > 0;
+}
+
 
 void DtgHistoryGraph::init(const ros::NodeHandle& nh,
                           const std::string& ns,
                           star_mvf::GlobalMap::Ptr global_map,
                           ViewpointManager* vp_mgr) {
+  std::lock_guard<std::mutex> lock(mutex_);
   global_map_ = global_map;
   vp_mgr_ = vp_mgr;
 
@@ -30,10 +46,12 @@ void DtgHistoryGraph::init(const ros::NodeHandle& nh,
 }
 
 void DtgHistoryGraph::updateRobotPos(const Eigen::Vector3d& robot_pos) {
+  std::lock_guard<std::mutex> lock(mutex_);
   bfUpdate(robot_pos);
 }
 
 void DtgHistoryGraph::syncViewpointsFromManager() {
+  // Caller must already hold mutex_ (updateRobotPos/bfUpdate).
   if (!vp_mgr_) return;
 
   auto clusters = vp_mgr_->getClusters();
@@ -71,9 +89,17 @@ void DtgHistoryGraph::syncViewpointsFromManager() {
     }
   }
 
-  // Clean up stale F-nodes
+  // Clean up stale F-nodes (scheme 2): keep only (pinned + current)
   for (auto it = f_nodes_by_vpid_.begin(); it != f_nodes_by_vpid_.end(); ) {
-    if (current_vp_ids.find(it->first) == current_vp_ids.end()) {
+    const int vpid = it->first;
+
+    const bool keep = (pinned_vps_.count(vpid) > 0) || (current_vp_ids.count(vpid) > 0);
+    if (!keep) {
+      // Remove HF edge from its head H-node to avoid stale edges
+      if (it->second && it->second->hf_edge && it->second->hf_edge->head) {
+        it->second->hf_edge->head->hf_edges.remove(it->second->hf_edge);
+        it->second->hf_edge.reset();
+      }
       it = f_nodes_by_vpid_.erase(it);
     } else {
       ++it;
@@ -144,15 +170,25 @@ void DtgHistoryGraph::bfUpdate(const Eigen::Vector3d& robot_pos) {
 
   if (!root_) {
     root_ = createHnode(robot_pos);
+    active_h_node_ = root_;
   }
 
-  // Create new H-node if needed
-  double min_dist_to_h = 1e9;
+  // Find nearest H-node
+  std::shared_ptr<HNode> nearest_h = root_;
+  double min_dist_to_h = (root_->pos - robot_pos).norm();
   for (const auto& h : h_list_) {
-    min_dist_to_h = std::min(min_dist_to_h, (h->pos - robot_pos).norm());
+    double d = (h->pos - robot_pos).norm();
+    if (d < min_dist_to_h) {
+      min_dist_to_h = d;
+      nearest_h = h;
+    }
   }
+
+  // Create a new H-node if needed and set it as active
   if (min_dist_to_h > cfg_.h_thresh) {
-    createHnode(robot_pos);
+    active_h_node_ = createHnode(robot_pos);
+  } else {
+    active_h_node_ = nearest_h;
   }
 
   std::list<std::pair<uint32_t, Eigen::Vector3d>> search_origins;
@@ -190,17 +226,20 @@ void DtgHistoryGraph::bfUpdate(const Eigen::Vector3d& robot_pos) {
   if (!f_positions.empty()) {
       std::vector<double> dists;
       std::vector<std::vector<Eigen::Vector3d>> hf_paths;
-      lrm_.getDists(root_->pos, f_positions, dists, hf_paths);
+      const auto& h_start = active_h_node_ ? active_h_node_ : root_;
+      lrm_.getDists(h_start->pos, f_positions, dists, hf_paths);
 
       for (size_t i = 0; i < f_nodes_to_connect.size(); ++i) {
           if (dists[i] < 1e9) {
-              connectHF(root_, f_nodes_to_connect[i], std::list<Eigen::Vector3d>(hf_paths[i].begin(), hf_paths[i].end()), dists[i]);
+              connectHF(h_start, f_nodes_to_connect[i], std::list<Eigen::Vector3d>(hf_paths[i].begin(), hf_paths[i].end()), dists[i]);
           }
       }
   }
 }
 
 std::vector<ViewpointNode> DtgHistoryGraph::getValidViewpoints() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+
   std::vector<ViewpointNode> out;
   out.reserve(f_nodes_by_vpid_.size());
 
@@ -218,7 +257,7 @@ std::vector<ViewpointNode> DtgHistoryGraph::getValidViewpoints() const {
     vp.score = f->score;
     vp.explored = false;
     vp.valid = true;
-    vp.connected_history_node = f->hf_edge ? f->hf_edge->head->id : -1;
+    vp.connected_history_node = (f->hf_edge && f->hf_edge->head) ? static_cast<int>(f->hf_edge->head->id) : -1;
     out.push_back(vp);
   }
 
@@ -229,14 +268,17 @@ bool DtgHistoryGraph::findPathToViewpoint(const Eigen::Vector3f& start_pos, int 
   out = PathResult();
   out.target_viewpoint_id = viewpoint_id;
 
-  auto it = f_nodes_by_vpid_.find(viewpoint_id);
-  if (it == f_nodes_by_vpid_.end() || !it->second) {
-    return false;
+  Eigen::Vector3d target;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = f_nodes_by_vpid_.find(viewpoint_id);
+    if (it == f_nodes_by_vpid_.end() || !it->second) {
+      return false;
+    }
+    target = it->second->pos.cast<double>();
   }
 
-  const auto& f = it->second;
-
-  std::vector<Eigen::Vector3d> targets = {f->pos.cast<double>()};
+  std::vector<Eigen::Vector3d> targets = {target};
   std::vector<double> dists;
   std::vector<std::vector<Eigen::Vector3d>> paths;
 
@@ -258,18 +300,42 @@ bool DtgHistoryGraph::findPathToViewpoint(const Eigen::Vector3f& start_pos, int 
 }
 
 void DtgHistoryGraph::markViewpointExplored(int viewpoint_id) {
+  std::lock_guard<std::mutex> lock(mutex_);
   explored_vps_.insert(viewpoint_id);
+  pinned_vps_.erase(viewpoint_id);
+
+  auto it = f_nodes_by_vpid_.find(viewpoint_id);
+  if (it != f_nodes_by_vpid_.end()) {
+    if (it->second && it->second->hf_edge && it->second->hf_edge->head) {
+      it->second->hf_edge->head->hf_edges.remove(it->second->hf_edge);
+      it->second->hf_edge.reset();
+    }
+    f_nodes_by_vpid_.erase(it);
+  }
 }
 
 void DtgHistoryGraph::markViewpointInvalid(int viewpoint_id) {
+  std::lock_guard<std::mutex> lock(mutex_);
   invalid_vps_.insert(viewpoint_id);
+  pinned_vps_.erase(viewpoint_id);
+
+  auto it = f_nodes_by_vpid_.find(viewpoint_id);
+  if (it != f_nodes_by_vpid_.end()) {
+    if (it->second && it->second->hf_edge && it->second->hf_edge->head) {
+      it->second->hf_edge->head->hf_edges.remove(it->second->hf_edge);
+      it->second->hf_edge.reset();
+    }
+    f_nodes_by_vpid_.erase(it);
+  }
 }
 
 size_t DtgHistoryGraph::getHNodeCount() const {
+  std::lock_guard<std::mutex> lock(mutex_);
   return h_list_.size();
 }
 
 size_t DtgHistoryGraph::getFNodeCount() const {
+  std::lock_guard<std::mutex> lock(mutex_);
   return f_nodes_by_vpid_.size();
 }
 

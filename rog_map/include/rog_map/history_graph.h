@@ -61,6 +61,11 @@ public:
     PathResult findPathToViewpoint(const Eigen::Vector3f& start_pos, int viewpoint_id);
     void publishVisualization();
 
+    // --- FSM pinned viewpoint support (scheme 2) ---
+    void pinViewpoint(int viewpoint_id);
+    void unpinViewpoint(int viewpoint_id);
+    bool isViewpointPinned(int viewpoint_id) const;
+
     // --- Legacy compatibility (used by existing FSM/ViewpointManager code) ---
     int findNearestHistoryNode(const Eigen::Vector3f& pos) const;
     bool hasObstacleBetween(const Eigen::Vector3f& p1, const Eigen::Vector3f& p2) const;
