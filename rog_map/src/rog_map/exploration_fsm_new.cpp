@@ -68,7 +68,6 @@ void ExplorationFSMNew::init(ros::NodeHandle& nh, MapManager::Ptr map_manager) {
     trigger_sub_ = nh_.subscribe("/move_base_simple/goal", 1, &ExplorationFSMNew::triggerCallback, this);
     
     // 发布者
-    pos_cmd_pub_ = nh_.advertise<quadrotor_msgs::PositionCommand>("/planning/pos_cmd", 10);
     exploration_state_pub_ = nh_.advertise<std_msgs::Int8>("/exploration/state", 10);
     
     // 可视化发布者（使用与老架构相同的话题名称）
@@ -79,6 +78,11 @@ void ExplorationFSMNew::init(ros::NodeHandle& nh, MapManager::Ptr map_manager) {
     path_vis_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/exploration/path", 1);
     viewpoint_vis_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/exploration/viewpoints", 1);
     
+    // 初始化轨迹发布
+    poly_traj_pub_ = nh.advertise<rog_map::PolyTraj>("/planning/trajectory", 10);
+    pos_cmd_pub_ = nh.advertise<quadrotor_msgs::PositionCommand>("/planning/pos_cmd", 10);
+    replan_pub_ = nh.advertise<std_msgs::Int8>("/planning/replan", 10);
+
     // 定时器
     fsm_timer_ = nh_.createTimer(ros::Duration(1.0 / config_.fsm_frequency),
                                   &ExplorationFSMNew::fsmCallback, this);
@@ -216,7 +220,7 @@ void ExplorationFSMNew::processInit()
         ROS_INFO_THROTTLE(1.0, "[FSM_NEW] TAKEOFF: z=%.2f, initial_z=%.2f, diff=%.2f, target=%.2f",
                           odom_pos_.z(), initial_pos_.z(), height_diff, config_.takeoff_height);
         
-        if (height_diff > config_.takeoff_height - 0.1) {
+        if (height_diff > config_.takeoff_height - 0.02) {
             takeoff_complete_ = true;
             hover_pos_ = odom_pos_;
             hover_yaw_ = odom_yaw_;
@@ -294,7 +298,7 @@ void ExplorationFSMNew::processLocalPlan() {
     
     // 2. 生成导航路径 (复用缓存)
     if (!planToViewpoint(selected_vp_id)) {
-        ROS_WARN("[FSM] Failed to generate path to VP %d.", selected_viewpoint_id);
+        ROS_WARN("[FSM] Failed to generate path to VP %d.", selected_vp_id);
         
         // 规划失败直接放弃本次决策，悬停，等待下一轮 FSM 循环重新选择
         // (不需要标记 Invalid，因为可能是暂时的局部规划器失败)
@@ -312,7 +316,7 @@ void ExplorationFSMNew::processLocalPlan() {
     last_coverage_check_time_ = ros::Time::now();
     
     has_trajectory_ = true;
-    
+    ROS_INFO("[FSM] Plan success, current_viewpoint_id_: %d, current_waypoint_idx_: %d plan time: %.2fms", current_viewpoint_id_, current_waypoint_idx_, (ros::Time::now() - t_start).toSec() * 1000.0);
     transitState(ExplorationState::EXEC_EXPLORATION, "Plan success");
 }
 
@@ -356,7 +360,7 @@ void ExplorationFSMNew::processExecExploration() {
         
         // 2.2 还没到终点，规划到下一个航点
         if (!planNextWaypoint()) {
-            LOG_WARN("Failed to plan path to next waypoint (idx %d).", current_waypoint_idx_);
+            ROS_WARN("Failed to plan path to next waypoint (idx %d).", current_waypoint_idx_);
             has_trajectory_ = false;
             transitState(ExplorationState::LOCALPLAN, "Plan Failed");
             return;
@@ -375,13 +379,11 @@ void ExplorationFSMNew::processExecExploration() {
     }
     
     // 4. 发布控制指令给底层控制器
-    publishTrajectoryCmd();
+    // publishTrajectoryCmd();
 }
 
 // ==================== LOCALPLAN 核心方法 ====================
 bool ExplorationFSMNew::selectBestViewpoint(int& selected_viewpoint_id) {
-    ros::Time t_start = ros::Time::now();
-    
     // 1. 直接从 VM 获取最新 Clusters
     std::vector<FrontierCluster> clusters = viewpoint_manager_->getClusters();
     if (clusters.empty()) return false;
@@ -394,16 +396,17 @@ bool ExplorationFSMNew::selectBestViewpoint(int& selected_viewpoint_id) {
 
     // 2. 预计算 Dijkstra (Caching)
     int start_node_id = history_graph_->findNearestNode(current_pos);
-    cached_dijkstra_result_ = HistoryGraph::DijkstraResult(); // Clear old cache
 
     // 收集所有关联的 Anchor Nodes
     std::unordered_set<int> target_anchors;
     for (const auto& c : clusters) {
         if (c.has_viewpoint && c.history_node_id != -1) {
+            // Eigen::Vector3d node_pos = history_graph_->getHistoryNodePos(c.history_node_id);
             target_anchors.insert(c.history_node_id);
+            // ROS_INFO("HistoryNodeID: %d, Node_position: (%.2f,%.2f,%.2f), Viewpoint_position: (%.2f,%.2f,%.2f)", c.history_node_id, node_pos.x(), node_pos.y(), node_pos.z(), c.viewpoint_position.x(), c.viewpoint_position.y(), c.viewpoint_position.z());
         }
     }
-
+    cached_dijkstra_result_ = DijkstraResult(); // Clear old cache
     // 运行优化版 Dijkstra (只计算必要的 targets)
     if (start_node_id != -1 && !target_anchors.empty()) {
         history_graph_->computeDijkstraToTargets(start_node_id, target_anchors, cached_dijkstra_result_);
@@ -486,7 +489,7 @@ bool ExplorationFSMNew::planToViewpoint(int viewpoint_id) {
         std::lock_guard<std::mutex> lock(odom_mutex_);
         current_pos = odom_pos_;
     }
-    
+    ROS_INFO("PlanToViewpoint: current_pos: (%.2f,%.2f,%.2f), best_vp_pos: (%.2f,%.2f,%.2f) best_vp_yaw: %.2f", current_pos.x(), current_pos.y(), current_pos.z(), vp_pos.x(), vp_pos.y(), vp_pos.z(), vp_yaw);
     // 2. 路径生成 (Path Generation)
     std::vector<Eigen::Vector3d> global_path;
     double path_len = 0.0;
@@ -527,6 +530,7 @@ bool ExplorationFSMNew::planToViewpoint(int viewpoint_id) {
                 global_path = history_graph_->shortcutPath(current_pos, fallback_path);
                 path_len = history_graph_->calculatePathLength(global_path);
             } else {
+                ROS_ERROR("PlanToViewpoint: fallback_path is empty");
                 return false;
             }
         } else {
@@ -537,7 +541,11 @@ bool ExplorationFSMNew::planToViewpoint(int viewpoint_id) {
             auto entry_path = history_graph_->runLocalAStar(current_pos, start_node_pos);
             auto exit_path = history_graph_->runLocalAStar(anchor_node_pos, vp_pos);
 
-            if (entry_path.empty() || exit_path.empty()) return false;
+            if (entry_path.empty() || exit_path.empty()) 
+            {
+                ROS_ERROR("PlanToViewpoint: entry_path or exit_path is empty");
+                return false;
+            }
 
             global_path.insert(global_path.end(), entry_path.begin(), entry_path.end());
             // 中间的拓扑点
@@ -560,7 +568,7 @@ bool ExplorationFSMNew::planToViewpoint(int viewpoint_id) {
     waypoint_queue_.clear();
     current_global_path_ = global_path; // 保存用于可视化
 
-    if (config_.enable_visualization) visualizeGlobalPath();
+    // if (config_.enable_visualization) visualizeGlobalPath();
 
     // 【策略 A】短途/直连模式 -> 直接交给 EGO-Planner
     if (path_len < 5.0 || global_path.size() <= 2) {
@@ -599,7 +607,11 @@ bool ExplorationFSMNew::planToViewpoint(int viewpoint_id) {
 
     // 4. 启动执行
     current_waypoint_idx_ = 0;
-    return planNextWaypoint();
+    if(!planNextWaypoint()) {
+        ROS_ERROR("PlanToViewpoint: planNextWaypoint failed");
+        return false;
+    }
+    return true;
 }
 
 bool ExplorationFSMNew::planNextWaypoint() {
@@ -648,9 +660,53 @@ bool ExplorationFSMNew::callPlanner(const Eigen::Vector3d& target, double target
         false,   // flag_randomPolyTraj
         true);   // touch_goal
     
+    if (success) {
+        rog_map::PolyTraj poly_msg;
+        polyTraj2ROSMsg(poly_msg);
+        poly_traj_pub_.publish(poly_msg);
+        // Notify trajectory server
+        std_msgs::Int8 replan_msg;
+        replan_msg.data = 1;
+        replan_pub_.publish(replan_msg);
+    }
+    
     return success;
 }
 
+bool ExplorationFSMNew::planTrajectory(const Eigen::Vector3d& target, double target_yaw, 
+    const Eigen::Vector3d& target_vel, bool use_latest_traj)
+{
+
+}
+
+void ExplorationFSMNew::polyTraj2ROSMsg(rog_map::PolyTraj &poly_msg)
+{
+  poly_traj::Trajectory &traj = planner_manager_->traj_.local_traj.traj;
+  
+  poly_msg.traj_id = planner_manager_->traj_.local_traj.traj_id;
+  poly_msg.start_time = ros::Time(planner_manager_->traj_.local_traj.start_time);
+  poly_msg.order = 5;  // MINCO uses order 5
+  
+  // Yaw planning: 
+  // If end_yaw_ is NaN, it means "follow velocity direction" (preset waypoint mode)
+  // Otherwise, interpolate from current yaw to target yaw (exploration mode)
+  poly_msg.start_yaw = odom_yaw_;
+  poly_msg.end_yaw = end_yaw_;  // May be NaN for preset waypoint mode
+
+  int piece_num = traj.getPieceNum();
+  for (int i = 0; i < piece_num; i++)
+  {
+    poly_msg.duration.push_back(traj.getPiece(i).getDuration());
+    
+    Eigen::MatrixXd coef = traj.getPiece(i).getCoeffMat();
+    for (int j = 0; j < 6; j++)
+    {
+      poly_msg.coef_x.push_back(coef(0, j));
+      poly_msg.coef_y.push_back(coef(1, j));
+      poly_msg.coef_z.push_back(coef(2, j));
+    }
+  }
+}
 // ==================== EXEC_EXPLORATION 检测方法 ====================
 
 bool ExplorationFSMNew::checkCollision() {
@@ -1216,5 +1272,7 @@ void ExplorationFSMNew::clearVisualization() {
     frustum_marker_pub_.publish(markers);
     info_marker_pub_.publish(markers);
 }
+
+
 
 } // namespace rog_map

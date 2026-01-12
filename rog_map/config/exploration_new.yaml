@@ -90,9 +90,9 @@ viewpoint_manager:
   optimal_distance: 3.5             # 最优观测距离 [m]
   
   # ---------- 前沿聚类 ----------
-  cluster_eps: 0.25                 # 聚类半径 [m]
-  min_cluster_size: 40              # 最小簇大小
-  cluster_split_threshold: 4.0      # 簇分裂阈值 [m]
+  cluster_eps: 0.5                 # 聚类半径 [m]
+  min_cluster_size: 50              # 最小簇大小
+  cluster_split_threshold: 5.0      # 簇分裂阈值 [m]
   max_clusters: 30                  # 最大簇数量
   
   # ---------- 安全参数 ----------
@@ -139,7 +139,7 @@ fsm:
   sim_mode: 1                       # 0=Gazebo, 1=Open3D, 2=Real
   
   # 起飞参数
-  takeoff_height: 1.5               # 起飞高度 [m]
+  takeoff_height: 1.0               # 起飞高度 [m]
   takeoff_timeout: 10.0             # 起飞超时 [s]
   init_wait_time: 2.0               # 初始化等待时间 [s]
   

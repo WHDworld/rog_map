@@ -30,8 +30,13 @@
     
     <!-- ========== 轨迹服务器 ========== -->
     <node pkg="rog_map" type="ego_traj_server" name="traj_server" output="screen">
-        <remap from="/planning/pos_cmd" to="/planning/pos_cmd"/>
-        <remap from="/traj_server/trajectory" to="/planning/trajectory"/>
+        <!-- 话题重映射 -->
+        <remap from="~odom" to="/uav_simulator/odometry"/>
+        <remap from="position_cmd" to="/planning/pos_cmd"/>
+        <remap from="~planning/trajectory" to="/planning/trajectory"/>
+        <remap from="~planning/heartbeat" to="/traj_server/heartbeat"/>
+        
+        <param name="traj_server/time_forward" value="1.0" type="double"/>
     </node>
     
     <!-- ========== RViz 可视化 (可选) ========== -->

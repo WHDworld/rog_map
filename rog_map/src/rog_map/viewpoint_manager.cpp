@@ -248,8 +248,8 @@ void ViewpointManager::update() {
     double t_cluster = (ros::Time::now() - t_step3).toSec() * 1000.0;
     
     if (all_clusters.empty()) {
-        ROS_INFO("[VP_MGR] No clusters formed (frontier:%.1f, group:%.1f, cluster:%.1fms)",
-                 t_get_frontier, t_group, t_cluster);
+        ROS_INFO("[VP_MGR] No clusters formed (frontier:%.1f, cluster:%.1fms)",
+                 t_get_frontier, t_cluster);
         std::lock_guard<std::mutex> lock(mutex_);
         current_clusters_.clear();
         return;
@@ -343,9 +343,9 @@ void ViewpointManager::update() {
         }
     }
     
-    ROS_INFO("[VP_MGR] Update: clusters=%zu, vp=%d | Time: frontier=%.1f, group=%.1f, cluster=%.1f, filter=%.1f, gen=%.1fms, total=%.1fms",
+    ROS_INFO("[VP_MGR] Update: clusters=%zu, vp=%d | Time: frontier=%.1f, cluster=%.1f, filter=%.1f, gen=%.1fms, total=%.1fms",
              all_clusters.size(), generated_count, 
-             t_get_frontier, t_group, t_cluster, t_filter, t_gen_vp, t_total);
+             t_get_frontier, t_cluster, t_filter, t_gen_vp, t_total);
     
     // if (generated_count > 0) {
     //     ROS_INFO("[VP_MGR] Best viewpoint: pos=(%.2f,%.2f,%.2f), score=%.3f",
@@ -864,7 +864,16 @@ void ViewpointManager::sampleViewpointsCircular(
                     rejected_safety++;
                     continue;
                 }
-                
+                Eigen::Vector3f uav_pos;
+                {
+                    std::lock_guard<std::mutex> lock(uav_mutex_);
+                    uav_pos = uav_position_;
+                }
+                float hori_dist = (sample_pos - uav_pos).norm();
+                if(hori_dist < 1.0) {
+                    rejected_visibility++;
+                    continue;
+                }
                 // ========== Step 2: 可见性检查（从视点沿yaw方向发射射线） ==========
                 // 检查从视点到簇中心的射线是否被障碍物遮挡
                 float visibility = 0.0f;
@@ -1374,13 +1383,13 @@ void ViewpointManager::clusterViewpointsIncremental(
                 
                 // 条件3：与聚类内视点无障碍
                 bool no_obstacle = true;
-                for (const auto& pos : vpc.viewpoint_positions) {
-                    // if (history_graph_ && history_graph_->hasObstacleBetween(vp_pos, pos)) {
-                    if (history_graph_) {
-                        no_obstacle = false;
-                        break;
-                    }
-                }
+                // for (const auto& pos : vpc.viewpoint_positions) {
+                //     // if (history_graph_ && history_graph_->hasObstacleBetween(vp_pos, pos)) {
+                //     if (history_graph_) {
+                //         no_obstacle = false;
+                //         break;
+                //     }
+                // }
                 if (!no_obstacle) continue;
                 
                 vpc.viewpoint_positions.push_back(vp_pos);

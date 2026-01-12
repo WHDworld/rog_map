@@ -1,0 +1,1682 @@
+=============================================================
+  STAR-Searcher Performance & System Log
+  Started: 2026-01-12 14:46:06
+=============================================================
+
+[0.000] [ROS] [INFO] [RosLogRedirect] ROS log redirect initialized
+[0.000] [NODE] [INFO] ===========================================
+[0.000] [NODE] [INFO]     Unified Exploration Planner Node       
+[0.000] [NODE] [INFO]     (STAR-MVF Map System)                  
+[0.000] [NODE] [INFO] ===========================================
+[0.000] [ROS] [INFO] ===========================================
+[0.001] [ROS] [INFO]     Unified Exploration Planner Node       
+[0.001] [ROS] [INFO]     (STAR-MVF Map System)                  
+[0.001] [ROS] [INFO] ===========================================
+[0.001] [ROS] [INFO]   Architecture:
+[0.001] [ROS] [INFO]   - Single STAR-MVF MapManager instance (shared)
+[0.001] [ROS] [INFO]   - EGO-Planner for trajectory planning
+[0.001] [ROS] [INFO]   - Exploration FSM for viewpoint generation
+[0.001] [ROS] [INFO] ===========================================
+[0.001] [ROS] [INFO] [ExplorationPlannerNode] Creating STAR-MVF MapManager...
+[0.008] [ROS] [INFO] [LocalMap] Initialized: half_size_i=(50,50,15), map_size_i=(101,101,31), total=316231 voxels
+[0.010] [ROS] [INFO] [GlobalMap] Global Map Size: [25.000000, 25.000000, 2.400000] - [-25.000000, -25.000000, 0.400000]
+[0.013] [ROS] [INFO] [GlobalMap] Inflation config: enable=1, radius=2 grids (0.40m)
+[0.013] [ROS] [INFO] [GlobalMap] Map Voxels: [250 x 250 x 10]
+[0.013] [ROS] [INFO] [GlobalMap] SubGrids: 33 x 33 (Base Size: 7 x 7 voxels)
+[0.056] [ROS] [INFO] [GlobalMap] Initialization Done. Created 1089 subgrids.
+[0.056] [ROS] [INFO] [GlobalMap] Initialized inflation offsets: radius=2, neighbors=33
+[0.058] [ROS] [INFO] [GlobalMap] Initialized: resolution=0.200, range=[(-25.0,-25.0,0.4), (25.0,25.0,2.4)]
+[0.064] [ROS] [INFO] [MapManager] Initialized with lidar_topic=/livox/lidar, odom_topic=/uav_simulator/odometry
+[0.064] [ROS] [INFO] [MapManager] Creating viz_timer with rate=5.0 Hz
+[0.064] [ROS] [INFO] [MapManager] Started (new architecture: sync in lidarCallback)
+[0.064] [ROS] [INFO] [ExplorationPlannerNode] MapManager initialized (shared instance)
+[0.064] [ROS] [INFO] [ExplorationPlannerNode] Initializing EGO-Planner...
+[0.069] [ROS] [INFO] [PolyTrajOptimizer] Parameters loaded:
+[0.069] [ROS] [INFO]   cps_num_prePiece: 3
+[0.069] [ROS] [INFO]   wei_obs: 50000.0, wei_obs_soft: 5000.0
+[0.069] [ROS] [INFO]   wei_feas: 10000.0, wei_sqrvar: 1000.0, wei_time: 100.0
+[0.069] [ROS] [INFO]   obs_clearance: 1.25, obs_clearance_soft: 0.75
+[0.069] [ROS] [INFO]   max_vel: 2.0, max_acc: 2.0
+[0.070] [ROS] [INFO]   height_keeping: ON, wei_height: 500000.0, height_tol: 0.10
+[0.124] [ROS] [INFO] [PolyTrajOptimizer] Environment set with resolution: 0.200
+[0.124] [ROS] [INFO] [EGOPlannerManager] Initialized with:
+[0.124] [ROS] [INFO]   max_vel: 2.00, max_acc: 2.00
+[0.124] [ROS] [INFO]   planning_horizon: 12.00, piece_length: 1.50
+[0.133] [ROS] [INFO] [EGOReplanFSM] Initialized with target_type=1, sim_mode=OPEN3D
+[0.133] [ROS] [INFO] [ExplorationPlannerNode] EGO-Planner initialized
+[0.133] [ROS] [INFO] [ExplorationPlannerNode] Initializing Exploration FSM...
+[0.151] [ROS] [INFO] [ExplorationFSM] Viewpoint config: height=[1.00, 2.00]x1, r=[2.0, 5.0], sensor=[2.0, 5.0], fov_h=1.57
+[0.151] [ROS] [INFO] [ExplorationFSM] History node: dist=3.0, radius=20.0 | Ground filter: 0.40+0.10
+[0.151] [ROS] [INFO] [ExplorationFSM] Overhead filter: height_th=0.30, dist_th=3.00
+[0.154] [ROS] [INFO] [ExplorationFSM] Initialized successfully
+[0.154] [ROS] [INFO] [ExplorationPlannerNode] Exploration FSM initialized
+[0.154] [ROS] [INFO] ===========================================
+[0.154] [ROS] [INFO]   All modules share the same MapManager!
+[0.154] [ROS] [INFO]   -----------------------------------
+[0.154] [ROS] [INFO]   Usage:
+[0.154] [ROS] [INFO]   1. UAV will auto-takeoff and follow waypoints
+[0.154] [ROS] [INFO]   2. Exploration visualizes frontiers & viewpoints
+[0.154] [ROS] [INFO]   3. Use '2D Nav Goal' in RViz to trigger manual target
+[0.154] [ROS] [INFO]   -----------------------------------
+[0.154] [ROS] [INFO]   RViz Topics:
+[0.154] [ROS] [INFO]   - Planner: /ego_planner/trajectory_vis
+[0.155] [ROS] [INFO]   - Frontiers: /exploration/frontier_clusters
+[0.155] [ROS] [INFO]   - Viewpoints: /exploration/viewpoints
+[0.155] [ROS] [INFO] ===========================================
+[0.165] [ROS] [INFO] [ExplorationFSM] Waiting for odometry...
+[0.250] [ROS] [INFO] [MapManager] First odom received!
+[0.254] [ROS] [INFO] [ExplorationFSM] Initializing (0.1/2.0 s)...
+[0.256] [ROS] [INFO] [EGOReplanFSM] Open3D mode: skipping PRE_ARM, starting takeoff to z=1.50
+[0.256] [PLAN] [STATE_CHANGE] INIT -> TAKEOFF (by FSM), pos=(0.00,0.00,0.50), have_target=0, have_trigger=0
+[0.256] [ROS] [INFO] [EGOReplanFSM] State: INIT -> TAKEOFF (by FSM)
+[0.266] [ROS] [INFO] [EGOReplanFSM] Takeoff in progress: z=0.50 / 1.50
+[1.154] [GEN] [INFO] ========== Starting viewpoint generation cycle ==========
+[1.154] [HIST] [CREATE_FIRST] id=0, pos=(0.00,0.00,1.46)
+[1.155] [GEN] [FILTER_POINTS] Raw=6370, After=6370, Removed=0
+[1.155] [GEN] [INFO] HistoryNodes=1, FrontierGroups=1
+[1.222] [GEN] [CLUSTERS] formed=20 from 1 groups
+[1.222] [GEN] [SPLIT] after_split=23 clusters
+[1.222] [GEN] [OVERHEAD_FILTER] removed=4, remaining=19
+[1.225] [GEN] [CLUSTER_STATS] total=19, covered=0, no_viewpoint=14, produced=5
+[1.225] [GEN] [SAMPLING] covered=0, no_vp=14, produced=5, L1L2_candidates=5
+[1.225] [GEN] [DEDUP] After_dedup=3
+[1.225] [GEN] [YAW_OPT] checked=2 pairs, adjusted=1
+[1.225] [GEN] [FINAL] viewpoints=3, clusters=19, gen_time=70.65ms
+[1.225] [GEN] [TIME] TOTAL_GENERATE: 70.657 ms
+[1.225] [ROS] [INFO] [ExplorationFSM] Passive mode: 19 clusters, 3 viewpoints
+[1.238] [MAP] [UPDATE_VOXELS] occ=175, free=717, inflate=292, time=1.20ms
+[1.257] [PLAN] [STATE_CHANGE] TAKEOFF -> WAIT_TARGET (by FSM), pos=(0.00,0.00,1.50), have_target=0, have_trigger=0
+[1.257] [ROS] [INFO] [EGOReplanFSM] State: TAKEOFF -> WAIT_TARGET (by FSM)
+[1.257] [ROS] [INFO] [EGOReplanFSM] Open3D mode: Takeoff complete (z=1.50), waiting for target
+[1.264] [ROS] [INFO] [ExplorationFSM] Initializing (1.1/2.0 s)...
+[2.154] [ROS] [INFO] [ExplorationFSM] Takeoff complete (z=1.50), waiting for trigger (use 2D Nav Goal in RViz)
+[2.164] [FSM] [STATE_CHANGE] INIT -> WAIT_TRIGGER
+[2.246] [MAP] [UPDATE_VOXELS] occ=16, free=18, inflate=20, time=0.08ms
+[3.244] [MAP] [UPDATE_VOXELS] occ=17, free=9, inflate=16, time=0.07ms
+[4.236] [MAP] [UPDATE_VOXELS] occ=16, free=10, inflate=20, time=0.08ms
+[5.202] [PLAN] [STATE_INFO] current=WAIT_TARGET
+[5.240] [MAP] [UPDATE_VOXELS] occ=5, free=10, inflate=14, time=0.09ms
+[6.242] [MAP] [UPDATE_VOXELS] occ=13, free=17, inflate=19, time=0.10ms
+[7.242] [MAP] [UPDATE_VOXELS] occ=12, free=14, inflate=16, time=0.07ms
+[7.360] [ROS] [INFO] [ExplorationFSM] Exploration triggered by user
+[7.364] [ROS] [INFO] [ExplorationFSM] Exploration triggered
+[7.374] [FSM] [STATE_CHANGE] WAIT_TRIGGER -> UPDATE_FRONTIER
+[7.384] [FSM] [STATE_CHANGE] UPDATE_FRONTIER -> PLAN_VIEWPOINTS
+[7.384] [GEN] [INFO] ========== Starting viewpoint generation cycle ==========
+[7.385] [GEN] [FILTER_POINTS] Raw=6380, After=6380, Removed=0
+[7.385] [GEN] [INFO] HistoryNodes=1, FrontierGroups=1
+[7.435] [GEN] [CLUSTERS] formed=19 from 1 groups
+[7.435] [GEN] [SPLIT] after_split=27 clusters
+[7.435] [GEN] [OVERHEAD_FILTER] removed=3, remaining=24
+[7.443] [GEN] [CLUSTER_STATS] total=24, covered=0, no_viewpoint=17, produced=7
+[7.443] [GEN] [SAMPLING] covered=0, no_vp=17, produced=7, L1L2_candidates=7
+[7.443] [GEN] [DEDUP] After_dedup=6
+[7.443] [GEN] [YAW_OPT] checked=5 pairs, adjusted=0
+[7.443] [GEN] [FINAL] viewpoints=6, clusters=24, gen_time=58.68ms
+[7.443] [GEN] [TIME] TOTAL_GENERATE: 58.697 ms
+[7.443] [FSM] [SELECT_FIRST] idx=3, dist=1.38, yaw_diff=1.53, cost=8.98
+[7.443] [FSM] [PLAN_RESULT] clusters=24, viewpoints=6
+[7.443] [FSM] [PLAN_VP] time=58.74ms, viewpoints=6
+[7.443] [FSM] [SELECT_VP] idx=1/6, pos=(1.07,0.87,1.50), yaw=-1.53
+[7.443] [FSM] [SELECT_VP] pos=(1.07,0.87,1.50), yaw=-1.53, score=0.938
+[7.443] [FSM] [TIME] CYCLE: 58.829 ms
+[7.443] [FSM] [STATE_CHANGE] PLAN_VIEWPOINTS -> EXEC_EXPLORATION
+[7.443] [PLAN] [RECV_VP] pos=(1.07,0.87,1.50), yaw=-1.53, vel=(0.00,0.00,0.00), state=3
+[7.443] [ROS] [INFO] [ExplorationFSM] Published viewpoint: (1.07, 0.87, 1.50) yaw=-1.53, target=(1.21, -2.93, 1.91), est_time=3.4s
+[7.451] [ROS] [INFO] [EGOReplanFSM] WAIT_TARGET -> GEN_NEW_TRAJ: target=(1.07,0.87,1.50)
+[7.451] [PLAN] [STATE_CHANGE] WAIT_TARGET -> GEN_NEW_TRAJ (by FSM), pos=(0.00,0.00,1.50), have_target=1, have_trigger=1
+[7.451] [ROS] [INFO] [EGOReplanFSM] State: WAIT_TARGET -> GEN_NEW_TRAJ (by FSM)
+[7.462] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.082 s)
+[7.462] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM), pos=(0.00,0.00,1.50), have_target=1, have_trigger=1
+[7.462] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM)
+[8.047] [FSM] [TIME] CYCLE: 3.372 ms
+[8.146] [FSM] [TIME] CYCLE: 2.590 ms
+[8.238] [MAP] [UPDATE_VOXELS] occ=131, free=440, inflate=178, time=0.71ms
+[8.545] [FSM] [TIME] CYCLE: 1.837 ms
+[8.553] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(0.51,0.42,1.50), have_target=1, have_trigger=1
+[8.553] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[8.564] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[8.564] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(0.52,0.43,1.50), have_target=1, have_trigger=1
+[8.564] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[8.650] [FSM] [TIME] CYCLE: 6.658 ms
+[8.847] [FSM] [TIME] CYCLE: 3.498 ms
+[9.146] [FSM] [TIME] CYCLE: 2.738 ms
+[9.238] [MAP] [UPDATE_VOXELS] occ=145, free=392, inflate=140, time=0.66ms
+[9.447] [FSM] [TIME] CYCLE: 3.396 ms
+[9.564] [ROS] [INFO] [EGOReplanFSM] All waypoints completed, waiting for new target
+[9.564] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> WAIT_TARGET (by FSM), pos=(1.07,0.87,1.50), have_target=0, have_trigger=0
+[9.564] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> WAIT_TARGET (by FSM)
+[9.593] [ROS] [INFO] [ExplorationFSM] Reached viewpoint 1/6
+[9.593] [FSM] [SELECT_VP] idx=2/6, pos=(0.08,-0.87,1.50), yaw=-2.03
+[9.603] [ROS] [INFO] [ExplorationFSM] Published viewpoint: (0.08, -0.87, 1.50) yaw=-2.03, target=(-1.62, -4.27, 1.73), est_time=4.0s
+[9.603] [PLAN] [RECV_VP] pos=(0.08,-0.87,1.50), yaw=-2.03, vel=(0.00,0.00,0.00), state=3
+[9.605] [ROS] [INFO] [EGOReplanFSM] WAIT_TARGET -> GEN_NEW_TRAJ: target=(0.08,-0.87,1.50)
+[9.605] [PLAN] [STATE_CHANGE] WAIT_TARGET -> GEN_NEW_TRAJ (by FSM), pos=(1.07,0.87,1.50), have_target=1, have_trigger=1
+[9.605] [ROS] [INFO] [EGOReplanFSM] State: WAIT_TARGET -> GEN_NEW_TRAJ (by FSM)
+[9.615] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.088 s)
+[9.615] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM), pos=(1.07,0.87,1.50), have_target=1, have_trigger=1
+[9.615] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM)
+[10.236] [MAP] [UPDATE_VOXELS] occ=127, free=43, inflate=137, time=0.38ms
+[10.262] [PLAN] [STATE_INFO] current=EXEC_TRAJ
+[10.544] [FSM] [TIME] CYCLE: 1.132 ms
+[10.707] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(0.73,0.27,1.50), have_target=1, have_trigger=1
+[10.707] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[10.717] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[10.717] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(0.72,0.26,1.50), have_target=1, have_trigger=1
+[10.717] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[11.045] [FSM] [TIME] CYCLE: 1.891 ms
+[11.238] [MAP] [UPDATE_VOXELS] occ=64, free=268, inflate=78, time=0.38ms
+[11.243] [ROS] [INFO] [ExplorationFSM] Reached viewpoint 2/6
+[11.243] [FSM] [SELECT_VP] idx=3/6, pos=(-0.31,-3.64,1.50), yaw=-2.28
+[11.253] [PLAN] [RECV_VP] pos=(-0.31,-3.64,1.50), yaw=-2.28, vel=(0.00,0.00,0.00), state=6
+[11.253] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> GEN_NEW_TRAJ (by VIEWPOINT), pos=(0.31,-0.46,1.50), have_target=1, have_trigger=1
+[11.254] [ROS] [INFO] [ExplorationFSM] Published viewpoint: (-0.31, -3.64, 1.50) yaw=-2.28, target=(-3.18, -6.97, 1.53), est_time=5.2s
+[11.254] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> GEN_NEW_TRAJ (by VIEWPOINT)
+[11.263] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.090 s)
+[11.263] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM), pos=(0.31,-0.47,1.50), have_target=1, have_trigger=1
+[11.263] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM)
+[11.846] [FSM] [TIME] CYCLE: 2.681 ms
+[11.946] [FSM] [TIME] CYCLE: 3.133 ms
+[12.146] [FSM] [TIME] CYCLE: 2.941 ms
+[12.245] [MAP] [UPDATE_VOXELS] occ=82, free=605, inflate=103, time=1.04ms
+[12.346] [FSM] [TIME] CYCLE: 3.200 ms
+[12.354] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(-0.07,-1.68,1.50), have_target=1, have_trigger=1
+[12.354] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[12.365] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[12.365] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(-0.07,-1.70,1.50), have_target=1, have_trigger=1
+[12.365] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[12.645] [FSM] [TIME] CYCLE: 1.944 ms
+[12.845] [FSM] [TIME] CYCLE: 1.652 ms
+[12.946] [FSM] [TIME] CYCLE: 2.277 ms
+[13.045] [FSM] [TIME] CYCLE: 1.712 ms
+[13.146] [FSM] [TIME] CYCLE: 2.658 ms
+[13.239] [MAP] [UPDATE_VOXELS] occ=120, free=514, inflate=96, time=0.51ms
+[13.246] [FSM] [TIME] CYCLE: 2.087 ms
+[13.466] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(-0.28,-3.42,1.50), have_target=1, have_trigger=1
+[13.466] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[13.476] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[13.476] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(-0.28,-3.43,1.50), have_target=1, have_trigger=1
+[13.476] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[14.042] [ROS] [INFO] [EGOReplanFSM] All waypoints completed, waiting for new target
+[14.042] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> WAIT_TARGET (by FSM), pos=(-0.31,-3.64,1.50), have_target=0, have_trigger=0
+[14.042] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> WAIT_TARGET (by FSM)
+[14.046] [FSM] [TIME] CYCLE: 2.719 ms
+[14.073] [ROS] [INFO] [ExplorationFSM] Reached viewpoint 3/6
+[14.073] [FSM] [SELECT_VP] idx=4/6, pos=(-2.42,-2.20,1.50), yaw=-3.03
+[14.083] [PLAN] [RECV_VP] pos=(-2.42,-2.20,1.50), yaw=-3.03, vel=(0.00,0.00,0.00), state=3
+[14.083] [ROS] [INFO] [ExplorationFSM] Published viewpoint: (-2.42, -2.20, 1.50) yaw=-3.03, target=(-6.20, -2.61, 1.40), est_time=4.6s
+[14.093] [ROS] [INFO] [EGOReplanFSM] WAIT_TARGET -> GEN_NEW_TRAJ: target=(-2.42,-2.20,1.50)
+[14.093] [PLAN] [STATE_CHANGE] WAIT_TARGET -> GEN_NEW_TRAJ (by FSM), pos=(-0.31,-3.64,1.50), have_target=1, have_trigger=1
+[14.093] [ROS] [INFO] [EGOReplanFSM] State: WAIT_TARGET -> GEN_NEW_TRAJ (by FSM)
+[14.103] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.080 s)
+[14.104] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM), pos=(-0.31,-3.64,1.50), have_target=1, have_trigger=1
+[14.104] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM)
+[14.241] [MAP] [UPDATE_VOXELS] occ=79, free=161, inflate=109, time=0.78ms
+[15.046] [FSM] [TIME] CYCLE: 2.984 ms
+[15.144] [FSM] [TIME] CYCLE: 1.057 ms
+[15.184] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(-0.86,-3.26,1.50), have_target=1, have_trigger=1
+[15.184] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[15.195] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[15.195] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(-0.88,-3.25,1.50), have_target=1, have_trigger=1
+[15.195] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[15.239] [MAP] [UPDATE_VOXELS] occ=89, free=296, inflate=129, time=0.49ms
+[15.316] [PLAN] [STATE_INFO] current=EXEC_TRAJ
+[15.448] [FSM] [TIME] CYCLE: 4.915 ms
+[15.747] [FSM] [TIME] CYCLE: 3.414 ms
+[16.048] [FSM] [TIME] CYCLE: 5.076 ms
+[16.145] [FSM] [TIME] CYCLE: 1.762 ms
+[16.245] [MAP] [UPDATE_VOXELS] occ=102, free=226, inflate=123, time=0.42ms
+[16.296] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(-2.27,-2.30,1.50), have_target=1, have_trigger=1
+[16.296] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[16.306] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[16.306] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(-2.28,-2.30,1.50), have_target=1, have_trigger=1
+[16.306] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[16.475] [FSM] [TIME] CYCLE: 2.183 ms
+[16.812] [ROS] [INFO] [EGOReplanFSM] All waypoints completed, waiting for new target
+[16.812] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> WAIT_TARGET (by FSM), pos=(-2.42,-2.20,1.50), have_target=0, have_trigger=0
+[16.812] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> WAIT_TARGET (by FSM)
+[16.843] [ROS] [INFO] [ExplorationFSM] Reached viewpoint 4/6
+[16.843] [FSM] [SELECT_VP] idx=5/6, pos=(-2.11,2.10,1.50), yaw=-2.78
+[16.853] [ROS] [INFO] [ExplorationFSM] Published viewpoint: (-2.11, 2.10, 1.50) yaw=-2.78, target=(-5.10, 0.97, 1.74), est_time=6.3s
+[16.853] [PLAN] [RECV_VP] pos=(-2.11,2.10,1.50), yaw=-2.78, vel=(0.00,0.00,0.00), state=3
+[16.863] [ROS] [INFO] [EGOReplanFSM] WAIT_TARGET -> GEN_NEW_TRAJ: target=(-2.11,2.10,1.50)
+[16.863] [PLAN] [STATE_CHANGE] WAIT_TARGET -> GEN_NEW_TRAJ (by FSM), pos=(-2.42,-2.20,1.50), have_target=1, have_trigger=1
+[16.863] [ROS] [INFO] [EGOReplanFSM] State: WAIT_TARGET -> GEN_NEW_TRAJ (by FSM)
+[16.873] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.080 s)
+[16.873] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM), pos=(-2.42,-2.20,1.50), have_target=1, have_trigger=1
+[16.873] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM)
+[17.236] [MAP] [UPDATE_VOXELS] occ=58, free=107, inflate=89, time=0.34ms
+[17.445] [FSM] [TIME] CYCLE: 1.255 ms
+[17.545] [FSM] [TIME] CYCLE: 1.362 ms
+[17.945] [FSM] [TIME] CYCLE: 1.813 ms
+[17.954] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(-2.37,-1.52,1.50), have_target=1, have_trigger=1
+[17.955] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[17.965] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[17.965] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(-2.37,-1.50,1.50), have_target=1, have_trigger=1
+[17.965] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[18.045] [FSM] [TIME] CYCLE: 1.933 ms
+[18.147] [FSM] [TIME] CYCLE: 3.362 ms
+[18.243] [MAP] [UPDATE_VOXELS] occ=87, free=427, inflate=126, time=0.75ms
+[18.247] [FSM] [TIME] CYCLE: 3.871 ms
+[18.346] [FSM] [TIME] CYCLE: 2.971 ms
+[19.047] [FSM] [TIME] CYCLE: 4.042 ms
+[19.066] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(-2.22,0.60,1.50), have_target=1, have_trigger=1
+[19.067] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[19.076] [FSM] [TIME] CYCLE: 2.978 ms
+[19.077] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[19.077] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(-2.21,0.62,1.50), have_target=1, have_trigger=1
+[19.077] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[19.244] [MAP] [UPDATE_VOXELS] occ=131, free=782, inflate=131, time=0.84ms
+[19.276] [FSM] [TIME] CYCLE: 3.105 ms
+[19.346] [FSM] [TIME] CYCLE: 2.455 ms
+[19.445] [FSM] [TIME] CYCLE: 1.701 ms
+[19.477] [FSM] [TIME] CYCLE: 3.715 ms
+[19.547] [FSM] [TIME] CYCLE: 4.126 ms
+[19.675] [FSM] [TIME] CYCLE: 2.204 ms
+[19.747] [FSM] [TIME] CYCLE: 3.461 ms
+[19.845] [FSM] [TIME] CYCLE: 1.657 ms
+[19.948] [FSM] [TIME] CYCLE: 5.040 ms
+[20.076] [FSM] [TIME] CYCLE: 2.508 ms
+[20.144] [FSM] [TIME] CYCLE: 1.145 ms
+[20.178] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(-2.11,2.06,1.50), have_target=1, have_trigger=1
+[20.178] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[20.189] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[20.189] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(-2.11,2.06,1.50), have_target=1, have_trigger=1
+[20.189] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[20.239] [MAP] [UPDATE_VOXELS] occ=124, free=252, inflate=139, time=0.57ms
+[20.275] [FSM] [TIME] CYCLE: 1.931 ms
+[20.347] [FSM] [TIME] CYCLE: 3.600 ms
+[20.371] [PLAN] [STATE_INFO] current=EXEC_TRAJ
+[20.447] [FSM] [TIME] CYCLE: 3.601 ms
+[20.476] [FSM] [TIME] CYCLE: 2.928 ms
+[20.547] [FSM] [TIME] CYCLE: 3.244 ms
+[20.563] [ROS] [INFO] [EGOReplanFSM] All waypoints completed, waiting for new target
+[20.563] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> WAIT_TARGET (by FSM), pos=(-2.11,2.10,1.50), have_target=0, have_trigger=0
+[20.563] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> WAIT_TARGET (by FSM)
+[20.593] [ROS] [INFO] [ExplorationFSM] Reached viewpoint 5/6
+[20.593] [FSM] [SELECT_VP] idx=6/6, pos=(3.78,0.36,1.50), yaw=-3.03
+[20.603] [PLAN] [RECV_VP] pos=(3.78,0.36,1.50), yaw=-3.03, vel=(0.00,0.00,0.00), state=3
+[20.603] [ROS] [INFO] [ExplorationFSM] Published viewpoint: (3.78, 0.36, 1.50) yaw=-3.03, target=(0.01, -0.05, 0.70), est_time=8.1s
+[20.613] [ROS] [INFO] [EGOReplanFSM] WAIT_TARGET -> GEN_NEW_TRAJ: target=(3.78,0.36,1.50)
+[20.613] [PLAN] [STATE_CHANGE] WAIT_TARGET -> GEN_NEW_TRAJ (by FSM), pos=(-2.11,2.10,1.50), have_target=1, have_trigger=1
+[20.613] [ROS] [INFO] [EGOReplanFSM] State: WAIT_TARGET -> GEN_NEW_TRAJ (by FSM)
+[20.624] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.079 s)
+[20.624] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM), pos=(-2.11,2.10,1.50), have_target=1, have_trigger=1
+[20.624] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM)
+[21.113] [FSM] [REPLAN] reason=cluster_covered, t=0.51s
+[21.123] [FSM] [STATE_CHANGE] EXEC_EXPLORATION -> UPDATE_FRONTIER
+[21.133] [FSM] [STATE_CHANGE] UPDATE_FRONTIER -> PLAN_VIEWPOINTS
+[21.133] [GEN] [INFO] ========== Starting viewpoint generation cycle ==========
+[21.134] [GEN] [FILTER_POINTS] Raw=4536, After=4536, Removed=0
+[21.134] [GEN] [INFO] HistoryNodes=1, FrontierGroups=1
+[21.160] [GEN] [CLUSTERS] formed=21 from 1 groups
+[21.160] [GEN] [SPLIT] after_split=21 clusters
+[21.167] [GEN] [CLUSTER_STATS] total=21, covered=0, no_viewpoint=6, produced=15
+[21.167] [GEN] [SAMPLING] covered=0, no_vp=6, produced=15, L1L2_candidates=15
+[21.167] [GEN] [DEDUP] After_dedup=11
+[21.167] [GEN] [YAW_OPT] checked=10 pairs, adjusted=4
+[21.167] [GEN] [FINAL] viewpoints=11, clusters=21, gen_time=34.14ms
+[21.167] [GEN] [TIME] TOTAL_GENERATE: 34.165 ms
+[21.168] [HIST] [PATH_FIND_START] from=(-2.02,2.07,1.50) to=(3.02,6.80,1.50) nodes=1
+[21.168] [HIST] [PATH_NODES] start_idx=0(0.00,0.00), end_idx=0(0.00,0.00), dist_to_start=2.89, dist_to_end=7.44
+[21.168] [HIST] [PATH_SAME_NODE] node_idx=0
+[21.168] [HIST] [PATH_FIND_START] from=(-2.02,2.07,1.50) to=(-3.28,-7.79,1.50) nodes=1
+[21.168] [HIST] [PATH_NODES] start_idx=0(0.00,0.00), end_idx=0(0.00,0.00), dist_to_start=2.89, dist_to_end=8.45
+[21.168] [HIST] [PATH_SAME_NODE] node_idx=0
+[21.168] [HIST] [PATH_FIND_START] from=(-2.02,2.07,1.50) to=(3.77,-7.35,1.50) nodes=1
+[21.168] [HIST] [PATH_NODES] start_idx=0(0.00,0.00), end_idx=0(0.00,0.00), dist_to_start=2.89, dist_to_end=8.26
+[21.168] [HIST] [PATH_SAME_NODE] node_idx=0
+[21.168] [HIST] [PATH_FIND_START] from=(-2.02,2.07,1.50) to=(-6.87,-2.95,1.50) nodes=1
+[21.168] [HIST] [PATH_NODES] start_idx=0(0.00,0.00), end_idx=0(0.00,0.00), dist_to_start=2.89, dist_to_end=7.47
+[21.168] [HIST] [PATH_SAME_NODE] node_idx=0
+[21.168] [HIST] [PATH_FIND_START] from=(-2.02,2.07,1.50) to=(-3.09,7.20,1.50) nodes=1
+[21.168] [HIST] [PATH_NODES] start_idx=0(0.00,0.00), end_idx=0(0.00,0.00), dist_to_start=2.89, dist_to_end=7.83
+[21.168] [HIST] [PATH_SAME_NODE] node_idx=0
+[21.168] [FSM] [SELECT_FIRST] idx=10, dist=7.73, yaw_diff=0.81, cost=10.16
+[21.168] [FSM] [PLAN_RESULT] clusters=21, viewpoints=11
+[21.168] [FSM] [PLAN_VP] time=34.35ms, viewpoints=11
+[21.168] [FSM] [SELECT_VP] idx=1/11, pos=(4.68,-1.80,1.50), yaw=-0.28
+[21.168] [FSM] [SELECT_VP] pos=(4.68,-1.80,1.50), yaw=-0.28, score=0.846
+[21.168] [FSM] [TIME] CYCLE: 34.426 ms
+[21.168] [FSM] [STATE_CHANGE] PLAN_VIEWPOINTS -> EXEC_EXPLORATION
+[21.168] [ROS] [INFO] [ExplorationFSM] Published viewpoint: (4.68, -1.80, 1.50) yaw=-0.28, target=(8.90, -3.02, 1.38), est_time=9.7s
+[21.168] [ROS] [WARN] Global traj MaxVel = 2.239392 > set_max_vel
+[21.168] [PLAN] [RECV_VP] pos=(4.68,-1.80,1.50), yaw=-0.28, vel=(0.00,0.00,0.00), state=6
+[21.168] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> GEN_NEW_TRAJ (by VIEWPOINT), pos=(-2.02,2.07,1.50), have_target=1, have_trigger=1
+[21.168] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> GEN_NEW_TRAJ (by VIEWPOINT)
+[21.170] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.098 s)
+[21.170] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM), pos=(-2.01,2.07,1.50), have_target=1, have_trigger=1
+[21.170] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM)
+[21.243] [MAP] [UPDATE_VOXELS] occ=77, free=62, inflate=113, time=0.41ms
+[21.877] [FSM] [TIME] CYCLE: 9.299 ms
+[22.075] [FSM] [TIME] CYCLE: 7.215 ms
+[22.240] [MAP] [UPDATE_VOXELS] occ=91, free=297, inflate=127, time=0.58ms
+[22.271] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(-0.47,1.51,1.50), have_target=1, have_trigger=1
+[22.271] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[22.275] [FSM] [TIME] CYCLE: 7.625 ms
+[22.282] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[22.282] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(-0.45,1.51,1.50), have_target=1, have_trigger=1
+[22.282] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[22.476] [FSM] [TIME] CYCLE: 7.790 ms
+[22.550] [FSM] [TIME] CYCLE: 2.194 ms
+[22.676] [FSM] [TIME] CYCLE: 8.581 ms
+[22.840] [FSM] [TIME] CYCLE: 2.311 ms
+[22.876] [FSM] [TIME] CYCLE: 8.441 ms
+[23.074] [FSM] [TIME] CYCLE: 6.490 ms
+[23.150] [FSM] [TIME] CYCLE: 2.020 ms
+[23.244] [MAP] [UPDATE_VOXELS] occ=124, free=269, inflate=145, time=0.53ms
+[23.274] [FSM] [TIME] CYCLE: 6.660 ms
+[23.383] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(1.48,0.44,1.50), have_target=1, have_trigger=1
+[23.384] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[23.394] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[23.394] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(1.49,0.43,1.50), have_target=1, have_trigger=1
+[23.394] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[23.476] [FSM] [TIME] CYCLE: 7.700 ms
+[23.673] [FSM] [TIME] CYCLE: 4.894 ms
+[23.875] [FSM] [TIME] CYCLE: 6.908 ms
+[24.074] [FSM] [TIME] CYCLE: 6.251 ms
+[24.150] [FSM] [TIME] CYCLE: 2.244 ms
+[24.243] [MAP] [UPDATE_VOXELS] occ=153, free=936, inflate=148, time=1.12ms
+[24.276] [FSM] [TIME] CYCLE: 8.225 ms
+[24.477] [FSM] [TIME] CYCLE: 8.747 ms
+[24.496] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(3.30,-0.83,1.50), have_target=1, have_trigger=1
+[24.496] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[24.506] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[24.506] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(3.32,-0.84,1.50), have_target=1, have_trigger=1
+[24.506] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[24.673] [FSM] [TIME] CYCLE: 4.991 ms
+[24.875] [FSM] [TIME] CYCLE: 7.475 ms
+[25.074] [FSM] [TIME] CYCLE: 5.777 ms
+[25.236] [MAP] [UPDATE_VOXELS] occ=86, free=179, inflate=93, time=0.34ms
+[25.239] [FSM] [TIME] CYCLE: 1.121 ms
+[25.275] [FSM] [TIME] CYCLE: 7.342 ms
+[25.426] [PLAN] [STATE_INFO] current=EXEC_TRAJ
+[25.440] [FSM] [TIME] CYCLE: 2.160 ms
+[25.476] [FSM] [TIME] CYCLE: 8.036 ms
+[25.608] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(4.61,-1.75,1.50), have_target=1, have_trigger=1
+[25.608] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[25.618] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[25.618] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(4.62,-1.75,1.50), have_target=1, have_trigger=1
+[25.618] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[25.639] [FSM] [TIME] CYCLE: 1.374 ms
+[25.674] [FSM] [TIME] CYCLE: 6.104 ms
+[25.876] [FSM] [TIME] CYCLE: 8.638 ms
+[25.940] [FSM] [TIME] CYCLE: 1.821 ms
+[25.982] [ROS] [INFO] [EGOReplanFSM] All waypoints completed, waiting for new target
+[25.982] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> WAIT_TARGET (by FSM), pos=(4.68,-1.79,1.50), have_target=0, have_trigger=0
+[25.982] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> WAIT_TARGET (by FSM)
+[26.018] [ROS] [INFO] [ExplorationFSM] Reached viewpoint 1/11
+[26.018] [FSM] [SELECT_VP] idx=2/11, pos=(3.77,-7.35,1.50), yaw=-1.78
+[26.028] [HIST] [PATH_FIND_START] from=(4.68,-1.80,1.50) to=(3.77,-7.35,1.50) nodes=1
+[26.028] [HIST] [PATH_NODES] start_idx=0(0.00,0.00), end_idx=0(0.00,0.00), dist_to_start=5.01, dist_to_end=8.26
+[26.028] [HIST] [PATH_SAME_NODE] node_idx=0
+[26.028] [ROS] [INFO] [ExplorationFSM] Obstacle detected, using 1 intermediate waypoints
+[26.028] [ROS] [INFO] [ExplorationFSM] Published path with 2 waypoints (including target)
+[26.028] [ROS] [INFO] [ExplorationFSM] Published viewpoint: (3.77, -7.35, 1.50) yaw=-1.78, target=(3.10, -10.47, 1.63), est_time=7.6s
+[26.028] [PLAN] [RECV_VP_PATH] waypoints=2, target=(3.77,-7.35,1.50), yaw=-1.78, state=3
+[26.033] [ROS] [INFO] [EGOReplanFSM] WAIT_TARGET -> GEN_NEW_TRAJ: target=(3.77,-7.35,1.50)
+[26.033] [PLAN] [STATE_CHANGE] WAIT_TARGET -> GEN_NEW_TRAJ (by FSM), pos=(4.68,-1.80,1.50), have_target=1, have_trigger=1
+[26.033] [ROS] [INFO] [EGOReplanFSM] State: WAIT_TARGET -> GEN_NEW_TRAJ (by FSM)
+[26.046] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.082 s)
+[26.046] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM), pos=(4.68,-1.80,1.50), have_target=1, have_trigger=1
+[26.046] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM)
+[26.234] [MAP] [UPDATE_VOXELS] occ=59, free=147, inflate=76, time=0.32ms
+[26.676] [FSM] [TIME] CYCLE: 8.176 ms
+[26.840] [FSM] [TIME] CYCLE: 1.774 ms
+[26.879] [FSM] [TIME] CYCLE: 11.608 ms
+[26.939] [FSM] [TIME] CYCLE: 1.380 ms
+[27.075] [FSM] [TIME] CYCLE: 6.746 ms
+[27.137] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(5.24,-2.05,1.50), have_target=1, have_trigger=1
+[27.137] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[27.148] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.099 s)
+[27.148] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(5.25,-2.05,1.50), have_target=1, have_trigger=1
+[27.148] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[27.238] [MAP] [UPDATE_VOXELS] occ=113, free=227, inflate=132, time=0.44ms
+[27.277] [FSM] [TIME] CYCLE: 9.066 ms
+[27.439] [FSM] [TIME] CYCLE: 1.494 ms
+[27.476] [FSM] [TIME] CYCLE: 8.344 ms
+[27.541] [FSM] [TIME] CYCLE: 3.380 ms
+[27.677] [FSM] [TIME] CYCLE: 8.768 ms
+[27.877] [FSM] [TIME] CYCLE: 8.710 ms
+[28.079] [FSM] [TIME] CYCLE: 11.260 ms
+[28.242] [MAP] [UPDATE_VOXELS] occ=233, free=1001, inflate=198, time=1.05ms
+[28.250] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(6.76,-3.25,1.50), have_target=1, have_trigger=1
+[28.250] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[28.261] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.099 s)
+[28.261] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(6.77,-3.28,1.50), have_target=1, have_trigger=1
+[28.261] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[28.280] [FSM] [TIME] CYCLE: 11.847 ms
+[28.478] [FSM] [TIME] CYCLE: 10.482 ms
+[28.542] [FSM] [TIME] CYCLE: 4.319 ms
+[28.679] [FSM] [TIME] CYCLE: 11.612 ms
+[28.741] [FSM] [TIME] CYCLE: 3.309 ms
+[28.880] [FSM] [TIME] CYCLE: 11.745 ms
+[29.041] [FSM] [TIME] CYCLE: 3.406 ms
+[29.079] [FSM] [TIME] CYCLE: 11.103 ms
+[29.236] [MAP] [UPDATE_VOXELS] occ=149, free=537, inflate=150, time=0.98ms
+[29.240] [FSM] [TIME] CYCLE: 1.821 ms
+[29.279] [FSM] [TIME] CYCLE: 11.367 ms
+[29.340] [FSM] [TIME] CYCLE: 2.368 ms
+[29.362] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(6.22,-5.03,1.50), have_target=1, have_trigger=1
+[29.362] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[29.372] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[29.373] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(6.21,-5.05,1.50), have_target=1, have_trigger=1
+[29.373] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[29.439] [FSM] [TIME] CYCLE: 1.693 ms
+[29.479] [FSM] [TIME] CYCLE: 10.919 ms
+[29.682] [FSM] [TIME] CYCLE: 13.756 ms
+[29.880] [FSM] [TIME] CYCLE: 12.590 ms
+[30.029] [FSM] [TIME] CYCLE: 1.140 ms
+[30.082] [FSM] [TIME] CYCLE: 14.343 ms
+[30.238] [MAP] [UPDATE_VOXELS] occ=149, free=878, inflate=135, time=0.74ms
+[30.281] [FSM] [TIME] CYCLE: 13.252 ms
+[30.443] [FSM] [TIME] CYCLE: 4.883 ms
+[30.474] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(4.67,-6.59,1.50), have_target=1, have_trigger=1
+[30.474] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[30.482] [FSM] [TIME] CYCLE: 14.055 ms
+[30.484] [PLAN] [STATE_INFO] current=REPLAN_TRAJ
+[30.484] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[30.484] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(4.66,-6.61,1.50), have_target=1, have_trigger=1
+[30.484] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[30.548] [FSM] [REPLAN] reason=cluster_covered, t=4.52s
+[30.558] [FSM] [STATE_CHANGE] EXEC_EXPLORATION -> UPDATE_FRONTIER
+[30.568] [FSM] [STATE_CHANGE] UPDATE_FRONTIER -> PLAN_VIEWPOINTS
+[30.568] [GEN] [INFO] ========== Starting viewpoint generation cycle ==========
+[30.568] [HIST] [CREATE_NODE] id=1, pos=(4.56,-6.69,1.50), parent=0, neighbors=1, total=2
+[30.569] [GEN] [FILTER_POINTS] Raw=5797, After=5797, Removed=0
+[30.569] [GEN] [INFO] HistoryNodes=2, FrontierGroups=2
+[30.591] [GEN] [CLUSTERS] formed=34 from 2 groups
+[30.591] [GEN] [SPLIT] after_split=34 clusters
+[30.591] [GEN] [LIMIT] clusters 34 -> 30 (keeping nearest)
+[30.607] [GEN] [CLUSTER_STATS] total=30, covered=0, no_viewpoint=8, produced=22
+[30.607] [GEN] [SAMPLING] covered=0, no_vp=8, produced=22, L1L2_candidates=22
+[30.607] [GEN] [DEDUP] After_dedup=11
+[30.607] [GEN] [YAW_OPT] checked=10 pairs, adjusted=2
+[30.607] [GEN] [FINAL] viewpoints=11, clusters=30, gen_time=39.19ms
+[30.607] [GEN] [TIME] TOTAL_GENERATE: 39.204 ms
+[30.607] [HIST] [PATH_FIND_START] from=(4.49,-6.75,1.50) to=(-3.32,-9.29,1.50) nodes=2
+[30.607] [HIST] [PATH_NODES] start_idx=1(4.56,-6.69), end_idx=1(4.56,-6.69), dist_to_start=0.09, dist_to_end=8.29
+[30.607] [HIST] [PATH_SAME_NODE] node_idx=1
+[30.607] [HIST] [PATH_FIND_START] from=(4.49,-6.75,1.50) to=(-7.50,-3.99,1.50) nodes=2
+[30.607] [HIST] [PATH_NODES] start_idx=1(4.56,-6.69), end_idx=0(0.00,0.00), dist_to_start=0.09, dist_to_end=8.49
+[30.607] [HIST] [CONNECTIVITY] nodes=2, edges=1, isolated=0
+[30.607] [HIST] [RAW_PATH] nodes=2
+[30.607] [HIST] [SIMPLIFIED] 2 -> 2 nodes
+[30.607] [HIST] [PATH_FOUND] waypoints=1: (0.0,0.0)
+[30.607] [HIST] [PATH_FIND_START] from=(4.49,-6.75,1.50) to=(9.97,-4.17,1.50) nodes=2
+[30.607] [HIST] [PATH_NODES] start_idx=1(4.56,-6.69), end_idx=1(4.56,-6.69), dist_to_start=0.09, dist_to_end=5.97
+[30.607] [HIST] [PATH_SAME_NODE] node_idx=1
+[30.607] [HIST] [PATH_FIND_START] from=(4.49,-6.75,1.50) to=(-2.62,7.03,1.50) nodes=2
+[30.607] [HIST] [PATH_NODES] start_idx=1(4.56,-6.69), end_idx=0(0.00,0.00), dist_to_start=0.09, dist_to_end=7.50
+[30.607] [HIST] [CONNECTIVITY] nodes=2, edges=1, isolated=0
+[30.607] [HIST] [RAW_PATH] nodes=2
+[30.607] [HIST] [SIMPLIFIED] 2 -> 2 nodes
+[30.607] [HIST] [PATH_FOUND] waypoints=1: (0.0,0.0)
+[30.607] [HIST] [PATH_FIND_START] from=(4.49,-6.75,1.50) to=(1.93,4.90,1.50) nodes=2
+[30.607] [HIST] [PATH_NODES] start_idx=1(4.56,-6.69), end_idx=0(0.00,0.00), dist_to_start=0.09, dist_to_end=5.27
+[30.607] [HIST] [CONNECTIVITY] nodes=2, edges=1, isolated=0
+[30.607] [HIST] [RAW_PATH] nodes=2
+[30.607] [HIST] [SIMPLIFIED] 2 -> 2 nodes
+[30.607] [HIST] [PATH_FOUND] waypoints=1: (0.0,0.0)
+[30.607] [FSM] [SELECT_FIRST] idx=3, dist=2.29, yaw_diff=0.84, cost=4.80
+[30.607] [FSM] [PLAN_RESULT] clusters=30, viewpoints=11
+[30.607] [FSM] [PLAN_VP] time=39.35ms, viewpoints=11
+[30.607] [FSM] [SELECT_VP] idx=1/11, pos=(2.23,-7.11,1.50), yaw=3.00
+[30.607] [FSM] [SELECT_VP] pos=(2.23,-7.11,1.50), yaw=3.00, score=0.989
+[30.607] [FSM] [TIME] CYCLE: 39.416 ms
+[30.607] [FSM] [STATE_CHANGE] PLAN_VIEWPOINTS -> EXEC_EXPLORATION
+[30.607] [ROS] [INFO] [ExplorationFSM] Published viewpoint: (2.23, -7.11, 1.50) yaw=3.00, target=(-1.53, -6.57, 1.52), est_time=4.3s
+[30.607] [PLAN] [RECV_VP] pos=(2.23,-7.11,1.50), yaw=3.00, vel=(0.00,0.00,0.00), state=6
+[30.607] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> GEN_NEW_TRAJ (by VIEWPOINT), pos=(4.49,-6.75,1.50), have_target=1, have_trigger=1
+[30.607] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> GEN_NEW_TRAJ (by VIEWPOINT)
+[30.616] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.091 s)
+[30.616] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM), pos=(4.48,-6.76,1.50), have_target=1, have_trigger=1
+[30.616] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM)
+[31.238] [MAP] [UPDATE_VOXELS] occ=143, free=431, inflate=142, time=0.55ms
+[31.286] [FSM] [TIME] CYCLE: 19.016 ms
+[31.487] [FSM] [TIME] CYCLE: 19.477 ms
+[31.552] [FSM] [TIME] CYCLE: 4.135 ms
+[31.683] [FSM] [TIME] CYCLE: 15.720 ms
+[31.708] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(3.02,-7.25,1.50), have_target=1, have_trigger=1
+[31.708] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[31.718] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[31.718] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(3.00,-7.25,1.50), have_target=1, have_trigger=1
+[31.718] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[31.882] [FSM] [TIME] CYCLE: 15.144 ms
+[31.917] [ROS] [INFO] [ExplorationFSM] Reached viewpoint 1/11
+[31.917] [FSM] [SELECT_VP] idx=2/11, pos=(3.05,-8.81,1.50), yaw=2.50
+[31.927] [PLAN] [RECV_VP] pos=(3.05,-8.81,1.50), yaw=2.50, vel=(0.00,0.00,0.00), state=6
+[31.927] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> GEN_NEW_TRAJ (by VIEWPOINT), pos=(2.71,-7.21,1.50), have_target=1, have_trigger=1
+[31.928] [ROS] [INFO] [ExplorationFSM] Published viewpoint: (3.05, -8.81, 1.50) yaw=2.50, target=(0.01, -6.54, 1.52), est_time=3.6s
+[31.928] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> GEN_NEW_TRAJ (by VIEWPOINT)
+[31.931] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.097 s)
+[31.931] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM), pos=(2.69,-7.21,1.50), have_target=1, have_trigger=1
+[31.931] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM)
+[32.239] [MAP] [UPDATE_VOXELS] occ=118, free=284, inflate=136, time=0.51ms
+[32.485] [FSM] [TIME] CYCLE: 17.376 ms
+[32.540] [FSM] [TIME] CYCLE: 2.477 ms
+[32.679] [FSM] [TIME] CYCLE: 11.861 ms
+[32.880] [FSM] [TIME] CYCLE: 12.717 ms
+[33.032] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(2.23,-7.44,1.50), have_target=1, have_trigger=1
+[33.032] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[33.043] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[33.043] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(2.24,-7.45,1.50), have_target=1, have_trigger=1
+[33.043] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[33.082] [FSM] [TIME] CYCLE: 14.230 ms
+[33.239] [MAP] [UPDATE_VOXELS] occ=108, free=343, inflate=138, time=0.55ms
+[33.282] [FSM] [TIME] CYCLE: 14.581 ms
+[33.484] [FSM] [TIME] CYCLE: 16.377 ms
+[33.640] [FSM] [TIME] CYCLE: 2.690 ms
+[33.682] [FSM] [TIME] CYCLE: 14.427 ms
+[33.883] [FSM] [TIME] CYCLE: 15.777 ms
+[34.083] [FSM] [TIME] CYCLE: 15.750 ms
+[34.145] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(2.95,-8.66,1.50), have_target=1, have_trigger=1
+[34.145] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[34.155] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[34.155] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(2.95,-8.67,1.50), have_target=1, have_trigger=1
+[34.155] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[34.238] [MAP] [UPDATE_VOXELS] occ=111, free=172, inflate=111, time=0.40ms
+[34.283] [FSM] [TIME] CYCLE: 15.505 ms
+[34.481] [FSM] [TIME] CYCLE: 13.662 ms
+[34.640] [FSM] [TIME] CYCLE: 2.369 ms
+[34.681] [FSM] [TIME] CYCLE: 13.987 ms
+[34.772] [ROS] [INFO] [EGOReplanFSM] All waypoints completed, waiting for new target
+[34.772] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> WAIT_TARGET (by FSM), pos=(3.05,-8.81,1.50), have_target=0, have_trigger=0
+[34.772] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> WAIT_TARGET (by FSM)
+[34.807] [ROS] [INFO] [ExplorationFSM] Reached viewpoint 2/11
+[34.807] [FSM] [SELECT_VP] idx=3/11, pos=(2.31,-10.39,1.50), yaw=-2.78
+[34.817] [PLAN] [RECV_VP] pos=(2.31,-10.39,1.50), yaw=-2.78, vel=(0.00,0.00,0.00), state=3
+[34.817] [ROS] [INFO] [ExplorationFSM] Published viewpoint: (2.31, -10.39, 1.50) yaw=-2.78, target=(-1.24, -11.72, 1.51), est_time=3.7s
+[34.822] [ROS] [INFO] [EGOReplanFSM] WAIT_TARGET -> GEN_NEW_TRAJ: target=(2.31,-10.39,1.50)
+[34.822] [PLAN] [STATE_CHANGE] WAIT_TARGET -> GEN_NEW_TRAJ (by FSM), pos=(3.05,-8.81,1.50), have_target=1, have_trigger=1
+[34.822] [ROS] [INFO] [EGOReplanFSM] State: WAIT_TARGET -> GEN_NEW_TRAJ (by FSM)
+[34.833] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.085 s)
+[34.833] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM), pos=(3.05,-8.81,1.50), have_target=1, have_trigger=1
+[34.833] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM)
+[35.241] [MAP] [UPDATE_VOXELS] occ=71, free=105, inflate=80, time=0.28ms
+[35.477] [FSM] [TIME] CYCLE: 9.483 ms
+[35.487] [FSM] [TIME] CYCLE: 9.198 ms
+[35.540] [PLAN] [STATE_INFO] current=EXEC_TRAJ
+[35.685] [FSM] [TIME] CYCLE: 17.370 ms
+[35.880] [FSM] [TIME] CYCLE: 12.279 ms
+[35.924] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(2.76,-9.45,1.50), have_target=1, have_trigger=1
+[35.924] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[35.934] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[35.934] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(2.75,-9.46,1.50), have_target=1, have_trigger=1
+[35.934] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[36.039] [FSM] [TIME] CYCLE: 1.681 ms
+[36.083] [FSM] [TIME] CYCLE: 15.439 ms
+[36.138] [FSM] [TIME] CYCLE: 1.154 ms
+[36.242] [MAP] [UPDATE_VOXELS] occ=143, free=358, inflate=151, time=0.90ms
+[36.283] [FSM] [TIME] CYCLE: 16.044 ms
+[36.484] [FSM] [TIME] CYCLE: 16.454 ms
+[36.639] [FSM] [TIME] CYCLE: 1.918 ms
+[36.682] [FSM] [TIME] CYCLE: 14.171 ms
+[36.740] [FSM] [TIME] CYCLE: 2.345 ms
+[36.884] [FSM] [TIME] CYCLE: 16.406 ms
+[37.036] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(2.32,-10.39,1.50), have_target=1, have_trigger=1
+[37.036] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[37.046] [ROS] [WARN] Solver error. Return = -1005, The line-search routine reaches the maximum number of evaluations.. Skip this planning.
+[37.046] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> REPLAN_TRAJ (by FSM), pos=(2.32,-10.39,1.50), have_target=1, have_trigger=1
+[37.046] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> REPLAN_TRAJ (by FSM)
+[37.057] [ROS] [WARN] Solver error. Return = -1005, The line-search routine reaches the maximum number of evaluations.. Skip this planning.
+[37.057] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> REPLAN_TRAJ (by FSM), pos=(2.31,-10.39,1.50), have_target=1, have_trigger=1
+[37.057] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> REPLAN_TRAJ (by FSM)
+[37.068] [ROS] [WARN] Solver error. Return = -1005, The line-search routine reaches the maximum number of evaluations.. Skip this planning.
+[37.068] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> REPLAN_TRAJ (by FSM), pos=(2.31,-10.39,1.50), have_target=1, have_trigger=1
+[37.068] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> REPLAN_TRAJ (by FSM)
+[37.079] [ROS] [WARN] Solver error. Return = -1005, The line-search routine reaches the maximum number of evaluations.. Skip this planning.
+[37.079] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> REPLAN_TRAJ (by FSM), pos=(2.31,-10.39,1.50), have_target=1, have_trigger=1
+[37.079] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> REPLAN_TRAJ (by FSM)
+[37.084] [FSM] [TIME] CYCLE: 16.220 ms
+[37.090] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[37.090] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(2.31,-10.39,1.50), have_target=1, have_trigger=1
+[37.090] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[37.211] [ROS] [INFO] [EGOReplanFSM] All waypoints completed, waiting for new target
+[37.211] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> WAIT_TARGET (by FSM), pos=(2.31,-10.39,1.50), have_target=0, have_trigger=0
+[37.211] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> WAIT_TARGET (by FSM)
+[37.237] [MAP] [UPDATE_VOXELS] occ=42, free=55, inflate=59, time=0.22ms
+[37.239] [FSM] [TIME] CYCLE: 1.313 ms
+[37.247] [ROS] [INFO] [ExplorationFSM] Reached viewpoint 3/11
+[37.247] [FSM] [SELECT_VP] idx=4/11, pos=(-3.28,-7.79,1.50), yaw=1.75
+[37.257] [HIST] [PATH_FIND_START] from=(2.31,-10.39,1.50) to=(-3.28,-7.79,1.50) nodes=2
+[37.257] [HIST] [PATH_NODES] start_idx=1(4.56,-6.69), end_idx=1(4.56,-6.69), dist_to_start=4.33, dist_to_end=7.91
+[37.257] [HIST] [PATH_SAME_NODE] node_idx=1
+[37.257] [ROS] [INFO] [ExplorationFSM] Obstacle detected, using 1 intermediate waypoints
+[37.257] [ROS] [INFO] [ExplorationFSM] Published path with 2 waypoints (including target)
+[37.257] [ROS] [INFO] [ExplorationFSM] Published viewpoint: (-3.28, -7.79, 1.50) yaw=1.75, target=(-3.96, -4.05, 1.51), est_time=8.2s
+[37.258] [PLAN] [RECV_VP_PATH] waypoints=2, target=(-3.28,-7.79,1.50), yaw=1.75, state=3
+[37.262] [ROS] [INFO] [EGOReplanFSM] WAIT_TARGET -> GEN_NEW_TRAJ: target=(-3.28,-7.79,1.50)
+[37.262] [PLAN] [STATE_CHANGE] WAIT_TARGET -> GEN_NEW_TRAJ (by FSM), pos=(2.31,-10.39,1.50), have_target=1, have_trigger=1
+[37.262] [ROS] [INFO] [EGOReplanFSM] State: WAIT_TARGET -> GEN_NEW_TRAJ (by FSM)
+[37.282] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.076 s)
+[37.282] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM), pos=(2.31,-10.39,1.50), have_target=1, have_trigger=1
+[37.282] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM)
+[37.881] [FSM] [TIME] CYCLE: 13.565 ms
+[38.086] [FSM] [TIME] CYCLE: 18.182 ms
+[38.237] [MAP] [UPDATE_VOXELS] occ=55, free=103, inflate=69, time=0.27ms
+[38.239] [FSM] [TIME] CYCLE: 1.356 ms
+[38.279] [FSM] [TIME] CYCLE: 11.257 ms
+[38.363] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(1.92,-10.89,1.50), have_target=1, have_trigger=1
+[38.363] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[38.374] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.099 s)
+[38.374] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(1.91,-10.90,1.50), have_target=1, have_trigger=1
+[38.374] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[38.479] [FSM] [TIME] CYCLE: 12.105 ms
+[38.680] [FSM] [TIME] CYCLE: 13.060 ms
+[38.883] [FSM] [TIME] CYCLE: 15.952 ms
+[39.084] [FSM] [TIME] CYCLE: 16.537 ms
+[39.238] [MAP] [UPDATE_VOXELS] occ=85, free=222, inflate=99, time=0.65ms
+[39.281] [FSM] [TIME] CYCLE: 13.443 ms
+[39.338] [FSM] [TIME] CYCLE: 1.003 ms
+[39.442] [FSM] [TIME] CYCLE: 4.342 ms
+[39.476] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(0.40,-11.88,1.50), have_target=1, have_trigger=1
+[39.476] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[39.484] [FSM] [TIME] CYCLE: 16.843 ms
+[39.486] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[39.487] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(0.38,-11.87,1.50), have_target=1, have_trigger=1
+[39.487] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[39.539] [FSM] [TIME] CYCLE: 1.577 ms
+[39.642] [FSM] [TIME] CYCLE: 4.309 ms
+[39.683] [FSM] [TIME] CYCLE: 15.554 ms
+[39.842] [FSM] [TIME] CYCLE: 4.607 ms
+[39.885] [FSM] [TIME] CYCLE: 17.197 ms
+[39.940] [FSM] [TIME] CYCLE: 2.240 ms
+[40.082] [FSM] [TIME] CYCLE: 14.368 ms
+[40.243] [MAP] [UPDATE_VOXELS] occ=129, free=392, inflate=130, time=0.69ms
+[40.282] [FSM] [TIME] CYCLE: 14.977 ms
+[40.485] [FSM] [TIME] CYCLE: 17.338 ms
+[40.588] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(-1.33,-10.82,1.50), have_target=1, have_trigger=1
+[40.588] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[40.598] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[40.598] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(-1.34,-10.80,1.50), have_target=1, have_trigger=1
+[40.598] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[40.609] [PLAN] [STATE_INFO] current=EXEC_TRAJ
+[40.684] [FSM] [TIME] CYCLE: 16.898 ms
+[40.882] [FSM] [TIME] CYCLE: 14.925 ms
+[41.049] [FSM] [TIME] CYCLE: 1.151 ms
+[41.084] [FSM] [TIME] CYCLE: 17.085 ms
+[41.241] [MAP] [UPDATE_VOXELS] occ=204, free=1234, inflate=191, time=2.54ms
+[41.283] [FSM] [TIME] CYCLE: 15.925 ms
+[41.486] [FSM] [TIME] CYCLE: 18.564 ms
+[41.686] [FSM] [TIME] CYCLE: 18.796 ms
+[41.700] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(-2.54,-8.97,1.50), have_target=1, have_trigger=1
+[41.700] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[41.710] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[41.710] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(-2.55,-8.95,1.50), have_target=1, have_trigger=1
+[41.710] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[41.851] [FSM] [TIME] CYCLE: 3.490 ms
+[41.884] [FSM] [TIME] CYCLE: 16.886 ms
+[42.090] [FSM] [TIME] CYCLE: 22.419 ms
+[42.144] [FSM] [TIME] CYCLE: 4.557 ms
+[42.241] [MAP] [UPDATE_VOXELS] occ=174, free=334, inflate=151, time=0.71ms
+[42.250] [FSM] [REPLAN] reason=periodic, elapsed=5.0s
+[42.260] [FSM] [STATE_CHANGE] EXEC_EXPLORATION -> UPDATE_FRONTIER
+[42.270] [FSM] [STATE_CHANGE] UPDATE_FRONTIER -> PLAN_VIEWPOINTS
+[42.270] [GEN] [INFO] ========== Starting viewpoint generation cycle ==========
+[42.270] [HIST] [CREATE_NODE] id=2, pos=(-3.03,-8.18,1.50), parent=1, neighbors=1, total=3
+[42.270] [HIST] [NETWORK_SUMMARY] nodes=3, edges=2, isolated=0
+[42.275] [GEN] [FILTER_POINTS] Raw=6232, After=6232, Removed=0
+[42.275] [GEN] [INFO] HistoryNodes=3, FrontierGroups=3
+[42.291] [GEN] [CLUSTERS] formed=34 from 3 groups
+[42.291] [GEN] [SPLIT] after_split=34 clusters
+[42.291] [GEN] [LIMIT] clusters 34 -> 30 (keeping nearest)
+[42.305] [GEN] [CLUSTER_STATS] total=30, covered=1, no_viewpoint=7, produced=22
+[42.306] [GEN] [SAMPLING] covered=1, no_vp=7, produced=22, L1L2_candidates=22
+[42.306] [GEN] [DEDUP] After_dedup=12
+[42.306] [GEN] [YAW_OPT] checked=11 pairs, adjusted=4
+[42.306] [GEN] [FINAL] viewpoints=12, clusters=30, gen_time=35.61ms
+[42.306] [GEN] [TIME] TOTAL_GENERATE: 35.636 ms
+[42.306] [HIST] [PATH_FIND_START] from=(-3.07,-8.12,1.50) to=(-7.38,-12.69,1.50) nodes=3
+[42.306] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=2(-3.03,-8.18), dist_to_start=0.06, dist_to_end=6.27
+[42.306] [HIST] [PATH_SAME_NODE] node_idx=2
+[42.306] [HIST] [PATH_FIND_START] from=(-3.07,-8.12,1.50) to=(5.77,-11.61,1.50) nodes=3
+[42.306] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=1(4.56,-6.69), dist_to_start=0.06, dist_to_end=5.07
+[42.306] [HIST] [CONNECTIVITY] nodes=3, edges=2, isolated=0
+[42.306] [HIST] [RAW_PATH] nodes=2
+[42.306] [HIST] [SIMPLIFIED] 2 -> 2 nodes
+[42.306] [HIST] [PATH_FOUND] waypoints=1: (4.6,-6.7)
+[42.306] [HIST] [PATH_FIND_START] from=(-3.07,-8.12,1.50) to=(-7.40,3.69,1.50) nodes=3
+[42.306] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=0(0.00,0.00), dist_to_start=0.06, dist_to_end=8.27
+[42.306] [HIST] [CONNECTIVITY] nodes=3, edges=2, isolated=0
+[42.306] [HIST] [RAW_PATH] nodes=3
+[42.306] [HIST] [SIMPLIFIED] 3 -> 3 nodes
+[42.306] [HIST] [PATH_FOUND] waypoints=2: (4.6,-6.7)->(0.0,0.0)
+[42.306] [HIST] [PATH_FIND_START] from=(-3.07,-8.12,1.50) to=(7.58,-1.93,1.50) nodes=3
+[42.306] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=1(4.56,-6.69), dist_to_start=0.06, dist_to_end=5.63
+[42.306] [HIST] [CONNECTIVITY] nodes=3, edges=2, isolated=0
+[42.306] [HIST] [RAW_PATH] nodes=2
+[42.306] [HIST] [SIMPLIFIED] 2 -> 2 nodes
+[42.306] [HIST] [PATH_FOUND] waypoints=1: (4.6,-6.7)
+[42.306] [HIST] [PATH_FIND_START] from=(-3.07,-8.12,1.50) to=(-2.62,7.03,1.50) nodes=3
+[42.306] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=0(0.00,0.00), dist_to_start=0.06, dist_to_end=7.50
+[42.306] [HIST] [CONNECTIVITY] nodes=3, edges=2, isolated=0
+[42.306] [HIST] [RAW_PATH] nodes=3
+[42.306] [HIST] [SIMPLIFIED] 3 -> 3 nodes
+[42.306] [HIST] [PATH_FOUND] waypoints=2: (4.6,-6.7)->(0.0,0.0)
+[42.306] [HIST] [PATH_FIND_START] from=(-3.07,-8.12,1.50) to=(4.23,-9.36,1.50) nodes=3
+[42.306] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=1(4.56,-6.69), dist_to_start=0.06, dist_to_end=2.70
+[42.306] [HIST] [CONNECTIVITY] nodes=3, edges=2, isolated=0
+[42.306] [HIST] [RAW_PATH] nodes=2
+[42.306] [HIST] [SIMPLIFIED] 2 -> 2 nodes
+[42.306] [HIST] [PATH_FOUND] waypoints=1: (4.6,-6.7)
+[42.306] [HIST] [PATH_FIND_START] from=(-3.07,-8.12,1.50) to=(7.89,-12.74,1.50) nodes=3
+[42.306] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=1(4.56,-6.69), dist_to_start=0.06, dist_to_end=6.91
+[42.306] [HIST] [CONNECTIVITY] nodes=3, edges=2, isolated=0
+[42.306] [HIST] [RAW_PATH] nodes=2
+[42.306] [HIST] [SIMPLIFIED] 2 -> 2 nodes
+[42.306] [HIST] [PATH_FOUND] waypoints=1: (4.6,-6.7)
+[42.306] [FSM] [SELECT_FIRST] idx=6, dist=4.22, yaw_diff=0.86, cost=6.82
+[42.306] [FSM] [PLAN_RESULT] clusters=30, viewpoints=12
+[42.306] [FSM] [PLAN_VP] time=35.92ms, viewpoints=12
+[42.306] [FSM] [SELECT_VP] idx=1/12, pos=(-5.27,-11.73,1.50), yaw=3.00
+[42.306] [FSM] [SELECT_VP] pos=(-5.27,-11.73,1.50), yaw=3.00, score=0.972
+[42.306] [FSM] [TIME] CYCLE: 35.981 ms
+[42.306] [FSM] [STATE_CHANGE] PLAN_VIEWPOINTS -> EXEC_EXPLORATION
+[42.306] [ROS] [INFO] [ExplorationFSM] Published viewpoint: (-5.27, -11.73, 1.50) yaw=3.00, target=(-9.03, -11.19, 1.35), est_time=6.2s
+[42.306] [PLAN] [RECV_VP] pos=(-5.27,-11.73,1.50), yaw=3.00, vel=(0.00,0.00,0.00), state=6
+[42.306] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> GEN_NEW_TRAJ (by VIEWPOINT), pos=(-3.07,-8.12,1.50), have_target=1, have_trigger=1
+[42.306] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> GEN_NEW_TRAJ (by VIEWPOINT)
+[42.307] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.099 s)
+[42.307] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM), pos=(-3.07,-8.12,1.50), have_target=1, have_trigger=1
+[42.307] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM)
+[42.884] [FSM] [TIME] CYCLE: 17.869 ms
+[42.947] [FSM] [TIME] CYCLE: 1.039 ms
+[43.086] [FSM] [TIME] CYCLE: 19.696 ms
+[43.237] [MAP] [UPDATE_VOXELS] occ=109, free=404, inflate=125, time=0.54ms
+[43.288] [FSM] [TIME] CYCLE: 22.023 ms
+[43.409] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(-3.62,-8.08,1.50), have_target=1, have_trigger=1
+[43.409] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[43.419] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[43.420] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(-3.62,-8.09,1.50), have_target=1, have_trigger=1
+[43.420] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[43.488] [FSM] [TIME] CYCLE: 19.600 ms
+[43.685] [FSM] [TIME] CYCLE: 16.665 ms
+[43.728] [PLAN] [COLLISION_DETECT] t=1.16, traj_pos=(-4.60,-10.13,1.50), odom_pos=(-3.84,-8.46,1.50), t_cur=0.21, duration=2.67, emergency_time=1.00
+[43.728] [PLAN] [COLLISION_DETAIL] current_pos_collision=0, will_stop_at=(-3.84,-8.46,1.50)
+[43.728] [ROS] [ERROR] [EGOReplanFSM] Collision detected at t=1.16, pos=(-4.60,-10.13,1.50), emergency stop!
+[43.728] [ROS] [WARN] [PlannerMgr] Using fallback start_time (offset=0.000 s)
+[43.728] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> EMERGENCY_STOP (by SAFETY), pos=(-3.84,-8.46,1.50), have_target=1, have_trigger=1
+[43.728] [ROS] [WARN] [EGOReplanFSM] State: EXEC_TRAJ -> EMERGENCY_STOP (by SAFETY)
+[43.733] [PLAN] [EMERGENCY_STOP] count=1, duration=0.0s, hover=(-3.84,-8.46,1.50), have_target=1
+[43.733] [ROS] [WARN] [EGOReplanFSM] EMERGENCY STOP! Hovering at (-3.84, -8.46, 1.50) for 0.0s (see log for details)
+[43.740] [FSM] [TIME] CYCLE: 1.782 ms
+[43.743] [PLAN] [EMERGENCY_STOP] count=2, duration=0.0s, hover=(-3.84,-8.46,1.50), have_target=1
+[43.753] [PLAN] [EMERGENCY_STOP] count=3, duration=0.0s, hover=(-3.84,-8.46,1.50), have_target=1
+[43.763] [PLAN] [EMERGENCY_STOP] count=4, duration=0.0s, hover=(-3.84,-8.46,1.50), have_target=1
+[43.773] [PLAN] [EMERGENCY_STOP] count=5, duration=0.0s, hover=(-3.84,-8.46,1.50), have_target=1
+[43.783] [PLAN] [EMERGENCY_STOP] count=6, duration=0.1s, hover=(-3.84,-8.46,1.50), have_target=1
+[43.794] [PLAN] [EMERGENCY_STOP] count=7, duration=0.1s, hover=(-3.84,-8.46,1.50), have_target=1
+[43.804] [PLAN] [EMERGENCY_STOP] count=8, duration=0.1s, hover=(-3.84,-8.46,1.50), have_target=1
+[43.814] [PLAN] [EMERGENCY_STOP] count=9, duration=0.1s, hover=(-3.84,-8.46,1.50), have_target=1
+[43.824] [PLAN] [EMERGENCY_STOP] count=10, duration=0.1s, hover=(-3.84,-8.46,1.50), have_target=1
+[43.834] [PLAN] [EMERGENCY_STOP] count=11, duration=0.1s, hover=(-3.84,-8.46,1.50), have_target=1
+[43.844] [PLAN] [EMERGENCY_STOP] count=12, duration=0.1s, hover=(-3.84,-8.46,1.50), have_target=1
+[43.855] [PLAN] [EMERGENCY_STOP] count=13, duration=0.1s, hover=(-3.84,-8.46,1.50), have_target=1
+[43.865] [PLAN] [EMERGENCY_STOP] count=14, duration=0.1s, hover=(-3.84,-8.46,1.50), have_target=1
+[43.875] [PLAN] [EMERGENCY_STOP] count=15, duration=0.1s, hover=(-3.84,-8.46,1.50), have_target=1
+[43.885] [PLAN] [EMERGENCY_STOP] count=16, duration=0.2s, hover=(-3.84,-8.46,1.50), have_target=1
+[43.893] [FSM] [TIME] CYCLE: 25.061 ms
+[43.895] [PLAN] [EMERGENCY_STOP] count=17, duration=0.2s, hover=(-3.84,-8.46,1.50), have_target=1
+[43.905] [PLAN] [EMERGENCY_STOP] count=18, duration=0.2s, hover=(-3.84,-8.46,1.50), have_target=1
+[43.915] [PLAN] [EMERGENCY_STOP] count=19, duration=0.2s, hover=(-3.84,-8.46,1.50), have_target=1
+[43.926] [PLAN] [EMERGENCY_STOP] count=20, duration=0.2s, hover=(-3.84,-8.46,1.50), have_target=1
+[43.936] [PLAN] [EMERGENCY_STOP] count=21, duration=0.2s, hover=(-3.84,-8.46,1.50), have_target=1
+[43.946] [FSM] [TIME] CYCLE: 2.239 ms
+[43.946] [PLAN] [EMERGENCY_STOP] count=22, duration=0.2s, hover=(-3.84,-8.46,1.50), have_target=1
+[43.957] [PLAN] [EMERGENCY_STOP] count=23, duration=0.2s, hover=(-3.84,-8.46,1.50), have_target=1
+[43.967] [PLAN] [EMERGENCY_STOP] count=24, duration=0.2s, hover=(-3.84,-8.46,1.50), have_target=1
+[43.977] [PLAN] [EMERGENCY_STOP] count=25, duration=0.2s, hover=(-3.84,-8.46,1.50), have_target=1
+[43.987] [PLAN] [EMERGENCY_STOP] count=26, duration=0.3s, hover=(-3.84,-8.46,1.50), have_target=1
+[43.997] [PLAN] [EMERGENCY_STOP] count=27, duration=0.3s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.007] [PLAN] [EMERGENCY_STOP] count=28, duration=0.3s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.017] [PLAN] [EMERGENCY_STOP] count=29, duration=0.3s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.028] [PLAN] [EMERGENCY_STOP] count=30, duration=0.3s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.038] [PLAN] [EMERGENCY_STOP] count=31, duration=0.3s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.048] [PLAN] [EMERGENCY_STOP] count=32, duration=0.3s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.058] [PLAN] [EMERGENCY_STOP] count=33, duration=0.3s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.068] [PLAN] [EMERGENCY_STOP] count=34, duration=0.3s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.078] [PLAN] [EMERGENCY_STOP] count=35, duration=0.3s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.088] [FSM] [TIME] CYCLE: 14.958 ms
+[44.089] [PLAN] [EMERGENCY_STOP] count=36, duration=0.4s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.099] [PLAN] [EMERGENCY_STOP] count=37, duration=0.4s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.109] [PLAN] [EMERGENCY_STOP] count=38, duration=0.4s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.119] [PLAN] [EMERGENCY_STOP] count=39, duration=0.4s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.130] [PLAN] [EMERGENCY_STOP] count=40, duration=0.4s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.140] [PLAN] [EMERGENCY_STOP] count=41, duration=0.4s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.145] [FSM] [TIME] CYCLE: 1.913 ms
+[44.150] [PLAN] [EMERGENCY_STOP] count=42, duration=0.4s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.160] [PLAN] [EMERGENCY_STOP] count=43, duration=0.4s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.170] [PLAN] [EMERGENCY_STOP] count=44, duration=0.4s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.181] [PLAN] [EMERGENCY_STOP] count=45, duration=0.4s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.191] [PLAN] [EMERGENCY_STOP] count=46, duration=0.5s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.201] [PLAN] [EMERGENCY_STOP] count=47, duration=0.5s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.211] [PLAN] [EMERGENCY_STOP] count=48, duration=0.5s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.221] [PLAN] [EMERGENCY_STOP] count=49, duration=0.5s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.231] [PLAN] [EMERGENCY_STOP] count=50, duration=0.5s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.242] [PLAN] [EMERGENCY_STOP] count=51, duration=0.5s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.245] [MAP] [UPDATE_VOXELS] occ=211, free=1238, inflate=167, time=0.85ms
+[44.252] [PLAN] [EMERGENCY_STOP] count=52, duration=0.5s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.262] [PLAN] [EMERGENCY_STOP] count=53, duration=0.5s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.272] [PLAN] [EMERGENCY_STOP] count=54, duration=0.5s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.282] [PLAN] [EMERGENCY_STOP] count=55, duration=0.5s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.287] [FSM] [TIME] CYCLE: 13.537 ms
+[44.292] [PLAN] [EMERGENCY_STOP] count=56, duration=0.6s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.303] [PLAN] [EMERGENCY_STOP] count=57, duration=0.6s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.313] [PLAN] [EMERGENCY_STOP] count=58, duration=0.6s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.323] [PLAN] [EMERGENCY_STOP] count=59, duration=0.6s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.333] [PLAN] [EMERGENCY_STOP] count=60, duration=0.6s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.343] [PLAN] [EMERGENCY_STOP] count=61, duration=0.6s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.353] [PLAN] [EMERGENCY_STOP] count=62, duration=0.6s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.364] [PLAN] [EMERGENCY_STOP] count=63, duration=0.6s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.374] [PLAN] [EMERGENCY_STOP] count=64, duration=0.6s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.384] [PLAN] [EMERGENCY_STOP] count=65, duration=0.7s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.394] [PLAN] [EMERGENCY_STOP] count=66, duration=0.7s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.404] [PLAN] [EMERGENCY_STOP] count=67, duration=0.7s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.414] [PLAN] [EMERGENCY_STOP] count=68, duration=0.7s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.424] [PLAN] [EMERGENCY_STOP] count=69, duration=0.7s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.434] [PLAN] [EMERGENCY_STOP] count=70, duration=0.7s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.445] [PLAN] [EMERGENCY_STOP] count=71, duration=0.7s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.455] [PLAN] [EMERGENCY_STOP] count=72, duration=0.7s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.465] [PLAN] [EMERGENCY_STOP] count=73, duration=0.7s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.475] [PLAN] [EMERGENCY_STOP] count=74, duration=0.7s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.485] [PLAN] [EMERGENCY_STOP] count=75, duration=0.8s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.486] [FSM] [TIME] CYCLE: 12.626 ms
+[44.496] [PLAN] [EMERGENCY_STOP] count=76, duration=0.8s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.506] [PLAN] [EMERGENCY_STOP] count=77, duration=0.8s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.516] [PLAN] [EMERGENCY_STOP] count=78, duration=0.8s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.526] [PLAN] [EMERGENCY_STOP] count=79, duration=0.8s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.536] [PLAN] [EMERGENCY_STOP] count=80, duration=0.8s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.546] [FSM] [TIME] CYCLE: 2.734 ms
+[44.546] [PLAN] [EMERGENCY_STOP] count=81, duration=0.8s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.557] [PLAN] [EMERGENCY_STOP] count=82, duration=0.8s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.567] [PLAN] [EMERGENCY_STOP] count=83, duration=0.8s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.577] [PLAN] [EMERGENCY_STOP] count=84, duration=0.8s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.587] [PLAN] [EMERGENCY_STOP] count=85, duration=0.9s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.597] [PLAN] [EMERGENCY_STOP] count=86, duration=0.9s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.607] [PLAN] [EMERGENCY_STOP] count=87, duration=0.9s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.618] [PLAN] [EMERGENCY_STOP] count=88, duration=0.9s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.628] [PLAN] [EMERGENCY_STOP] count=89, duration=0.9s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.638] [PLAN] [EMERGENCY_STOP] count=90, duration=0.9s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.648] [PLAN] [EMERGENCY_STOP] count=91, duration=0.9s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.658] [PLAN] [EMERGENCY_STOP] count=92, duration=0.9s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.668] [PLAN] [EMERGENCY_STOP] count=93, duration=0.9s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.678] [PLAN] [EMERGENCY_STOP] count=94, duration=0.9s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.684] [FSM] [TIME] CYCLE: 10.707 ms
+[44.689] [PLAN] [EMERGENCY_STOP] count=95, duration=1.0s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.699] [PLAN] [EMERGENCY_STOP] count=96, duration=1.0s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.709] [PLAN] [EMERGENCY_STOP] count=97, duration=1.0s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.719] [PLAN] [EMERGENCY_STOP] count=98, duration=1.0s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.729] [PLAN] [EMERGENCY_STOP] count=99, duration=1.0s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.739] [PLAN] [EMERGENCY_STOP] count=100, duration=1.0s, hover=(-3.84,-8.46,1.50), have_target=1
+[44.739] [PLAN] [ESTOP_RECOVERY] Attempting recovery after 1.0s, pos_safe=1, target=(-5.27,-11.73,1.50)
+[44.740] [ROS] [WARN] [EGOReplanFSM] Recovering from EMERGENCY_STOP after 1.0s - generating new trajectory
+[44.740] [PLAN] [STATE_CHANGE] EMERGENCY_STOP -> GEN_NEW_TRAJ (by RECOVERY), pos=(-3.84,-8.46,1.50), have_target=1, have_trigger=1
+[44.740] [ROS] [WARN] [EGOReplanFSM] State: EMERGENCY_STOP -> GEN_NEW_TRAJ (by RECOVERY)
+[44.747] [FSM] [TIME] CYCLE: 3.916 ms
+[44.751] [ROS] [WARN] [PlannerMgr] Using fallback start_time (offset=0.100 s)
+[44.752] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM), pos=(-3.84,-8.46,1.50), have_target=1, have_trigger=1
+[44.752] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM)
+[44.888] [FSM] [TIME] CYCLE: 14.222 ms
+[45.047] [FSM] [TIME] CYCLE: 3.957 ms
+[45.080] [FSM] [TIME] CYCLE: 6.261 ms
+[45.243] [MAP] [UPDATE_VOXELS] occ=89, free=213, inflate=83, time=0.34ms
+[45.245] [FSM] [TIME] CYCLE: 1.485 ms
+[45.285] [FSM] [TIME] CYCLE: 12.070 ms
+[45.346] [FSM] [TIME] CYCLE: 2.965 ms
+[45.490] [FSM] [TIME] CYCLE: 16.863 ms
+[45.545] [FSM] [TIME] CYCLE: 1.192 ms
+[45.671] [PLAN] [STATE_INFO] current=EXEC_TRAJ
+[45.688] [FSM] [TIME] CYCLE: 14.358 ms
+[45.852] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(-3.29,-7.80,1.50), have_target=1, have_trigger=1
+[45.852] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[45.863] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[45.863] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(-3.29,-7.80,1.50), have_target=1, have_trigger=1
+[45.863] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[45.886] [FSM] [TIME] CYCLE: 13.044 ms
+[46.086] [FSM] [TIME] CYCLE: 12.303 ms
+[46.241] [MAP] [UPDATE_VOXELS] occ=60, free=202, inflate=81, time=0.47ms
+[46.245] [FSM] [TIME] CYCLE: 1.466 ms
+[46.291] [FSM] [TIME] CYCLE: 17.192 ms
+[46.486] [FSM] [TIME] CYCLE: 12.551 ms
+[46.645] [FSM] [TIME] CYCLE: 1.460 ms
+[46.688] [FSM] [TIME] CYCLE: 14.929 ms
+[46.886] [FSM] [TIME] CYCLE: 12.816 ms
+[46.945] [FSM] [TIME] CYCLE: 1.973 ms
+[46.965] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(-3.50,-8.80,1.50), have_target=1, have_trigger=1
+[46.965] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[46.976] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[46.976] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(-3.50,-8.82,1.50), have_target=1, have_trigger=1
+[46.976] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[47.091] [FSM] [TIME] CYCLE: 17.396 ms
+[47.242] [MAP] [UPDATE_VOXELS] occ=76, free=119, inflate=96, time=0.45ms
+[47.245] [FSM] [TIME] CYCLE: 1.540 ms
+[47.287] [FSM] [TIME] CYCLE: 13.450 ms
+[47.313] [FSM] [REPLAN] reason=periodic, elapsed=5.0s
+[47.323] [FSM] [STATE_CHANGE] EXEC_EXPLORATION -> UPDATE_FRONTIER
+[47.333] [FSM] [STATE_CHANGE] UPDATE_FRONTIER -> PLAN_VIEWPOINTS
+[47.333] [GEN] [INFO] ========== Starting viewpoint generation cycle ==========
+[47.334] [GEN] [FILTER_POINTS] Raw=6654, After=6654, Removed=0
+[47.334] [GEN] [INFO] HistoryNodes=3, FrontierGroups=3
+[47.358] [GEN] [CLUSTERS] formed=35 from 3 groups
+[47.358] [GEN] [SPLIT] after_split=35 clusters
+[47.358] [GEN] [OVERHEAD_FILTER] removed=1, remaining=34
+[47.358] [GEN] [LIMIT] clusters 34 -> 30 (keeping nearest)
+[47.371] [GEN] [CLUSTER_STATS] total=30, covered=1, no_viewpoint=7, produced=22
+[47.371] [GEN] [SAMPLING] covered=1, no_vp=7, produced=22, L1L2_candidates=22
+[47.371] [GEN] [DEDUP] After_dedup=14
+[47.371] [GEN] [YAW_OPT] checked=13 pairs, adjusted=4
+[47.371] [GEN] [FINAL] viewpoints=14, clusters=30, gen_time=37.55ms
+[47.371] [GEN] [TIME] TOTAL_GENERATE: 37.563 ms
+[47.371] [HIST] [PATH_FIND_START] from=(-3.87,-9.49,1.50) to=(-8.28,-2.92,1.50) nodes=3
+[47.371] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=2(-3.03,-8.18), dist_to_start=1.56, dist_to_end=7.42
+[47.371] [HIST] [PATH_SAME_NODE] node_idx=2
+[47.371] [HIST] [PATH_FIND_START] from=(-3.87,-9.49,1.50) to=(-7.40,3.69,1.50) nodes=3
+[47.371] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=0(0.00,0.00), dist_to_start=1.56, dist_to_end=8.27
+[47.371] [HIST] [CONNECTIVITY] nodes=3, edges=2, isolated=0
+[47.371] [HIST] [RAW_PATH] nodes=3
+[47.371] [HIST] [SIMPLIFIED] 3 -> 2 nodes
+[47.371] [HIST] [PATH_FOUND] waypoints=1: (0.0,0.0)
+[47.371] [HIST] [PATH_FIND_START] from=(-3.87,-9.49,1.50) to=(7.58,-1.93,1.50) nodes=3
+[47.371] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=1(4.56,-6.69), dist_to_start=1.56, dist_to_end=5.63
+[47.371] [HIST] [CONNECTIVITY] nodes=3, edges=2, isolated=0
+[47.371] [HIST] [RAW_PATH] nodes=2
+[47.371] [HIST] [SIMPLIFIED] 2 -> 2 nodes
+[47.371] [HIST] [PATH_FOUND] waypoints=1: (4.6,-6.7)
+[47.371] [HIST] [PATH_FIND_START] from=(-3.87,-9.49,1.50) to=(6.25,-11.98,1.50) nodes=3
+[47.371] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=1(4.56,-6.69), dist_to_start=1.56, dist_to_end=5.55
+[47.371] [HIST] [CONNECTIVITY] nodes=3, edges=2, isolated=0
+[47.371] [HIST] [RAW_PATH] nodes=2
+[47.371] [HIST] [SIMPLIFIED] 2 -> 2 nodes
+[47.371] [HIST] [PATH_FOUND] waypoints=1: (4.6,-6.7)
+[47.371] [HIST] [PATH_FIND_START] from=(-3.87,-9.49,1.50) to=(-2.62,7.03,1.50) nodes=3
+[47.371] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=0(0.00,0.00), dist_to_start=1.56, dist_to_end=7.50
+[47.371] [HIST] [CONNECTIVITY] nodes=3, edges=2, isolated=0
+[47.371] [HIST] [RAW_PATH] nodes=3
+[47.371] [HIST] [SIMPLIFIED] 3 -> 2 nodes
+[47.371] [HIST] [PATH_FOUND] waypoints=1: (0.0,0.0)
+[47.371] [HIST] [PATH_FIND_START] from=(-3.87,-9.49,1.50) to=(-2.80,-13.32,1.50) nodes=3
+[47.371] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=2(-3.03,-8.18), dist_to_start=1.56, dist_to_end=5.15
+[47.371] [HIST] [PATH_SAME_NODE] node_idx=2
+[47.371] [HIST] [PATH_FIND_START] from=(-3.87,-9.49,1.50) to=(4.23,-9.36,1.50) nodes=3
+[47.371] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=1(4.56,-6.69), dist_to_start=1.56, dist_to_end=2.70
+[47.371] [HIST] [CONNECTIVITY] nodes=3, edges=2, isolated=0
+[47.371] [HIST] [RAW_PATH] nodes=2
+[47.371] [HIST] [SIMPLIFIED] 2 -> 2 nodes
+[47.371] [HIST] [PATH_FOUND] waypoints=1: (4.6,-6.7)
+[47.371] [HIST] [PATH_FIND_START] from=(-3.87,-9.49,1.50) to=(7.89,-12.74,1.50) nodes=3
+[47.371] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=1(4.56,-6.69), dist_to_start=1.56, dist_to_end=6.91
+[47.371] [HIST] [CONNECTIVITY] nodes=3, edges=2, isolated=0
+[47.371] [HIST] [RAW_PATH] nodes=2
+[47.371] [HIST] [SIMPLIFIED] 2 -> 2 nodes
+[47.371] [HIST] [PATH_FOUND] waypoints=1: (4.6,-6.7)
+[47.371] [FSM] [SELECT_FIRST] idx=2, dist=2.28, yaw_diff=1.16, cost=5.75
+[47.371] [FSM] [PLAN_RESULT] clusters=30, viewpoints=14
+[47.371] [FSM] [PLAN_VP] time=37.81ms, viewpoints=14
+[47.371] [FSM] [SELECT_VP] idx=1/14, pos=(-4.80,-11.57,1.50), yaw=3.00
+[47.371] [FSM] [SELECT_VP] pos=(-4.80,-11.57,1.50), yaw=3.00, score=0.975
+[47.371] [FSM] [TIME] CYCLE: 37.872 ms
+[47.371] [FSM] [STATE_CHANGE] PLAN_VIEWPOINTS -> EXEC_EXPLORATION
+[47.371] [ROS] [INFO] [ExplorationFSM] Published viewpoint: (-4.80, -11.57, 1.50) yaw=3.00, target=(-8.56, -11.04, 1.37), est_time=4.3s
+[47.371] [PLAN] [RECV_VP] pos=(-4.80,-11.57,1.50), yaw=3.00, vel=(0.00,0.00,0.00), state=6
+[47.371] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> GEN_NEW_TRAJ (by VIEWPOINT), pos=(-3.87,-9.49,1.50), have_target=1, have_trigger=1
+[47.371] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> GEN_NEW_TRAJ (by VIEWPOINT)
+[47.380] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.091 s)
+[47.380] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM), pos=(-3.88,-9.51,1.50), have_target=1, have_trigger=1
+[47.380] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM)
+[47.886] [FSM] [TIME] CYCLE: 14.879 ms
+[48.088] [FSM] [TIME] CYCLE: 16.242 ms
+[48.238] [MAP] [UPDATE_VOXELS] occ=142, free=438, inflate=135, time=0.60ms
+[48.287] [FSM] [TIME] CYCLE: 15.645 ms
+[48.343] [FSM] [TIME] CYCLE: 1.376 ms
+[48.444] [FSM] [TIME] CYCLE: 2.490 ms
+[48.481] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(-4.72,-11.26,1.50), have_target=1, have_trigger=1
+[48.482] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[48.488] [FSM] [TIME] CYCLE: 17.160 ms
+[48.492] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[48.492] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(-4.72,-11.27,1.50), have_target=1, have_trigger=1
+[48.492] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[48.544] [FSM] [TIME] CYCLE: 2.439 ms
+[48.689] [FSM] [TIME] CYCLE: 17.331 ms
+[48.890] [FSM] [TIME] CYCLE: 18.269 ms
+[49.088] [FSM] [TIME] CYCLE: 17.085 ms
+[49.143] [FSM] [TIME] CYCLE: 1.418 ms
+[49.243] [MAP] [UPDATE_VOXELS] occ=105, free=143, inflate=110, time=1.49ms
+[49.250] [ROS] [INFO] [EGOReplanFSM] All waypoints completed, waiting for new target
+[49.250] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> WAIT_TARGET (by FSM), pos=(-4.80,-11.57,1.50), have_target=0, have_trigger=0
+[49.250] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> WAIT_TARGET (by FSM)
+[49.271] [ROS] [INFO] [ExplorationFSM] Reached viewpoint 1/14
+[49.271] [FSM] [SELECT_VP] idx=2/14, pos=(-2.80,-13.32,1.50), yaw=-1.53
+[49.281] [PLAN] [RECV_VP] pos=(-2.80,-13.32,1.50), yaw=-1.53, vel=(0.00,0.00,0.00), state=3
+[49.281] [ROS] [INFO] [ExplorationFSM] Published viewpoint: (-2.80, -13.32, 1.50) yaw=-1.53, target=(-2.70, -15.91, 1.41), est_time=4.7s
+[49.290] [ROS] [INFO] [EGOReplanFSM] WAIT_TARGET -> GEN_NEW_TRAJ: target=(-2.80,-13.32,1.50)
+[49.290] [PLAN] [STATE_CHANGE] WAIT_TARGET -> GEN_NEW_TRAJ (by FSM), pos=(-4.80,-11.57,1.50), have_target=1, have_trigger=1
+[49.290] [ROS] [INFO] [EGOReplanFSM] State: WAIT_TARGET -> GEN_NEW_TRAJ (by FSM)
+[49.301] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.081 s)
+[49.301] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM), pos=(-4.80,-11.57,1.50), have_target=1, have_trigger=1
+[49.301] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM)
+[49.843] [FSM] [TIME] CYCLE: 1.503 ms
+[49.889] [FSM] [TIME] CYCLE: 17.855 ms
+[50.089] [FSM] [TIME] CYCLE: 17.432 ms
+[50.241] [MAP] [UPDATE_VOXELS] occ=69, free=112, inflate=89, time=0.33ms
+[50.243] [FSM] [TIME] CYCLE: 2.048 ms
+[50.288] [FSM] [TIME] CYCLE: 16.323 ms
+[50.382] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(-4.29,-12.02,1.50), have_target=1, have_trigger=1
+[50.382] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[50.392] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[50.392] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(-4.28,-12.03,1.50), have_target=1, have_trigger=1
+[50.393] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[50.489] [FSM] [TIME] CYCLE: 17.357 ms
+[50.688] [FSM] [TIME] CYCLE: 16.246 ms
+[50.726] [PLAN] [STATE_INFO] current=EXEC_TRAJ
+[50.844] [FSM] [TIME] CYCLE: 2.445 ms
+[50.887] [FSM] [TIME] CYCLE: 16.001 ms
+[51.078] [FSM] [TIME] CYCLE: 7.072 ms
+[51.090] [FSM] [TIME] CYCLE: 9.003 ms
+[51.236] [MAP] [UPDATE_VOXELS] occ=86, free=103, inflate=103, time=0.45ms
+[51.289] [FSM] [TIME] CYCLE: 17.608 ms
+[51.489] [FSM] [TIME] CYCLE: 17.752 ms
+[51.494] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(-2.96,-13.17,1.50), have_target=1, have_trigger=1
+[51.494] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[51.504] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[51.504] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(-2.96,-13.18,1.50), have_target=1, have_trigger=1
+[51.504] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[51.643] [FSM] [TIME] CYCLE: 1.515 ms
+[51.686] [FSM] [TIME] CYCLE: 14.213 ms
+[51.891] [FSM] [TIME] CYCLE: 19.664 ms
+[52.091] [FSM] [TIME] CYCLE: 19.275 ms
+[52.171] [ROS] [INFO] [EGOReplanFSM] All waypoints completed, waiting for new target
+[52.171] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> WAIT_TARGET (by FSM), pos=(-2.80,-13.32,1.50), have_target=0, have_trigger=0
+[52.171] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> WAIT_TARGET (by FSM)
+[52.201] [ROS] [INFO] [ExplorationFSM] Reached viewpoint 2/14
+[52.201] [FSM] [SELECT_VP] idx=3/14, pos=(-6.69,-13.15,1.50), yaw=-0.53
+[52.211] [HIST] [PATH_FIND_START] from=(-2.80,-13.32,1.50) to=(-6.69,-13.15,1.50) nodes=3
+[52.211] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=2(-3.03,-8.18), dist_to_start=5.15, dist_to_end=6.17
+[52.211] [HIST] [PATH_SAME_NODE] node_idx=2
+[52.211] [ROS] [INFO] [ExplorationFSM] Obstacle detected, using 1 intermediate waypoints
+[52.211] [ROS] [INFO] [ExplorationFSM] Published path with 2 waypoints (including target)
+[52.212] [ROS] [INFO] [ExplorationFSM] Published viewpoint: (-6.69, -13.15, 1.50) yaw=-0.53, target=(-2.90, -15.39, 1.51), est_time=5.9s
+[52.212] [PLAN] [RECV_VP_PATH] waypoints=2, target=(-6.69,-13.15,1.50), yaw=-0.53, state=3
+[52.212] [ROS] [INFO] [EGOReplanFSM] WAIT_TARGET -> GEN_NEW_TRAJ: target=(-6.69,-13.15,1.50)
+[52.212] [PLAN] [STATE_CHANGE] WAIT_TARGET -> GEN_NEW_TRAJ (by FSM), pos=(-2.80,-13.32,1.50), have_target=1, have_trigger=1
+[52.212] [ROS] [INFO] [EGOReplanFSM] State: WAIT_TARGET -> GEN_NEW_TRAJ (by FSM)
+[52.227] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.084 s)
+[52.227] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM), pos=(-2.80,-13.32,1.50), have_target=1, have_trigger=1
+[52.228] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM)
+[52.236] [MAP] [UPDATE_VOXELS] occ=36, free=51, inflate=49, time=0.18ms
+[52.891] [FSM] [TIME] CYCLE: 19.414 ms
+[53.087] [FSM] [TIME] CYCLE: 15.734 ms
+[53.241] [MAP] [UPDATE_VOXELS] occ=62, free=51, inflate=78, time=0.35ms
+[53.243] [FSM] [TIME] CYCLE: 1.418 ms
+[53.288] [FSM] [TIME] CYCLE: 16.970 ms
+[53.319] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(-3.13,-12.72,1.50), have_target=1, have_trigger=1
+[53.319] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[53.329] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[53.329] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(-3.14,-12.70,1.50), have_target=1, have_trigger=1
+[53.329] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[53.489] [FSM] [TIME] CYCLE: 18.002 ms
+[53.688] [FSM] [TIME] CYCLE: 16.663 ms
+[53.842] [FSM] [TIME] CYCLE: 1.180 ms
+[53.889] [FSM] [TIME] CYCLE: 17.171 ms
+[54.088] [FSM] [TIME] CYCLE: 17.053 ms
+[54.143] [FSM] [TIME] CYCLE: 1.744 ms
+[54.240] [MAP] [UPDATE_VOXELS] occ=66, free=62, inflate=76, time=0.42ms
+[54.243] [FSM] [TIME] CYCLE: 1.638 ms
+[54.288] [FSM] [TIME] CYCLE: 16.726 ms
+[54.342] [FSM] [TIME] CYCLE: 1.031 ms
+[54.431] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(-4.64,-11.54,1.50), have_target=1, have_trigger=1
+[54.431] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[54.442] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[54.442] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(-4.66,-11.54,1.50), have_target=1, have_trigger=1
+[54.442] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[54.489] [FSM] [TIME] CYCLE: 17.951 ms
+[54.691] [FSM] [TIME] CYCLE: 19.920 ms
+[54.743] [FSM] [TIME] CYCLE: 1.780 ms
+[54.890] [FSM] [TIME] CYCLE: 18.675 ms
+[54.943] [FSM] [TIME] CYCLE: 1.668 ms
+[55.094] [FSM] [TIME] CYCLE: 22.447 ms
+[55.242] [MAP] [UPDATE_VOXELS] occ=150, free=438, inflate=142, time=0.65ms
+[55.246] [FSM] [TIME] CYCLE: 1.877 ms
+[55.290] [FSM] [TIME] CYCLE: 15.385 ms
+[55.491] [FSM] [TIME] CYCLE: 16.600 ms
+[55.537] [FSM] [TIME] CYCLE: 2.359 ms
+[55.543] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> REPLAN_TRAJ (by FSM), pos=(-6.16,-12.36,1.50), have_target=1, have_trigger=1
+[55.543] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> REPLAN_TRAJ (by FSM)
+[55.554] [ROS] [INFO] [PlannerMgr] Using precise start_time (offset=0.100 s)
+[55.554] [PLAN] [STATE_CHANGE] REPLAN_TRAJ -> EXEC_TRAJ (by FSM), pos=(-6.17,-12.37,1.50), have_target=1, have_trigger=1
+[55.554] [ROS] [INFO] [EGOReplanFSM] State: REPLAN_TRAJ -> EXEC_TRAJ (by FSM)
+[55.678] [FSM] [TIME] CYCLE: 13.829 ms
+[55.691] [FSM] [TIME] CYCLE: 12.955 ms
+[55.786] [PLAN] [STATE_INFO] current=EXEC_TRAJ
+[55.888] [FSM] [TIME] CYCLE: 14.045 ms
+[56.086] [FSM] [TIME] CYCLE: 11.480 ms
+[56.238] [MAP] [UPDATE_VOXELS] occ=82, free=125, inflate=89, time=0.30ms
+[56.291] [FSM] [TIME] CYCLE: 17.091 ms
+[56.336] [FSM] [TIME] CYCLE: 1.814 ms
+[56.484] [FSM] [TIME] CYCLE: 19.630 ms
+[56.646] [FSM] [TIME] CYCLE: 1.533 ms
+[56.655] [ROS] [INFO] [EGOReplanFSM] Next waypoint: pos=(-6.69, -13.15, 1.50), yaw=-0.53
+[56.655] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[56.655] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[56.665] [ROS] [WARN] [PlannerMgr] Using fallback start_time (offset=0.100 s)
+[56.665] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[56.665] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> EXEC_TRAJ (by FSM)
+[56.692] [FSM] [TIME] CYCLE: 18.074 ms
+[56.846] [FSM] [TIME] CYCLE: 1.947 ms
+[56.896] [FSM] [TIME] CYCLE: 21.832 ms
+[57.096] [FSM] [TIME] CYCLE: 30.269 ms
+[57.207] [FSM] [REPLAN] reason=periodic, elapsed=5.0s
+[57.217] [FSM] [STATE_CHANGE] EXEC_EXPLORATION -> UPDATE_FRONTIER
+[57.227] [FSM] [STATE_CHANGE] UPDATE_FRONTIER -> PLAN_VIEWPOINTS
+[57.227] [GEN] [INFO] ========== Starting viewpoint generation cycle ==========
+[57.227] [HIST] [NETWORK_SUMMARY] nodes=3, edges=2, isolated=0
+[57.228] [GEN] [FILTER_POINTS] Raw=6136, After=6136, Removed=0
+[57.228] [GEN] [INFO] HistoryNodes=3, FrontierGroups=3
+[57.235] [MAP] [UPDATE_VOXELS] occ=92, free=138, inflate=90, time=0.40ms
+[57.252] [GEN] [CLUSTERS] formed=29 from 3 groups
+[57.252] [GEN] [SPLIT] after_split=29 clusters
+[57.288] [GEN] [CLUSTER_STATS] total=29, covered=0, no_viewpoint=7, produced=22
+[57.288] [GEN] [SAMPLING] covered=0, no_vp=7, produced=22, L1L2_candidates=22
+[57.288] [GEN] [DEDUP] After_dedup=17
+[57.288] [GEN] [YAW_OPT] checked=16 pairs, adjusted=6
+[57.288] [GEN] [FINAL] viewpoints=17, clusters=29, gen_time=61.85ms
+[57.289] [GEN] [TIME] TOTAL_GENERATE: 61.893 ms
+[57.289] [HIST] [PATH_FIND_START] from=(-3.11,-8.28,1.50) to=(-9.91,-11.39,1.50) nodes=3
+[57.289] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=2(-3.03,-8.18), dist_to_start=0.13, dist_to_end=7.59
+[57.289] [HIST] [PATH_SAME_NODE] node_idx=2
+[57.289] [HIST] [PATH_FIND_START] from=(-3.11,-8.28,1.50) to=(-11.48,-10.70,1.50) nodes=3
+[57.289] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=2(-3.03,-8.18), dist_to_start=0.13, dist_to_end=8.81
+[57.289] [HIST] [PATH_SAME_NODE] node_idx=2
+[57.289] [HIST] [PATH_FIND_START] from=(-3.11,-8.28,1.50) to=(-1.31,-15.32,1.50) nodes=3
+[57.289] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=2(-3.03,-8.18), dist_to_start=0.13, dist_to_end=7.35
+[57.289] [HIST] [PATH_SAME_NODE] node_idx=2
+[57.289] [HIST] [PATH_FIND_START] from=(-3.11,-8.28,1.50) to=(0.28,-15.86,1.50) nodes=3
+[57.289] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=2(-3.03,-8.18), dist_to_start=0.13, dist_to_end=8.37
+[57.289] [HIST] [PATH_SAME_NODE] node_idx=2
+[57.289] [HIST] [PATH_FIND_START] from=(-3.11,-8.28,1.50) to=(-7.40,3.69,1.50) nodes=3
+[57.289] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=0(0.00,0.00), dist_to_start=0.13, dist_to_end=8.27
+[57.289] [HIST] [CONNECTIVITY] nodes=3, edges=2, isolated=0
+[57.289] [HIST] [RAW_PATH] nodes=3
+[57.289] [HIST] [SIMPLIFIED] 3 -> 2 nodes
+[57.289] [HIST] [PATH_FOUND] waypoints=1: (0.0,0.0)
+[57.289] [HIST] [PATH_FIND_START] from=(-3.11,-8.28,1.50) to=(7.58,-1.93,1.50) nodes=3
+[57.289] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=1(4.56,-6.69), dist_to_start=0.13, dist_to_end=5.63
+[57.289] [HIST] [CONNECTIVITY] nodes=3, edges=2, isolated=0
+[57.289] [HIST] [RAW_PATH] nodes=2
+[57.289] [HIST] [SIMPLIFIED] 2 -> 2 nodes
+[57.289] [HIST] [PATH_FOUND] waypoints=1: (4.6,-6.7)
+[57.289] [HIST] [PATH_FIND_START] from=(-3.11,-8.28,1.50) to=(6.25,-11.98,1.50) nodes=3
+[57.289] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=1(4.56,-6.69), dist_to_start=0.13, dist_to_end=5.55
+[57.289] [HIST] [CONNECTIVITY] nodes=3, edges=2, isolated=0
+[57.289] [HIST] [RAW_PATH] nodes=2
+[57.289] [HIST] [SIMPLIFIED] 2 -> 2 nodes
+[57.289] [HIST] [PATH_FOUND] waypoints=1: (4.6,-6.7)
+[57.289] [HIST] [PATH_FIND_START] from=(-3.11,-8.28,1.50) to=(-5.73,-14.45,1.50) nodes=3
+[57.289] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=2(-3.03,-8.18), dist_to_start=0.13, dist_to_end=6.83
+[57.289] [HIST] [PATH_SAME_NODE] node_idx=2
+[57.289] [HIST] [PATH_FIND_START] from=(-3.11,-8.28,1.50) to=(-3.09,7.20,1.50) nodes=3
+[57.289] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=0(0.00,0.00), dist_to_start=0.13, dist_to_end=7.83
+[57.289] [HIST] [CONNECTIVITY] nodes=3, edges=2, isolated=0
+[57.289] [HIST] [RAW_PATH] nodes=3
+[57.289] [HIST] [SIMPLIFIED] 3 -> 2 nodes
+[57.289] [HIST] [PATH_FOUND] waypoints=1: (0.0,0.0)
+[57.289] [HIST] [PATH_FIND_START] from=(-3.11,-8.28,1.50) to=(-8.04,-11.86,1.50) nodes=3
+[57.289] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=2(-3.03,-8.18), dist_to_start=0.13, dist_to_end=6.21
+[57.289] [HIST] [PATH_SAME_NODE] node_idx=2
+[57.289] [HIST] [PATH_FIND_START] from=(-3.11,-8.28,1.50) to=(4.10,-9.95,1.50) nodes=3
+[57.289] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=1(4.56,-6.69), dist_to_start=0.13, dist_to_end=3.29
+[57.289] [HIST] [CONNECTIVITY] nodes=3, edges=2, isolated=0
+[57.289] [HIST] [RAW_PATH] nodes=2
+[57.289] [HIST] [SIMPLIFIED] 2 -> 2 nodes
+[57.289] [HIST] [PATH_FOUND] waypoints=1: (4.6,-6.7)
+[57.289] [HIST] [PATH_FIND_START] from=(-3.11,-8.28,1.50) to=(7.89,-12.74,1.50) nodes=3
+[57.289] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=1(4.56,-6.69), dist_to_start=0.13, dist_to_end=6.91
+[57.289] [HIST] [CONNECTIVITY] nodes=3, edges=2, isolated=0
+[57.289] [HIST] [RAW_PATH] nodes=2
+[57.289] [HIST] [SIMPLIFIED] 2 -> 2 nodes
+[57.289] [HIST] [PATH_FOUND] waypoints=1: (4.6,-6.7)
+[57.289] [FSM] [SELECT_FIRST] idx=10, dist=6.71, yaw_diff=0.45, cost=8.30
+[57.289] [FSM] [PLAN_RESULT] clusters=29, viewpoints=17
+[57.289] [FSM] [PLAN_VP] time=62.68ms, viewpoints=17
+[57.289] [FSM] [SELECT_VP] idx=1/17, pos=(-5.73,-14.45,1.50), yaw=-2.28
+[57.289] [FSM] [SELECT_VP] pos=(-5.73,-14.45,1.50), yaw=-2.28, score=0.930
+[57.289] [FSM] [TIME] CYCLE: 62.773 ms
+[57.289] [FSM] [STATE_CHANGE] PLAN_VIEWPOINTS -> EXEC_EXPLORATION
+[57.289] [HIST] [PATH_FIND_START] from=(-3.11,-8.28,1.50) to=(-5.73,-14.45,1.50) nodes=3
+[57.289] [HIST] [PATH_NODES] start_idx=2(-3.03,-8.18), end_idx=2(-3.03,-8.18), dist_to_start=0.13, dist_to_end=6.83
+[57.289] [HIST] [PATH_SAME_NODE] node_idx=2
+[57.290] [ROS] [INFO] [ExplorationFSM] Obstacle detected, using 1 intermediate waypoints
+[57.290] [ROS] [INFO] [ExplorationFSM] Published path with 2 waypoints (including target)
+[57.290] [ROS] [INFO] [ExplorationFSM] Published viewpoint: (-5.73, -14.45, 1.50) yaw=-2.28, target=(-7.43, -16.42, 1.50), est_time=8.7s
+[57.290] [ROS] [WARN] Global traj MaxVel = 13.424803 > set_max_vel
+[57.290] [PLAN] [RECV_VP_PATH] waypoints=2, target=(-5.73,-14.45,1.50), yaw=-2.28, state=6
+[57.290] [PLAN] [STATE_CHANGE] EXEC_TRAJ -> GEN_NEW_TRAJ (by VIEWPOINT_PATH), pos=(-3.11,-8.28,1.50), have_target=1, have_trigger=1
+[57.290] [ROS] [INFO] [EGOReplanFSM] State: EXEC_TRAJ -> GEN_NEW_TRAJ (by VIEWPOINT_PATH)
+[57.329] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[57.329] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-3.12,-8.30,1.50), have_target=1, have_trigger=1
+[57.329] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[57.374] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[57.374] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-3.15,-8.33,1.50), have_target=1, have_trigger=1
+[57.374] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[57.423] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[57.423] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-3.18,-8.37,1.50), have_target=1, have_trigger=1
+[57.423] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[57.468] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[57.468] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-3.20,-8.40,1.50), have_target=1, have_trigger=1
+[57.468] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[57.517] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[57.517] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-3.23,-8.45,1.50), have_target=1, have_trigger=1
+[57.517] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[57.568] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[57.568] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-3.27,-8.50,1.50), have_target=1, have_trigger=1
+[57.568] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[57.620] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[57.620] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-3.31,-8.55,1.50), have_target=1, have_trigger=1
+[57.620] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[57.669] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[57.669] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-3.35,-8.60,1.50), have_target=1, have_trigger=1
+[57.669] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[57.719] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[57.719] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-3.39,-8.66,1.50), have_target=1, have_trigger=1
+[57.719] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[57.762] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[57.762] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-3.44,-8.72,1.50), have_target=1, have_trigger=1
+[57.762] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[57.816] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[57.816] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-3.48,-8.79,1.50), have_target=1, have_trigger=1
+[57.816] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[57.864] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[57.864] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-3.53,-8.86,1.50), have_target=1, have_trigger=1
+[57.864] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[57.893] [FSM] [TIME] CYCLE: 23.852 ms
+[57.914] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[57.914] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-3.58,-8.93,1.50), have_target=1, have_trigger=1
+[57.914] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[57.964] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[57.964] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-3.64,-9.00,1.50), have_target=1, have_trigger=1
+[57.964] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[58.008] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[58.008] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-3.68,-9.06,1.50), have_target=1, have_trigger=1
+[58.008] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[58.058] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[58.058] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-3.73,-9.13,1.50), have_target=1, have_trigger=1
+[58.058] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[58.090] [FSM] [TIME] CYCLE: 17.033 ms
+[58.109] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[58.109] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-3.79,-9.21,1.50), have_target=1, have_trigger=1
+[58.109] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[58.155] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[58.156] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-3.85,-9.28,1.50), have_target=1, have_trigger=1
+[58.156] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[58.209] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[58.209] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-3.90,-9.36,1.50), have_target=1, have_trigger=1
+[58.209] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[58.239] [MAP] [UPDATE_VOXELS] occ=60, free=288, inflate=89, time=0.35ms
+[58.264] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[58.264] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-3.97,-9.46,1.50), have_target=1, have_trigger=1
+[58.264] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[58.291] [FSM] [TIME] CYCLE: 17.941 ms
+[58.317] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[58.317] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-4.03,-9.53,1.50), have_target=1, have_trigger=1
+[58.317] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[58.365] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[58.365] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-4.09,-9.61,1.50), have_target=1, have_trigger=1
+[58.365] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[58.410] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[58.410] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-4.14,-9.68,1.50), have_target=1, have_trigger=1
+[58.410] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[58.454] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[58.455] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-4.20,-9.76,1.50), have_target=1, have_trigger=1
+[58.455] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[58.492] [FSM] [TIME] CYCLE: 18.069 ms
+[58.503] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[58.503] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-4.25,-9.84,1.50), have_target=1, have_trigger=1
+[58.503] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[58.553] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[58.553] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-4.31,-9.92,1.50), have_target=1, have_trigger=1
+[58.553] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[58.604] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[58.604] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-4.37,-10.00,1.50), have_target=1, have_trigger=1
+[58.604] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[58.647] [FSM] [TIME] CYCLE: 3.542 ms
+[58.654] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[58.654] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-4.43,-10.08,1.50), have_target=1, have_trigger=1
+[58.654] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[58.692] [FSM] [TIME] CYCLE: 18.148 ms
+[58.709] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[58.709] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-4.49,-10.16,1.50), have_target=1, have_trigger=1
+[58.709] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[58.759] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[58.759] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-4.55,-10.24,1.50), have_target=1, have_trigger=1
+[58.759] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[58.803] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[58.803] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-4.61,-10.32,1.50), have_target=1, have_trigger=1
+[58.803] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[58.847] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[58.847] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-4.66,-10.39,1.50), have_target=1, have_trigger=1
+[58.847] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[58.847] [FSM] [TIME] CYCLE: 3.842 ms
+[58.893] [FSM] [TIME] CYCLE: 19.759 ms
+[58.902] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[58.902] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-4.73,-10.49,1.50), have_target=1, have_trigger=1
+[58.902] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[58.945] [FSM] [TIME] CYCLE: 1.960 ms
+[58.949] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[58.949] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-4.78,-10.55,1.50), have_target=1, have_trigger=1
+[58.949] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[58.994] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[58.994] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-4.84,-10.63,1.50), have_target=1, have_trigger=1
+[58.994] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[59.039] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[59.039] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-4.88,-10.70,1.50), have_target=1, have_trigger=1
+[59.039] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[59.084] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[59.084] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-4.94,-10.78,1.50), have_target=1, have_trigger=1
+[59.084] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[59.088] [FSM] [TIME] CYCLE: 14.973 ms
+[59.129] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[59.129] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-4.99,-10.84,1.50), have_target=1, have_trigger=1
+[59.129] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[59.180] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[59.180] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-5.05,-10.92,1.50), have_target=1, have_trigger=1
+[59.180] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[59.230] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[59.230] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-5.11,-11.00,1.50), have_target=1, have_trigger=1
+[59.230] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[59.242] [MAP] [UPDATE_VOXELS] occ=97, free=127, inflate=106, time=0.48ms
+[59.248] [FSM] [TIME] CYCLE: 4.274 ms
+[59.280] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[59.280] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-5.17,-11.08,1.50), have_target=1, have_trigger=1
+[59.280] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[59.289] [FSM] [TIME] CYCLE: 15.351 ms
+[59.334] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[59.335] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-5.24,-11.18,1.50), have_target=1, have_trigger=1
+[59.335] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[59.347] [FSM] [TIME] CYCLE: 3.696 ms
+[59.384] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[59.384] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-5.30,-11.26,1.50), have_target=1, have_trigger=1
+[59.384] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[59.433] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[59.433] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-5.36,-11.34,1.50), have_target=1, have_trigger=1
+[59.433] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[59.446] [FSM] [TIME] CYCLE: 2.643 ms
+[59.477] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[59.477] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-5.41,-11.41,1.50), have_target=1, have_trigger=1
+[59.477] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[59.483] [FSM] [TIME] CYCLE: 9.760 ms
+[59.525] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[59.525] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-5.47,-11.49,1.50), have_target=1, have_trigger=1
+[59.525] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[59.608] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[59.608] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-5.56,-11.62,1.50), have_target=1, have_trigger=1
+[59.608] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[59.665] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[59.665] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-5.63,-11.71,1.50), have_target=1, have_trigger=1
+[59.665] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[59.696] [FSM] [TIME] CYCLE: 22.685 ms
+[59.718] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[59.718] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-5.69,-11.79,1.50), have_target=1, have_trigger=1
+[59.718] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[59.769] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[59.769] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-5.75,-11.87,1.50), have_target=1, have_trigger=1
+[59.769] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[59.816] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[59.816] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-5.81,-11.95,1.50), have_target=1, have_trigger=1
+[59.816] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[59.869] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[59.869] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-5.86,-12.03,1.50), have_target=1, have_trigger=1
+[59.869] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[59.891] [FSM] [TIME] CYCLE: 24.994 ms
+[59.926] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[59.926] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-5.93,-12.12,1.50), have_target=1, have_trigger=1
+[59.926] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[59.976] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[59.976] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-5.99,-12.20,1.50), have_target=1, have_trigger=1
+[59.976] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[60.022] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[60.022] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.04,-12.27,1.50), have_target=1, have_trigger=1
+[60.022] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[60.071] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[60.071] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.10,-12.34,1.50), have_target=1, have_trigger=1
+[60.071] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[60.088] [FSM] [TIME] CYCLE: 16.821 ms
+[60.117] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[60.117] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.14,-12.40,1.50), have_target=1, have_trigger=1
+[60.117] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[60.158] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[60.158] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.18,-12.46,1.50), have_target=1, have_trigger=1
+[60.158] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[60.208] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[60.208] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.23,-12.52,1.50), have_target=1, have_trigger=1
+[60.208] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[60.237] [MAP] [UPDATE_VOXELS] occ=68, free=119, inflate=65, time=0.24ms
+[60.258] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[60.258] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.28,-12.59,1.50), have_target=1, have_trigger=1
+[60.258] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[60.291] [FSM] [TIME] CYCLE: 19.090 ms
+[60.302] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[60.302] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.32,-12.65,1.50), have_target=1, have_trigger=1
+[60.302] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[60.357] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[60.357] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.37,-12.71,1.50), have_target=1, have_trigger=1
+[60.357] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[60.423] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[60.423] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.42,-12.79,1.50), have_target=1, have_trigger=1
+[60.423] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[60.470] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[60.470] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.45,-12.83,1.50), have_target=1, have_trigger=1
+[60.470] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[60.492] [FSM] [TIME] CYCLE: 20.979 ms
+[60.514] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[60.515] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.49,-12.88,1.50), have_target=1, have_trigger=1
+[60.515] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[60.558] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[60.558] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.52,-12.91,1.50), have_target=1, have_trigger=1
+[60.558] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[60.606] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[60.606] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.55,-12.96,1.50), have_target=1, have_trigger=1
+[60.606] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[60.659] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[60.659] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.57,-12.99,1.50), have_target=1, have_trigger=1
+[60.659] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[60.686] [FSM] [TIME] CYCLE: 13.791 ms
+[60.701] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[60.701] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.60,-13.03,1.50), have_target=1, have_trigger=1
+[60.701] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[60.748] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[60.748] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.61,-13.05,1.50), have_target=1, have_trigger=1
+[60.748] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[60.791] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[60.791] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.63,-13.07,1.50), have_target=1, have_trigger=1
+[60.792] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[60.835] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[60.835] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.65,-13.09,1.50), have_target=1, have_trigger=1
+[60.835] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[60.844] [FSM] [TIME] CYCLE: 1.071 ms
+[60.877] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[60.877] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.66,-13.11,1.50), have_target=1, have_trigger=1
+[60.877] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[60.890] [FSM] [TIME] CYCLE: 17.837 ms
+[60.923] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[60.923] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.67,-13.12,1.50), have_target=1, have_trigger=1
+[60.923] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[60.966] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[60.966] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.67,-13.13,1.50), have_target=1, have_trigger=1
+[60.966] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[61.014] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[61.014] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.68,-13.14,1.50), have_target=1, have_trigger=1
+[61.014] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[61.058] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[61.058] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.68,-13.14,1.50), have_target=1, have_trigger=1
+[61.058] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[61.091] [FSM] [TIME] CYCLE: 18.813 ms
+[61.107] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[61.107] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[61.107] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[61.152] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[61.152] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[61.152] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[61.200] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[61.200] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[61.200] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[61.241] [MAP] [UPDATE_VOXELS] occ=57, free=54, inflate=65, time=0.33ms
+[61.244] [FSM] [TIME] CYCLE: 1.282 ms
+[61.252] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[61.252] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[61.252] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[61.289] [FSM] [TIME] CYCLE: 16.922 ms
+[61.295] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[61.295] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[61.295] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[61.343] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[61.344] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[61.353] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[61.401] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[61.401] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[61.401] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[61.446] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[61.446] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[61.446] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[61.490] [FSM] [TIME] CYCLE: 17.191 ms
+[61.500] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[61.500] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[61.500] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[61.544] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[61.544] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[61.544] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[61.596] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[61.596] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[61.596] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[61.642] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[61.642] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[61.642] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[61.689] [FSM] [TIME] CYCLE: 16.402 ms
+[61.692] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[61.692] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[61.692] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[61.737] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[61.737] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[61.738] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[61.780] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[61.780] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[61.780] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[61.825] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[61.825] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[61.825] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[61.876] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[61.876] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[61.876] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[61.889] [FSM] [TIME] CYCLE: 16.601 ms
+[61.925] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[61.925] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[61.925] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[61.974] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[61.974] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[61.974] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[62.019] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[62.019] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[62.019] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[62.072] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[62.072] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[62.072] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[62.091] [FSM] [TIME] CYCLE: 18.439 ms
+[62.122] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[62.122] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[62.122] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[62.168] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[62.168] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[62.168] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[62.218] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[62.218] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[62.218] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[62.237] [MAP] [UPDATE_VOXELS] occ=39, free=28, inflate=45, time=0.15ms
+[62.268] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[62.268] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[62.268] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[62.297] [FSM] [TIME] CYCLE: 24.314 ms
+[62.297] [FSM] [REPLAN] reason=periodic, elapsed=5.0s
+[62.307] [FSM] [STATE_CHANGE] EXEC_EXPLORATION -> UPDATE_FRONTIER
+[62.317] [FSM] [STATE_CHANGE] UPDATE_FRONTIER -> PLAN_VIEWPOINTS
+[62.317] [GEN] [INFO] ========== Starting viewpoint generation cycle ==========
+[62.317] [HIST] [CREATE_NODE] id=3, pos=(-6.69,-13.15,1.50), parent=2, neighbors=1, total=4
+[62.318] [ROS] [WARN] [EGOReplanFSM] Failed to generate trajectory, retrying...
+[62.318] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[62.318] [ROS] [INFO] [EGOReplanFSM] State: GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM)
+[62.318] [GEN] [FILTER_POINTS] Raw=6134, After=6134, Removed=0
+[62.318] [GEN] [INFO] HistoryNodes=4, FrontierGroups=4
+[62.335] [GEN] [CLUSTERS] formed=31 from 4 groups
+[62.335] [GEN] [SPLIT] after_split=31 clusters
+[62.335] [GEN] [LIMIT] clusters 31 -> 30 (keeping nearest)
+[62.350] [GEN] [CLUSTER_STATS] total=30, covered=0, no_viewpoint=6, produced=24
+[62.350] [GEN] [SAMPLING] covered=0, no_vp=6, produced=24, L1L2_candidates=24
+[62.350] [GEN] [DEDUP] After_dedup=17
+[62.350] [GEN] [YAW_OPT] checked=16 pairs, adjusted=6
+[62.350] [GEN] [FINAL] viewpoints=17, clusters=30, gen_time=32.56ms
+[62.350] [GEN] [TIME] TOTAL_GENERATE: 32.577 ms
+[62.350] [HIST] [PATH_FIND_START] from=(-6.69,-13.15,1.50) to=(-8.27,-2.91,1.50) nodes=4
+[62.350] [HIST] [PATH_NODES] start_idx=3(-6.69,-13.15), end_idx=2(-3.03,-8.18), dist_to_start=0.00, dist_to_end=7.43
+[62.350] [HIST] [CONNECTIVITY] nodes=4, edges=3, isolated=0
+[62.350] [HIST] [RAW_PATH] nodes=2
+[62.350] [HIST] [SIMPLIFIED] 2 -> 2 nodes
+[62.350] [HIST] [PATH_FOUND] waypoints=1: (-3.0,-8.2)
+[62.350] [HIST] [PATH_FIND_START] from=(-6.69,-13.15,1.50) to=(-6.37,-4.67,1.50) nodes=4
+[62.350] [HIST] [PATH_NODES] start_idx=3(-6.69,-13.15), end_idx=2(-3.03,-8.18), dist_to_start=0.00, dist_to_end=4.84
+[62.350] [HIST] [CONNECTIVITY] nodes=4, edges=3, isolated=0
+[62.350] [HIST] [RAW_PATH] nodes=2
+[62.350] [HIST] [SIMPLIFIED] 2 -> 2 nodes
+[62.350] [HIST] [PATH_FOUND] waypoints=1: (-3.0,-8.2)
+[62.350] [HIST] [PATH_FIND_START] from=(-6.69,-13.15,1.50) to=(-7.40,3.69,1.50) nodes=4
+[62.350] [HIST] [PATH_NODES] start_idx=3(-6.69,-13.15), end_idx=0(0.00,0.00), dist_to_start=0.00, dist_to_end=8.27
+[62.350] [HIST] [CONNECTIVITY] nodes=4, edges=3, isolated=0
+[62.350] [HIST] [RAW_PATH] nodes=4
+[62.350] [HIST] [SIMPLIFIED] 4 -> 3 nodes
+[62.350] [HIST] [PATH_FOUND] waypoints=2: (-3.0,-8.2)->(0.0,0.0)
+[62.350] [HIST] [PATH_FIND_START] from=(-6.69,-13.15,1.50) to=(-1.31,-15.33,1.50) nodes=4
+[62.350] [HIST] [PATH_NODES] start_idx=3(-6.69,-13.15), end_idx=3(-6.69,-13.15), dist_to_start=0.00, dist_to_end=5.80
+[62.350] [HIST] [PATH_SAME_NODE] node_idx=3
+[62.350] [HIST] [PATH_FIND_START] from=(-6.69,-13.15,1.50) to=(7.58,-1.93,1.50) nodes=4
+[62.350] [HIST] [PATH_NODES] start_idx=3(-6.69,-13.15), end_idx=1(4.56,-6.69), dist_to_start=0.00, dist_to_end=5.63
+[62.350] [HIST] [CONNECTIVITY] nodes=4, edges=3, isolated=0
+[62.350] [HIST] [RAW_PATH] nodes=3
+[62.350] [HIST] [SIMPLIFIED] 3 -> 3 nodes
+[62.350] [HIST] [PATH_FOUND] waypoints=2: (-3.0,-8.2)->(4.6,-6.7)
+[62.350] [HIST] [PATH_FIND_START] from=(-6.69,-13.15,1.50) to=(6.25,-11.98,1.50) nodes=4
+[62.350] [HIST] [PATH_NODES] start_idx=3(-6.69,-13.15), end_idx=1(4.56,-6.69), dist_to_start=0.00, dist_to_end=5.55
+[62.350] [HIST] [CONNECTIVITY] nodes=4, edges=3, isolated=0
+[62.350] [HIST] [RAW_PATH] nodes=3
+[62.350] [HIST] [SIMPLIFIED] 3 -> 3 nodes
+[62.350] [HIST] [PATH_FOUND] waypoints=2: (-3.0,-8.2)->(4.6,-6.7)
+[62.350] [HIST] [PATH_FIND_START] from=(-6.69,-13.15,1.50) to=(-3.09,7.20,1.50) nodes=4
+[62.350] [HIST] [PATH_NODES] start_idx=3(-6.69,-13.15), end_idx=0(0.00,0.00), dist_to_start=0.00, dist_to_end=7.83
+[62.350] [HIST] [CONNECTIVITY] nodes=4, edges=3, isolated=0
+[62.350] [HIST] [RAW_PATH] nodes=4
+[62.350] [HIST] [SIMPLIFIED] 4 -> 3 nodes
+[62.350] [HIST] [PATH_FOUND] waypoints=2: (-3.0,-8.2)->(0.0,0.0)
+[62.350] [HIST] [PATH_FIND_START] from=(-6.69,-13.15,1.50) to=(1.93,4.90,1.50) nodes=4
+[62.350] [HIST] [PATH_NODES] start_idx=3(-6.69,-13.15), end_idx=0(0.00,0.00), dist_to_start=0.00, dist_to_end=5.27
+[62.350] [HIST] [CONNECTIVITY] nodes=4, edges=3, isolated=0
+[62.350] [HIST] [RAW_PATH] nodes=4
+[62.350] [HIST] [SIMPLIFIED] 4 -> 3 nodes
+[62.350] [HIST] [PATH_FOUND] waypoints=2: (-3.0,-8.2)->(0.0,0.0)
+[62.350] [HIST] [PATH_FIND_START] from=(-6.69,-13.15,1.50) to=(4.10,-9.95,1.50) nodes=4
+[62.350] [HIST] [PATH_NODES] start_idx=3(-6.69,-13.15), end_idx=1(4.56,-6.69), dist_to_start=0.00, dist_to_end=3.29
+[62.350] [HIST] [CONNECTIVITY] nodes=4, edges=3, isolated=0
+[62.350] [HIST] [RAW_PATH] nodes=3
+[62.350] [HIST] [SIMPLIFIED] 3 -> 3 nodes
+[62.350] [HIST] [PATH_FOUND] waypoints=2: (-3.0,-8.2)->(4.6,-6.7)
+[62.350] [HIST] [PATH_FIND_START] from=(-6.69,-13.15,1.50) to=(7.89,-12.74,1.50) nodes=4
+[62.350] [HIST] [PATH_NODES] start_idx=3(-6.69,-13.15), end_idx=1(4.56,-6.69), dist_to_start=0.00, dist_to_end=6.91
+[62.350] [HIST] [CONNECTIVITY] nodes=4, edges=3, isolated=0
+[62.350] [HIST] [RAW_PATH] nodes=3
+[62.350] [HIST] [SIMPLIFIED] 3 -> 3 nodes
+[62.350] [HIST] [PATH_FOUND] waypoints=2: (-3.0,-8.2)->(4.6,-6.7)
+[62.350] [FSM] [SELECT_FIRST] idx=13, dist=0.99, yaw_diff=0.00, cost=0.99
+[62.350] [FSM] [PLAN_RESULT] clusters=30, viewpoints=17
+[62.350] [FSM] [PLAN_VP] time=32.90ms, viewpoints=17
+[62.350] [FSM] [SELECT_VP] idx=1/17, pos=(-7.66,-12.94,1.50), yaw=-0.53
+[62.350] [FSM] [SELECT_VP] pos=(-7.66,-12.94,1.50), yaw=-0.53, score=0.899
+[62.350] [FSM] [TIME] CYCLE: 32.972 ms
+[62.368] [PLAN] [STATE_CHANGE] GEN_NEW_TRAJ -> GEN_NEW_TRAJ (by FSM), pos=(-6.69,-13.15,1.50), have_target=1, have_trigger=1
+[62.588] [NODE] [INFO] Shutting down exploration planner node...
+
+=== Log Closed ===

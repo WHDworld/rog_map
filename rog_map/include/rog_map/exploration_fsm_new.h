@@ -34,7 +34,7 @@
 
 // 地图系统
 #include "star_mvf/star_mvf.h"
-
+#include "rog_map/PolyTraj.h"
 // 新架构模块
 #include "rog_map/history_graph.h"
 #include "rog_map/viewpoint_manager.h"
@@ -271,7 +271,10 @@ private:
         int id,
         const std::array<float, 4>& color,
         visualization_msgs::MarkerArray& markers);
-
+    
+    void polyTraj2ROSMsg(rog_map::PolyTraj &poly_msg);
+    bool planTrajectory(const Eigen::Vector3d& target, double target_yaw, 
+        const Eigen::Vector3d& target_vel, bool use_latest_traj);
 private:
     // ROS
     ros::NodeHandle nh_;
@@ -280,7 +283,6 @@ private:
     ros::Subscriber odom_sub_;
     ros::Subscriber trigger_sub_;
     
-    ros::Publisher pos_cmd_pub_;           // 位置命令
     ros::Publisher exploration_state_pub_; // 探索状态
     ros::Publisher frontier_cluster_pub_;  // 前沿簇可视化
     ros::Publisher viewpoint_marker_pub_;  // 视点可视化
@@ -289,6 +291,18 @@ private:
     ros::Publisher path_vis_pub_;          // 路径可视化（保留兼容）
     ros::Publisher viewpoint_vis_pub_;     // 视点可视化（保留兼容）
     
+    // 规划器相关
+    ros::Timer execution_timer_;          // 100Hz 执行定时器
+    ros::Publisher poly_traj_pub_; // 规划轨迹发布
+    ros::Publisher pos_cmd_pub_; // 位置命令发布
+    ros::Publisher replan_pub_; // 重规划通知发布
+    rog_map::PolyTraj current_traj_;       // 当前多项式轨迹数据
+    double start_time_;                    // 轨迹绝对开始时间
+    double traj_duration_;                 // 轨迹总时长
+
+    double last_yaw_, last_yaw_dot_;      // Yaw 平滑专用
+    Eigen::Vector3d last_pos_;             // 上一帧位置（用于异常处理）
+    std::pair<double, double> calculate_yaw_smooth(double t_cur, Eigen::Vector3d &pos, double dt);
     // 模块
     MapManager::Ptr map_manager_;
     GlobalMap::Ptr global_map_;
@@ -321,6 +335,8 @@ private:
     std::vector<WaypointInfo> waypoint_queue_; // 航点队列（历史节点+视点）
     int current_waypoint_idx_ = 0;        // 当前航点索引
     
+    DijkstraResult cached_dijkstra_result_;
+
     std::vector<Eigen::Vector3d> current_global_path_; // 用于长距离导航的拓扑路径
     bool use_global_path_ = false; // 标志位：当前是否在使用全局拓扑路径导航
     // 轨迹执行状态
