@@ -52,9 +52,10 @@ int HistoryGraph::update(const Eigen::Vector3d& curr_pos) {
     int new_id = addNodeInternal(curr_pos, nearest_id);
     performLoopClosureInternal(new_id);
     refreshSubGridOwnershipInternal();
+    ROS_INFO("HistoryGraph add node time: %f ms", (ros::Time::now().toSec() - t_start) * 1000.0);
     return new_id;
   }
-  ROS_INFO("HistoryGraph::update: add node time: %f", ros::Time::now().toSec() - t_start);
+  // ROS_INFO("HistoryGraph update time: %f ms", (ros::Time::now().toSec() - t_start) * 1000.0);
 
   return -1;
 }

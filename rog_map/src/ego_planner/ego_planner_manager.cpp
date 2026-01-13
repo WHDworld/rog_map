@@ -297,6 +297,52 @@ namespace ego_planner
 
     t_opt = ros::WallTime::now() - t_start;
 
+    // ====================================================================================
+    // [ADD] RETRY LOGIC for Long Detours / Infeasible Constraints
+    // ====================================================================================
+    if (!flag_success)
+    {
+        ROS_WARN("[EGOPlanner] Optimization failed! Retrying with extended time step...");
+        
+        // 策略：将时间分配扩大 1.5 倍，降低动力学要求
+        double ts_extended = ts * 1.5; 
+        
+        poly_traj::MinJerkOpt initMJO_retry;
+        // 使用新的时间片长度重新计算初值
+        bool init_success = computeInitState(start_pt, start_vel, start_acc, local_target_pt, local_target_vel,
+                                            flag_polyInit, flag_randomPolyTraj, ts_extended, initMJO_retry);
+        
+        if (init_success)
+        {
+             // 必须重新生成约束点，因为轨迹形状和采样点分布变了
+             std::vector<std::pair<int, int>> segments_retry;
+             Eigen::MatrixXd cstr_pts_retry = initMJO_retry.getInitConstraintPoints(ploy_traj_opt_->get_cps_num_prePiece_());
+             
+             auto check_ret_retry = ploy_traj_opt_->finelyCheckAndSetConstraintPoints(segments_retry, initMJO_retry, true);
+             if (check_ret_retry != PolyTrajOptimizer::CHK_RET::ERR)
+             {
+                 poly_traj::Trajectory initTrajRetry = initMJO_retry.getTraj();
+                 int PN_retry = initTrajRetry.getPieceNum();
+                 Eigen::MatrixXd all_pos_retry = initTrajRetry.getPositions();
+                 Eigen::MatrixXd innerPts_retry = all_pos_retry.block(0, 1, 3, PN_retry - 1);
+                 
+                 Eigen::Matrix<double, 3, 3> headState_retry, tailState_retry;
+                 headState_retry << initTrajRetry.getJuncPos(0), initTrajRetry.getJuncVel(0), initTrajRetry.getJuncAcc(0);
+                 tailState_retry << initTrajRetry.getJuncPos(PN_retry), initTrajRetry.getJuncVel(PN_retry), initTrajRetry.getJuncAcc(PN_retry);
+                 
+                 double final_cost_retry;
+                 bool retry_success = ploy_traj_opt_->optimizeTrajectory(headState_retry, tailState_retry, 
+                                                                       innerPts_retry, initTrajRetry.getDurations(), 
+                                                                       cstr_pts_retry, final_cost_retry);
+                                                                       
+                 if (retry_success) {
+                     ROS_INFO("[EGOPlanner] Retry SUCCESS! Detour planned.");
+                     flag_success = true;
+                     best_MJO = ploy_traj_opt_->getMinJerkOpt();
+                 }
+             }
+        }
+    }
     // save and display planned results
     if (!flag_success)
     {

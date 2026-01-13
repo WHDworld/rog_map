@@ -343,7 +343,7 @@ void ViewpointManager::update() {
         }
     }
     
-    ROS_INFO("[VP_MGR] Update: clusters=%zu, vp=%d | Time: frontier=%.1f, cluster=%.1f, filter=%.1f, gen=%.1fms, total=%.1fms",
+    ROS_DEBUG("[VP_MGR] Update: clusters=%zu, vp=%d | Time: frontier=%.1f, cluster=%.1f, filter=%.1f, gen=%.1fms, total=%.1fms",
              all_clusters.size(), generated_count, 
              t_get_frontier, t_cluster, t_filter, t_gen_vp, t_total);
     

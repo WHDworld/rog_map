@@ -93,7 +93,7 @@ viewpoint_manager:
   cluster_eps: 0.5                 # 聚类半径 [m]
   min_cluster_size: 50              # 最小簇大小
   cluster_split_threshold: 5.0      # 簇分裂阈值 [m]
-  max_clusters: 30                  # 最大簇数量
+  max_clusters: 20                  # 最大簇数量
   
   # ---------- 安全参数 ----------
   uav_radius: 0.3                   # 无人机机身半径 [m]
@@ -148,7 +148,7 @@ fsm:
   yaw_threshold: 0.3                # 到达最终视点偏航阈值 [rad]
   
   # 重规划触发
-  replan_check_interval: 0.5        # 重规划检查间隔 [s]
+  replan_check_interval: 2.0        # 重规划检查间隔 [s]
   waypoint_approach_dist: 1.5       # 航点接近距离 [m]
   trajectory_timeout: 10.0          # 轨迹超时 [s]
   coverage_trigger_ratio: 0.3       # 覆盖触发比例

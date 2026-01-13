@@ -193,17 +193,7 @@ private:
      * @return 是否规划成功
      */
     bool planNextWaypoint();
-    
-    /**
-     * @brief 调用规划器生成轨迹
-     * @param target 目标位置
-     * @param target_yaw 目标朝向
-     * @param target_vel 目标速度（通常为0悬停，或飞越时有速度）
-     * @return 是否规划成功
-     */
-    bool callPlanner(const Eigen::Vector3d& target, double target_yaw,
-                     const Eigen::Vector3d& target_vel = Eigen::Vector3d::Zero());
-    
+        
     // ==================== EXEC_EXPLORATION 检测方法 ====================
     
     /**
@@ -296,13 +286,45 @@ private:
     ros::Publisher poly_traj_pub_; // 规划轨迹发布
     ros::Publisher pos_cmd_pub_; // 位置命令发布
     ros::Publisher replan_pub_; // 重规划通知发布
+    ros::Publisher traj_vis_pub;
+
     rog_map::PolyTraj current_traj_;       // 当前多项式轨迹数据
-    double start_time_;                    // 轨迹绝对开始时间
+    double traj_start_time_;               // 轨迹绝对开始时间
     double traj_duration_;                 // 轨迹总时长
+    bool has_trajectory_ = false;
+    ros::Time last_replan_time_;
+    double end_yaw_;                       // 轨迹末端期望 Yaw
 
     double last_yaw_, last_yaw_dot_;      // Yaw 平滑专用
     Eigen::Vector3d last_pos_;             // 上一帧位置（用于异常处理）
-    std::pair<double, double> calculate_yaw_smooth(double t_cur, Eigen::Vector3d &pos, double dt);
+    
+    // 4. 双缓存机制 (处理 Time_Start > Time_Now 的情况)
+    // 当收到一条为了平滑而设定在"未来"开始的轨迹时，我们需要保留旧轨迹继续飞，直到新轨迹开始
+    rog_map::PolyTraj prev_traj_;          // 旧轨迹缓存
+    bool has_prev_traj_ = false;          // 是否有旧轨迹
+    double prev_traj_start_time_;
+    double prev_traj_duration_;
+
+    // ==================== [新增] 核心函数声明 ====================
+    
+    /**
+     * @brief 100Hz 高频执行回调 (移植自 ego_traj_server::cmdCallback)
+     */
+     void executionCallback(const ros::TimerEvent& e);
+
+    /**
+     * @brief 偏航角平滑计算 (移植自 ego_traj_server::calculate_yaw)
+     * 计算受最大角速度/角加速度限制的平滑 Yaw
+     */
+     std::pair<double, double> calculate_yaw(double t_cur, Eigen::Vector3d &pos, double dt);
+
+     /**
+      * @brief 规划指令发布
+      */
+     void publishCmd(const Eigen::Vector3d& p, const Eigen::Vector3d& v, 
+                     const Eigen::Vector3d& a, double yaw, double yaw_dot);
+    
+    void visualizeTrajectory();
     // 模块
     MapManager::Ptr map_manager_;
     GlobalMap::Ptr global_map_;
@@ -338,13 +360,13 @@ private:
     DijkstraResult cached_dijkstra_result_;
 
     std::vector<Eigen::Vector3d> current_global_path_; // 用于长距离导航的拓扑路径
+
     bool use_global_path_ = false; // 标志位：当前是否在使用全局拓扑路径导航
     // 轨迹执行状态
     ros::Time trajectory_start_time_;
     ros::Time last_replan_check_time_;
     ros::Time last_coverage_check_time_;
     ros::Time last_collision_check_time_;
-    bool has_trajectory_ = false;
     
     // 悬停状态
     Eigen::Vector3d hover_pos_ = Eigen::Vector3d::Zero();
