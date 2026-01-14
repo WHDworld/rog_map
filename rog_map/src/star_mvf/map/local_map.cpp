@@ -353,6 +353,34 @@ void LocalMap::insertPointCloud(const sensor_msgs::PointCloud2& cloud, const Pos
     }
 }
 
+void LocalMap::insertClearingCloud(const sensor_msgs::PointCloud2& cloud, const Position& sensor_pos) {
+    pcl::PointCloud<pcl::PointXYZ> pcl_cloud;
+    pcl::fromROSMsg(cloud, pcl_cloud);
+
+    std::lock_guard<std::mutex> lock(map_mutex_);
+    
+    std::unordered_set<int> empty_set;
+    
+    int point_counter = 0;
+    for (const auto& pt : pcl_cloud) {
+        // 简单降采样
+        if (config_.lidar_downsample_filter > 1) {
+            if ((point_counter++ % config_.lidar_downsample_filter) != 0) {
+                continue;
+            }
+        }
+        
+        Position end_pos(pt.x, pt.y, pt.z);
+        // 直接进行 Raycast，不维护 occupied set，意味着会清除沿途所有体素
+        // 遇到之前地图已知的占据体素是否停止？
+        // raycast(..., empty_set) 会读取 map_mutex_ 保护的 occupancy_buffer_吗？
+        // raycast() 内部不会读取 occupancy_buffer_ 来停止，它只根据传入的 occupied_voxels 停止。
+        // 所以这里传入 empty_set 意味着强行清除沿途所有内容，这是正确的（相信当前传感器）。
+        
+        raycast(sensor_pos, end_pos, empty_set);
+    }
+}
+
 void LocalMap::raycast(const Position& start, const Position& end, 
                        const std::unordered_set<int>& occupied_voxels) {
     Position dir = end - start;

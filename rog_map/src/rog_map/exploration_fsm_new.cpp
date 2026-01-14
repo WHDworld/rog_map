@@ -303,6 +303,7 @@ void ExplorationFSMNew::processWaitTrigger() {
     if (triggered_) {
         // 检查是否有有效视点        
         if (viewpoint_manager_->hasValidViewpoints()) {
+            
             transitState(ExplorationState::LOCALPLAN, "Triggered with viewpoints");
         } else {
             // 没有视点，等待视点生成
@@ -319,6 +320,7 @@ void ExplorationFSMNew::processLocalPlan() {
     ros::Time t_start = ros::Time::now();
     
     // 1. 选择最佳视点 (两阶段 + 缓存)
+    // 1. 选择最佳视点 (两阶段 + 缓存)
     int selected_vp_id = -1;
     if (!selectBestViewpoint(selected_vp_id)) {
         // 真的没视点了，检查是否任务完成
@@ -326,6 +328,11 @@ void ExplorationFSMNew::processLocalPlan() {
             LOG_INFO("Exploration Complete! No more viewpoints.");
             transitState(ExplorationState::WAIT_TRIGGER, "Done");
         } else {
+            // 可能全被拉黑了，重置黑名单重试
+            if (!blacklisted_clusters_.empty()) {
+                 ROS_WARN("[FSM] All VPs blacklisted. Clearing blacklist to retry.");
+                 blacklisted_clusters_.clear();
+            }
             // 可能只是暂时没算出来，悬停等待
             ROS_WARN_THROTTLE(1.0, "[FSM] No reachable viewpoint found, retrying...");
         }
@@ -337,14 +344,20 @@ void ExplorationFSMNew::processLocalPlan() {
     ros::Time t_select_vp = ros::Time::now();
     // 2. 生成导航路径 (复用缓存)
     if (!planToViewpoint(selected_vp_id)) {
-        ROS_WARN("[FSM] Failed to generate path to VP %d.", selected_vp_id);
+        ROS_WARN("[FSM] Failed to generate path to VP %d. Blacklisting it.", selected_vp_id);
+        
+        // [New] 加入黑名单，强制下一次选择其他视点
+        blacklisted_clusters_.insert(selected_vp_id);
         
         // 规划失败直接放弃本次决策，悬停，等待下一轮 FSM 循环重新选择
-        // (不需要标记 Invalid，因为可能是暂时的局部规划器失败)
         hover_pos_ = odom_pos_;
         hover_yaw_ = odom_yaw_;
         publishHoverCmd();
         return;
+    }
+    else {
+        // [New] 规划成功，清空黑名单
+        blacklisted_clusters_.clear();
     }
     ros::Time t_plan_to_vp = ros::Time::now();
     // 3. 锁定目标，准备起飞
@@ -398,6 +411,9 @@ void ExplorationFSMNew::processExecExploration() {
         if (checkCollision()) {
             LOG_WARN("Collision detected ahead, stopping current task.");
             has_trajectory_ = false;
+            // [Fix] Update hover state to prevent stale yaw
+            hover_pos_ = odom_pos_;
+            hover_yaw_ = last_yaw_;
             transitState(ExplorationState::LOCALPLAN, "Collision detected");
             return;
         }
@@ -434,30 +450,48 @@ void ExplorationFSMNew::processExecExploration() {
     }
     
     // 2. 航点追踪与切换 (核心执行逻辑)
+    // 2. 航点追踪与切换 (核心执行逻辑)
     if (checkReachWaypoint()) {
-        // 到达当前航点，索引+1
-        current_waypoint_idx_++;
+        // [Safe Switch] 尝试切换到下一个航点
+        int next_idx = current_waypoint_idx_ + 1;
         
-        // 2.1 检查是否到达所有航点 (即到达了最终视点)
-        if (current_waypoint_idx_ >= static_cast<int>(waypoint_queue_.size())) {
+        // 2.1 如果是最终视点，直接切换
+        if (next_idx >= static_cast<int>(waypoint_queue_.size())) {
+            current_waypoint_idx_ = next_idx;
             ROS_INFO("[FSM] EXEC_EXPLORATION: Reached Final Viewpoint %d. Task Complete.", current_viewpoint_id_);
             total_viewpoints_visited_++;
             
-            // 任务成功：直接切回 LOCALPLAN 进行下一轮决策
-            // (不需要手动标记已探索，ViewpointManager 会根据传感器覆盖情况自动移除无效视点)
             has_trajectory_ = false;
+            hover_pos_ = odom_pos_;
+            hover_yaw_ = last_yaw_;
             transitState(ExplorationState::LOCALPLAN, "Reached Goal");
             return;
         }
-        double t_start_next_waypoint = ros::Time::now().toSec();
-        // 2.2 还没到终点，规划到下一个航点
-        if (!planNextWaypoint()) {
-            ROS_WARN("Failed to plan path to next waypoint (idx %d).", current_waypoint_idx_);
-            has_trajectory_ = false;
-            transitState(ExplorationState::LOCALPLAN, "Plan Failed");
-            return;
-        }    
-        ROS_INFO("[FSM] EXEC_EXPLORATION: Plan next waypoint success, plan time: %f ms", (ros::Time::now().toSec() - t_start_next_waypoint) * 1000.0);
+        
+        // 2.2 如果是中间点，先尝试规划，只有规划成功才真的切换
+        int prev_idx = current_waypoint_idx_;
+        current_waypoint_idx_ = next_idx; // 暂时切换，供 planNextWaypoint 使用
+
+        if (planNextWaypoint()) {
+             // 成功！确认切换
+             ROS_INFO("[FSM] EXEC_EXPLORATION: Safe switch to WP%d success (dist<thresh).", next_idx);
+        } else {
+             // 失败！说明虽然距离满足阈值 (e.g. 2.0m)，但位置不好无法过弯
+             // 回退索引，继续执行当前轨迹，飞得更近一点再试
+             current_waypoint_idx_ = prev_idx;
+             
+             // 如果距离已经非常近 (<0.5m) 且还是规划失败，那只能报错重置了
+             if ((waypoint_queue_[current_waypoint_idx_].position - odom_pos_).norm() < 0.5) {
+                ROS_WARN("Failed to plan path to next waypoint (idx %d) even at close range.", next_idx);
+                has_trajectory_ = false;
+                hover_pos_ = odom_pos_;
+                hover_yaw_ = last_yaw_;
+                transitState(ExplorationState::LOCALPLAN, "Plan Failed");
+                return;
+             }
+             // 否则，保持沉默或低频警告，继续接近
+             ROS_DEBUG_THROTTLE(1.0, "[FSM] Early switch to WP%d failed. Continuing approach to WP%d.", next_idx, prev_idx);
+        }
     }
     
     // 3. 超时检测
@@ -573,6 +607,8 @@ bool ExplorationFSMNew::selectBestViewpoint(int& selected_viewpoint_id) {
     // 运行优化版 Dijkstra (只计算必要的 targets)
     if (start_node_id != -1 && !target_anchors.empty()) {
         history_graph_->computeDijkstraToTargets(start_node_id, target_anchors, cached_dijkstra_result_);
+    } else {
+        ROS_WARN_THROTTLE(1.0, "[SelectVP] Dijkstra Skipped. StartNode: %d. Targets: %zu", start_node_id, target_anchors.size());
     }
 
     // 定义两阶段评估 Lambda
@@ -582,22 +618,63 @@ bool ExplorationFSMNew::selectBestViewpoint(int& selected_viewpoint_id) {
 
         for (const auto& cluster : clusters) {
             if (!cluster.has_viewpoint) continue;
+            
+            // Skip blacklisted clusters
+            if (blacklisted_clusters_.count(cluster.cluster_id)) continue;
 
             // 距离初筛
             double direct_dist = (cluster.viewpoint_position.cast<double>() - current_pos).norm();
             if (direct_dist > max_range) continue;
 
-            // [级联评估] RayCast -> Local A* -> Graph Look-up
-            // 传入 cached_dijkstra_result_ 进行 O(1) 查表
-            double path_cost = history_graph_->evaluateViewpointCost(
-                current_pos, 
-                cluster.history_node_id, 
-                cluster.viewpoint_position.cast<double>(), 
-                cached_dijkstra_result_, 
-                nullptr // 不需要生成路径
-            );
+            // [Robustness] Evaluate Multiple Anchors
+            // The pre-assigned cluster.history_node_id might be blocked.
+            // Search for other nearby nodes that might offer a valid path.
+            double min_path_cost = std::numeric_limits<double>::max();
+            int best_anchor = -1;
 
-            if (path_cost >= std::numeric_limits<double>::max()) continue;
+            // Get candidates (search radius 15.0m covers typical gaps)
+            // Use cached `target_anchors` if they are in range? 
+            // Better to just search spatially.
+            auto candidate_anchors = history_graph_->findNodesInRange(cluster.viewpoint_position.cast<double>(), 10.0);
+            
+            // Ensure the original ID is included if valid
+            bool has_orig = false;
+            for(int id : candidate_anchors) if(id == cluster.history_node_id) has_orig = true;
+            if(!has_orig && cluster.history_node_id != -1) candidate_anchors.push_back(cluster.history_node_id);
+
+            // Evaluate all candidates
+            for (int anchor_id : candidate_anchors) {
+                // If anchor is not reachable from StartNode, skip
+                if (cached_dijkstra_result_.dists.find(anchor_id) == cached_dijkstra_result_.dists.end() ||
+                    cached_dijkstra_result_.dists[anchor_id] >= std::numeric_limits<double>::max()) {
+                    continue;
+                }
+
+                double cost = history_graph_->evaluateViewpointCost(
+                    current_pos, 
+                    anchor_id, 
+                    cluster.viewpoint_position.cast<double>(), 
+                    cached_dijkstra_result_, 
+                    nullptr
+                );
+                
+                if (cost < min_path_cost) {
+                    min_path_cost = cost;
+                    best_anchor = anchor_id;
+                }
+            }
+
+            if (min_path_cost >= std::numeric_limits<double>::max()) {
+                ROS_WARN_THROTTLE(1.0, "[SelectVP] Cluster %d blocked (Tried %zu anchors). OrigNode: %d. StartNode: %d.", 
+                                  cluster.cluster_id, candidate_anchors.size(), cluster.history_node_id, start_node_id);
+                continue;
+            }
+
+            // [Important] Update the cluster's history node to the BEST one found
+            // This ensures subsequent planning uses the correct anchor
+            const_cast<FrontierCluster&>(cluster).history_node_id = best_anchor;
+
+            double path_cost = min_path_cost;
 
             // 评分: 加大距离惩罚防止远距离抖动
             // Score = Gain * 10 / (Cost + 1)
@@ -661,26 +738,21 @@ bool ExplorationFSMNew::planToViewpoint(int viewpoint_id) {
 
     ROS_INFO("PlanToViewpoint: current_pos: (%.2f,%.2f,%.2f), best_vp_pos: (%.2f,%.2f,%.2f) best_vp_yaw: %.2f", current_pos.x(), current_pos.y(), current_pos.z(), vp_pos.x(), vp_pos.y(), vp_pos.z(), vp_yaw);
     // 2. 路径生成 (Path Generation)
+    // 2. 路径生成 (Path Generation) [Optimized]
     std::vector<Eigen::Vector3d> global_path;
     double path_len = 0.0;
-    bool direct_success = false;
-
-    // A. 尝试极速近场连接 (<8m)
+    
     double dist_direct = (current_pos - vp_pos).norm();
-    if (dist_direct < 8.0) {
-        auto local_path = history_graph_->runLocalAStar(current_pos, vp_pos);
-        if (!local_path.empty()) {
-            double len = history_graph_->calculatePathLength(local_path);
-            if (len < dist_direct * 2.0) { // 绕路不严重
-                global_path = history_graph_->shortcutPath(current_pos, local_path);
-                path_len = len;
-                direct_success = true;
-            }
-        }
-    }
-
-    // B. 拓扑路径重建 (如果近场失败)
-    if (!direct_success) {
+    
+    // 【策略 A】近距离 (< 5.0m) -> 直接交给规划器 (Direct)
+    if (dist_direct < 5.0) {
+        global_path.push_back(current_pos);
+        global_path.push_back(vp_pos);
+        path_len = dist_direct;
+        // ROS_INFO("[FSM] Plan: Close range (%.1fm). Direct.", dist_direct);
+    } 
+    // 【策略 B】远距离 (>= 5.0m) -> 拓扑引导 (Topological)
+    else {
         std::vector<Eigen::Vector3d> topo_path;
         bool graph_ok = false;
         
@@ -692,45 +764,55 @@ bool ExplorationFSMNew::planToViewpoint(int viewpoint_id) {
             );
         }
 
-        if (!graph_ok || topo_path.empty()) {
-            // 如果拓扑路径重建失败，尝试最后的挣扎：直接跑一次 Local A*
-            // 这在距离稍远但还在 A* 搜索范围内时有用
+        if (graph_ok && !topo_path.empty()) {
+            std::cout << "\033[1;33m[TopoPath] Backtracking Nodes:\033[0m" << std::endl;
+            for (size_t k = 0; k < topo_path.size(); ++k) {
+                std::cout << "  Node " << k << ": (" 
+                          << topo_path[k].x() << ", " 
+                          << topo_path[k].y() << ", " 
+                          << topo_path[k].z() << ")" << std::endl;
+            }
+        }
+
+        if (graph_ok && !topo_path.empty()) {
+            // User: "Directly use intermediate history nodes as path points, no A*"
+            global_path.push_back(current_pos);
+            
+            // 添加拓扑节点 (过滤掉离当前位置太近的起始节点)
+            for (const auto& p : topo_path) {
+                if ((p - global_path.back()).norm() > 1.0) {
+                    global_path.push_back(p);
+                }
+            }
+            
+            // 添加最终视点
+            if ((vp_pos - global_path.back()).norm() > 0.5) {
+                global_path.push_back(vp_pos);
+            } else {
+                global_path.back() = vp_pos; // 修正终点
+            }
+            
+            // [Optimization] 路径剪枝：尝试跳过不必要的中间历史节点
+            // 如果能直接飞到下一个节点，就不要去中间的那个（解决V字形回溯问题）
+            global_path = history_graph_->shortcutPath(current_pos, global_path);
+            
+            // 计算总长
+            path_len = 0;
+            for(size_t i=0; i<global_path.size()-1; ++i) {
+                path_len += (global_path[i+1] - global_path[i]).norm();
+            }
+            // ROS_INFO("[FSM] Plan: Long range. Using %zu topo nodes.", topo_path.size());
+        } else {
+            // 拓扑失败的回退：尝试 Local A* (虽然可能也不会成功)
             auto fallback_path = history_graph_->runLocalAStar(current_pos, vp_pos);
             if (!fallback_path.empty()) {
                 global_path = history_graph_->shortcutPath(current_pos, fallback_path);
                 path_len = history_graph_->calculatePathLength(global_path);
+                ROS_WARN("[FSM] Plan: Topo failed. Fallback to Local A*.");
             } else {
-                ROS_ERROR("PlanToViewpoint: fallback_path is empty");
+                ROS_ERROR("[FSM] Plan: Topo failed and Direct failed.");
                 return false;
             }
-        } else {
-            // 拼接: Entry + Graph + Exit
-            Eigen::Vector3d start_node_pos = topo_path.front();
-            Eigen::Vector3d anchor_node_pos = topo_path.back();
-
-            auto entry_path = history_graph_->runLocalAStar(current_pos, start_node_pos);
-            auto exit_path = history_graph_->runLocalAStar(anchor_node_pos, vp_pos);
-
-            if (entry_path.empty() || exit_path.empty()) 
-            {
-                ROS_ERROR("PlanToViewpoint: entry_path or exit_path is empty");
-                return false;
-            }
-
-            global_path.insert(global_path.end(), entry_path.begin(), entry_path.end());
-            // 中间的拓扑点
-            if (topo_path.size() > 1) {
-                // 跳过首尾避免重复
-                global_path.insert(global_path.end(), topo_path.begin() + 1, topo_path.end());
-            }
-            global_path.insert(global_path.end(), exit_path.begin(), exit_path.end());
-            
-            // 确保终点精确
-            if ((global_path.back() - vp_pos).norm() > 0.01) global_path.push_back(vp_pos);
-
-            // 再次拉直优化
-            global_path = history_graph_->shortcutPath(current_pos, global_path);
-            path_len = history_graph_->calculatePathLength(global_path);
         }
     }
 
@@ -869,6 +951,8 @@ bool ExplorationFSMNew::planTrajectory(const Eigen::Vector3d& target, double tar
              has_prev_traj_ = true;
              prev_traj_start_time_ = traj_start_time_;
              prev_traj_duration_ = traj_duration_;
+             // [Fix] Save the actual trajectory object for execution
+             prev_traj_ = planner_manager_->traj_.local_traj.traj;
         }
     } 
     else if (use_latest_traj && has_trajectory_) {
@@ -931,6 +1015,18 @@ std::pair<double, double> ExplorationFSMNew::calculate_yaw(double t_cur, Eigen::
     auto getPos = [&](double t, const rog_map::PolyTraj& traj_data) -> Eigen::Vector3d {
         return planner_manager_->traj_.local_traj.traj.getPos(t); 
     };
+    
+    // Helper lambda for angle normalization
+    auto normalizeAngle = [](double angle) {
+        while (angle > M_PI) angle -= 2 * M_PI;
+        while (angle < -M_PI) angle += 2 * M_PI;
+        return angle;
+    };
+
+    auto angleDiff = [&](double target, double current) {
+        double diff = target - current;
+        return normalizeAngle(diff);
+    };
 
     // 为简化工程，建议直接使用 planner_manager_ 中的 traj 数据
     poly_traj::Trajectory* active_traj_ptr = &planner_manager_->traj_.local_traj.traj;
@@ -941,13 +1037,30 @@ std::pair<double, double> ExplorationFSMNew::calculate_yaw(double t_cur, Eigen::
         dir = active_traj_ptr->getPos(traj_duration_) - pos;
     }
 
-    double yaw_temp = dir.norm() > 0.1 ? atan2(dir(1), dir(0)) : last_yaw_;
+    double velocity_yaw = dir.norm() > 0.1 ? atan2(dir(1), dir(0)) : last_yaw_;
+    double yaw_temp = velocity_yaw; // Default to velocity yaw
 
-    // 2. 动态限制 (Dynamic Limits)
-    double d_yaw = yaw_temp - last_yaw_;
-    // 归一化到 [-PI, PI]
-    while (d_yaw >= M_PI) d_yaw -= 2 * M_PI;
-    while (d_yaw < -M_PI) d_yaw += 2 * M_PI;
+    // 2. 混合策略 (Fly-and-Turn)
+    // - 前70%：跟随速度方向（看路）
+    // - 后30%：平滑过渡到目标Yaw（看目标）
+    // 当前提是 target_yaw 有效（在这个函数里 end_yaw_ 应该是有效的）
+    
+    double progress = std::min(1.0, t_cur / traj_duration_);
+    const double transition_start = 0.7;  // 70% 时开始过渡
+
+    if (progress > transition_start) {
+        // 后 30%：从当前速度方向平滑过渡到目标 yaw
+        double transition_progress = (progress - transition_start) / (1.0 - transition_start);
+        // 使用平滑插值函数: 3*t^2 - 2*t^3
+        double smooth_progress = transition_progress * transition_progress * (3.0 - 2.0 * transition_progress);
+        
+        // 从速度方向过渡到目标 yaw
+        double yaw_diff = angleDiff(end_yaw_, velocity_yaw);
+        yaw_temp = normalizeAngle(velocity_yaw + smooth_progress * yaw_diff);
+    }
+
+    // 3. 动态限制 (Dynamic Limits)
+    double d_yaw = angleDiff(yaw_temp, last_yaw_);
 
     const double YDM = d_yaw >= 0 ? YAW_DOT_MAX_PER_SEC : -YAW_DOT_MAX_PER_SEC;
     const double YDDM = d_yaw >= 0 ? YAW_DOT_DOT_MAX_PER_SEC : -YAW_DOT_DOT_MAX_PER_SEC;
@@ -965,7 +1078,7 @@ std::pair<double, double> ExplorationFSMNew::calculate_yaw(double t_cur, Eigen::
     }
     
     double yaw_dot = d_yaw / dt;
-    double yaw = last_yaw_ + d_yaw;
+    double yaw = normalizeAngle(last_yaw_ + d_yaw);
 
     // 更新状态
     last_yaw_ = yaw;
@@ -988,13 +1101,73 @@ void ExplorationFSMNew::executionCallback(const ros::TimerEvent& e) {
     Eigen::Vector3d pos, vel, acc;
     std::pair<double, double> yaw_state;
 
-    // Case 1: 新轨迹还没开始 (预测期)
+    // Case 1: 新轨迹还没开始 (预测期) -> 执行旧轨迹 (Seamless Stitching)
     if (t_cur < 0) {
         if (has_prev_traj_) {
             double t_prev = (now.toSec() - prev_traj_start_time_);
-            if (t_prev < prev_traj_duration_) {
-                publishCmd(last_pos_, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), last_yaw_, 0);
+            // [Fix] Add safety check for empty trajectory to prevent SEGFAULT
+            if (prev_traj_.getPieceNum() > 0 && t_prev < prev_traj_duration_) {
+                // [Fix] Execute previous trajectory instead of holding
+                // Clamp time to total duration to be safe (though < prev_traj_duration_ check helps)
+                double t_eval = std::min(t_prev, prev_traj_.getTotalDuration());
+                pos = prev_traj_.getPos(t_eval);
+                vel = prev_traj_.getVel(t_eval);
+                acc = prev_traj_.getAcc(t_eval);
+
+                // Manual Yaw Calculation for Prev Traj (Fly-and-Turn)
+                // We use local logic here to avoid messing with calculate_yaw's dependency on current manager
+                Eigen::Vector3d dir;
+                double time_forward = 0.5;
+                // Clamp lookahead time
+                double t_forward_eval = std::min(t_prev + time_forward, prev_traj_.getTotalDuration());
+                dir = prev_traj_.getPos(t_forward_eval) - pos;
+                
+                double velocity_yaw = dir.norm() > 0.1 ? atan2(dir(1), dir(0)) : last_yaw_;
+                
+                // Yaw Blending for Prev Traj
+                double yaw_target = velocity_yaw;
+                double progress = std::min(1.0, t_prev / prev_traj_duration_);
+                if (progress > 0.7) {
+                     // Note: We don't have the old 'end_yaw' stored easily unless we added it to member.
+                     // But usually replan happens before completion. 
+                     // Fallback: just follow velocity or hold last blend. 
+                     // Given replan usually happens mid-flight, velocity yaw is fine.
+                     yaw_target = velocity_yaw; 
+                }
+
+                // Apply Dynamic Limits
+                // Helper standardizes angle
+                 auto normalizeAngle = [](double angle) {
+                    while (angle > M_PI) angle -= 2 * M_PI;
+                    while (angle < -M_PI) angle += 2 * M_PI;
+                    return angle;
+                };
+                auto angleDiff = [&](double target, double current) {
+                    return normalizeAngle(target - current);
+                };
+
+                double d_yaw = angleDiff(yaw_target, last_yaw_);
+                constexpr double YDM = 2 * M_PI; // Max Yaw Rate
+                constexpr double YDDM = 5 * M_PI; // Max Yaw Acc
+                double d_yaw_max;
+                 if (fabs(last_yaw_dot_ + dt * YDDM) <= fabs(YDM)) {
+                    d_yaw_max = last_yaw_dot_ * dt + 0.5 * YDDM * dt * dt;
+                } else {
+                    double t1 = (YDM - last_yaw_dot_) / YDDM;
+                    d_yaw_max = ((dt - t1) + dt) * (YDM - last_yaw_dot_) / 2.0;
+                }
+                if (fabs(d_yaw) > fabs(d_yaw_max)) d_yaw = d_yaw_max;
+                
+                double yaw_dot = d_yaw / dt;
+                double yaw = normalizeAngle(last_yaw_ + d_yaw);
+                
+                last_yaw_ = yaw;
+                last_yaw_dot_ = yaw_dot;
+                last_pos_ = pos; // Important for next frame continuity
+                
+                publishCmd(pos, vel, acc, yaw, yaw_dot);
             } else {
+                // Old traj finished, just hold
                 publishCmd(last_pos_, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), last_yaw_, 0);
             }
         } else {
@@ -1021,29 +1194,13 @@ void ExplorationFSMNew::executionCallback(const ros::TimerEvent& e) {
         auto& traj = planner_manager_->traj_.local_traj.traj;
         pos = traj.getPos(traj_duration_);
         
-        // --- [新增] 主动对准逻辑 ---
-        double yaw_err = end_yaw_ - last_yaw_;
+        // --- [Fix] Replace manual rotation with unified calculate_yaw ---
+        // calculate_yaw will handle the target alignment with dynamic limits (Fly-and-Turn)
+        // Even after traj finishes, we keep calling this to ensure precise alignment
+        yaw_state = calculate_yaw(t_cur, pos, dt);
+        last_pos_ = pos;
         
-        // 归一化角度差到 [-PI, PI]
-        while (yaw_err >= M_PI) yaw_err -= 2 * M_PI;
-        while (yaw_err < -M_PI) yaw_err += 2 * M_PI;
-        double yaw_cmd = last_yaw_;
-        double yaw_dot_cmd = 0.0;
-        // 如果误差较大，则旋转
-        if (std::abs(yaw_err) > config_.yaw_threshold / 2.0) { // 留一点余量
-            double max_step = config_.max_yaw_rate * dt;
-            if (std::abs(yaw_err) > max_step) {
-                yaw_dot_cmd = (yaw_err > 0) ? config_.max_yaw_rate : -config_.max_yaw_rate;
-                yaw_cmd = last_yaw_ + yaw_dot_cmd * dt;
-            } else {
-                yaw_cmd = end_yaw_;
-            }
-        } 
-        
-        // 更新 last_yaw_ 以便下一帧连续
-        last_yaw_ = yaw_cmd;
-        // ---------------------------
-        publishCmd(pos, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), last_yaw_, 0);
+        publishCmd(pos, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), yaw_state.first, yaw_state.second);
     }
 
     static int vis_counter = 0;
@@ -1162,8 +1319,8 @@ bool ExplorationFSMNew::checkReachWaypoint() {
     // A. 如果是中间路径点 (Intermediate Waypoint)
     // 只要距离足够近，就算通过，允许飞越 (Fly-through)
     if (!wp.is_viewpoint) {
-        // 使用稍大的阈值 (e.g., 0.8m ~ 1.5m) 保证流畅性
-        return dist < std::max(config_.reach_threshold, 0.8); 
+        // 使用稍大的阈值 (e.g., 0.4m) 保证流畅性，但不能太大否则会切墙
+        return dist < std::max(config_.reach_threshold, 2.0); 
     }
     
     // B. 如果是最终视点 (Target Viewpoint)
@@ -1283,19 +1440,15 @@ void ExplorationFSMNew::publishTrajectoryCmd() {
     cmd.acceleration.y = acc.y();
     cmd.acceleration.z = acc.z();
     
-    // 计算yaw（指向当前航点）
-    if (current_waypoint_idx_ < static_cast<int>(waypoint_queue_.size())) {
-        const WaypointInfo& wp = waypoint_queue_[current_waypoint_idx_];
-        cmd.yaw = wp.yaw;
-    } else {
-        cmd.yaw = hover_yaw_;
-    }
+    // [Fix] 悬停模式必须严格保持 hover_yaw_，禁止尝试朝向潜在的下一个航点
+    // 因为在 LOCALPLAN 阶段，waypoint_queue_ 可能是过期的，导致机头乱转
+    cmd.yaw = hover_yaw_;
     
     pos_cmd_pub_.publish(cmd);
     
     // 更新悬停位置
     hover_pos_ = pos;
-    hover_yaw_ = cmd.yaw;
+    // hover_yaw_ = cmd.yaw; // 保持不变
 }
 
 double ExplorationFSMNew::getYawDiff(double yaw1, double yaw2) {

@@ -263,13 +263,61 @@ void ViewpointManager::update() {
     filterOverheadClusters(all_clusters);
     
     // Step 6: 限制簇数量（按距离排序保留最近的）
-    if (all_clusters.size() > static_cast<size_t>(config_.max_clusters)) {
-        std::sort(all_clusters.begin(), all_clusters.end(),
-                  [&uav_pos](const FrontierCluster& a, const FrontierCluster& b) {
-                      return (a.centroid - uav_pos).head<2>().norm() < 
-                             (b.centroid - uav_pos).head<2>().norm();
-                  });
-        all_clusters.resize(config_.max_clusters);
+    // Step 6: 限制簇数量（基于打分 + NMS空间抑制）
+    // 目的：避免路口处生成大量重复视点，同时保留远处的的高收益区域
+    if (all_clusters.size() > 0) {
+        // 1. 计算评分
+        struct ScoredCluster {
+            int index;
+            float score;
+            float dist;
+        };
+        std::vector<ScoredCluster> scored_clusters;
+        for (size_t i = 0; i < all_clusters.size(); ++i) {
+            float dist = (all_clusters[i].centroid - uav_pos).head<2>().norm();
+            float size_score = static_cast<float>(all_clusters[i].point_count); // 点数增益
+            
+            // Score = Size * exp(-lambda * dist)
+            // lambda=0.15意味着每增加5米，权重衰减一半 (exp(-0.75)=0.47)
+            // lambda=0.1意味着每增加7米，权重衰减一半
+            float dist_weight = std::exp(-0.15f * std::max(0.0f, dist - 2.0f)); // 2m内不衰减
+            scored_clusters.push_back({static_cast<int>(i), size_score * dist_weight, dist});
+        }
+        
+        // 2. 按分数降序排列
+        std::sort(scored_clusters.begin(), scored_clusters.end(), 
+                 [](const ScoredCluster& a, const ScoredCluster& b){
+                     return a.score > b.score;
+                 });
+                 
+        // 3. NMS 筛选
+        std::vector<FrontierCluster> selected_clusters;
+        std::vector<bool> suppressed(all_clusters.size(), false);
+        const float nms_radius = 5.0f; // 4米抑制半径
+        
+        for (const auto& sc : scored_clusters) {
+            if (suppressed[sc.index]) continue;
+            
+            if (selected_clusters.size() >= static_cast<size_t>(config_.max_clusters)) break;
+            
+            // 选中当前分数最高的
+            const auto& best_cluster = all_clusters[sc.index];
+            selected_clusters.push_back(best_cluster);
+            
+            // 抑制周围簇
+            for (const auto& other : scored_clusters) {
+                if (suppressed[other.index]) continue;
+                
+                float d = (all_clusters[other.index].centroid - best_cluster.centroid).norm();
+                if (d < nms_radius) {
+                    suppressed[other.index] = true;
+                }
+            }
+        }
+        
+        // 更新 all_clusters
+        all_clusters = selected_clusters;
+        // ROS_INFO("[VP_MGR] NMS Selected %zu clusters from %zu candidates.", all_clusters.size(), scored_clusters.size());
     }
     
     double t_filter = (ros::Time::now() - t_step4).toSec() * 1000.0;
@@ -1185,7 +1233,7 @@ bool ViewpointManager::isPositionSafe(const Eigen::Vector3f& pos) {
     
     if (!global_map_->isInGlobalMapRange(pos)) return false;
     if (global_map_->isOccupiedInflate(pos)) return false;
-    if (global_map_->isUnknownInflate(pos)) return false;
+    if (global_map_->isUnknown(pos)) return false;
     
     if (pos.z() < config_.viewpoint_height_min ||
         pos.z() > config_.viewpoint_height_max) {

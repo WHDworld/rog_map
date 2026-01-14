@@ -102,6 +102,12 @@ public:
     void insertPointCloud(const sensor_msgs::PointCloud2& cloud, const Position& sensor_pos);
     
     /**
+     * @brief 插入清除点云 (仅清除free space, 不标记占据)
+     * 用于处理深度图的天空/无穷远点
+     */
+    void insertClearingCloud(const sensor_msgs::PointCloud2& cloud, const Position& sensor_pos);
+    
+    /**
      * @brief 获取占据点云
      */
     void getOccupiedCloud(pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud) const;

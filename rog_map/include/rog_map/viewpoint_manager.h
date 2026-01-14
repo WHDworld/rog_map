@@ -107,6 +107,14 @@ struct FrontierCluster {
     Eigen::Vector3f viewpoint_position;   // 视点位置
     float viewpoint_yaw;                  // 视点朝向
     float viewpoint_score;                // 视点评分
+
+    // 备选视点列表 (New feature for robustness)
+    struct CandidateViewpoint {
+        Eigen::Vector3f position;
+        float yaw;
+        float score;
+    };
+    std::vector<CandidateViewpoint> candidates;
     
     FrontierCluster()
         : cluster_id(-1)
@@ -236,7 +244,7 @@ public:
      * @brief 获取当前前沿簇列表
      */
     std::vector<FrontierCluster> getClusters() const;
-    
+
     /**
      * @brief 获取当前有效视点数量
      */

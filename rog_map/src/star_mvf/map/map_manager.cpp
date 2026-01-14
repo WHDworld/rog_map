@@ -7,6 +7,10 @@
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl_conversions/pcl_conversions.h>
+#include <cv_bridge/cv_bridge.h>
+#include <sensor_msgs/image_encodings.h>
+#include <opencv2/imgproc/imgproc.hpp>
+#include <opencv2/highgui/highgui.hpp>
 
 namespace star_mvf {
 
@@ -71,6 +75,34 @@ void MapManager::initFromROS(const std::string& name_space) {
     config_.local_config.use_raycast = use_raycast;
     config_.local_config.raycast_step = static_cast<float>(raycast_step);
 
+    // [Added] Load Intrinsics
+    nh_private_.param(name_space + "/sensor/camera_intrinsics/fx", config_.fx, 320.0);
+    nh_private_.param(name_space + "/sensor/camera_intrinsics/fy", config_.fy, 320.0);
+    nh_private_.param(name_space + "/sensor/camera_intrinsics/cx", config_.cx, 320.0);
+    nh_private_.param(name_space + "/sensor/camera_intrinsics/cy", config_.cy, 240.0);
+    nh_private_.param(name_space + "/sensor/depth_filter_margin", config_.depth_filter_margin, 0);
+    nh_private_.param(name_space + "/sensor/skip_pixel", config_.skip_pixel, 8);
+    nh_private_.param(name_space + "/sensor/depth_scale", config_.depth_scale, 1.0); // [Added]
+    nh_private_.param<std::string>(name_space + "/depth_topic", config_.depth_topic, "/uav_simulator/depth_image");
+
+    // Load Extrinsics (Rotation Matrix)
+    std::vector<float> rot_vec;
+    // Default to Standard Optical -> FLU: [0 0 1; -1 0 0; 0 -1 0]
+    std::vector<float> default_rot = {0.0, 0.0, 1.0, 
+                                     -1.0, 0.0, 0.0, 
+                                      0.0, -1.0, 0.0};
+    nh_private_.param(name_space + "/sensor/camera_extrinsics/rotation", rot_vec, default_rot);
+    if (rot_vec.size() == 9) {
+        config_.body_R_cam << rot_vec[0], rot_vec[1], rot_vec[2],
+                              rot_vec[3], rot_vec[4], rot_vec[5],
+                              rot_vec[6], rot_vec[7], rot_vec[8];
+    } else {
+        ROS_WARN("[MapManager] Invalid camera extrinsics rotation size (%lu). Using default.", rot_vec.size());
+        config_.body_R_cam << 0, 0, 1, -1, 0, 0, 0, -1, 0;
+    }
+
+
+
     double lidar_sensor_max, lidar_sensor_min;
     double camera_sensor_max, camera_sensor_min;
     nh_private_.param(name_space + "/sensor/lidar_max_range", lidar_sensor_max, 20.0);
@@ -108,6 +140,7 @@ void MapManager::initFromROS(const std::string& name_space) {
     odom_sub_ = nh_.subscribe(config_.odom_topic, 100, &MapManager::odomCallback, this);
     camera_pose_sub_ = nh_.subscribe(config_.camera_pose_topic, 10, &MapManager::cameraOdomCallback, this);
     camera_rgb_sub_ = nh_.subscribe(config_.camera_rgb_topic, 10, &MapManager::cameraRgbCallback, this);
+    depth_sub_ = nh_.subscribe(config_.depth_topic, 10, &MapManager::depthCallback, this); // [Added]
     
     // 初始化局部地图可视化（由 LocalMap 自己管理发布器）
     if (config_.visualization_en) {
@@ -233,6 +266,137 @@ void MapManager::cameraOdomCallback(const nav_msgs::OdometryConstPtr& msg) {
 void MapManager::cameraRgbCallback(const sensor_msgs::ImageConstPtr& msg) {
     // 相机RGB图像回调（预留用于语义分割等）
     // 目前不做处理
+}
+
+void MapManager::depthCallback(const sensor_msgs::ImageConstPtr& msg) {
+    if (!running_) return;
+
+    // Check if we have camera pose
+    if (!has_odom_) return;
+
+    Position cam_pos;
+    Quaternion cam_rot;
+    {
+        std::lock_guard<std::mutex> lock(odom_mutex_);
+        cam_pos = current_position_;
+        cam_rot = current_rotation_;
+    }
+
+    // Convert ROS image to cv::Mat
+    cv_bridge::CvImagePtr cv_ptr;
+    try {
+        cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::TYPE_32FC1);
+    } catch (cv_bridge::Exception& e) {
+        ROS_ERROR("cv_bridge exception: %s", e.what());
+        return;
+    }
+
+    // Parameters
+    const double fx = config_.fx;
+    const double fy = config_.fy;
+    const double cx = config_.cx;
+    const double cy = config_.cy;
+    const int margin = config_.depth_filter_margin;
+    const int skip = config_.skip_pixel;
+    const double max_range = config_.local_config.camera_max_range;
+    const double scale = config_.depth_scale;
+
+    pcl::PointCloud<pcl::PointXYZ> cloud_obstacle;
+    pcl::PointCloud<pcl::PointXYZ> cloud_clearing;
+    cloud_obstacle.reserve(msg->width * msg->height / (skip * skip));
+    cloud_clearing.reserve(msg->width * msg->height / (skip * skip));
+
+    // Debugging info (Once)
+    static bool first_depth = true;
+    if (first_depth) {
+        float min_val = 1e6, max_val = -1e6;
+        for (int v = 0; v < msg->height; v += skip) {
+            for (int u = 0; u < msg->width; u += skip) {
+                float d = cv_ptr->image.at<float>(v, u);
+                if (std::isnan(d) || d < 0.001) continue;
+                if (d < min_val) min_val = d;
+                if (d > max_val) max_val = d;
+            }
+        }
+        ROS_WARN("[MapManager] First depth image stats: Min=%.2f, Max=%.2f. Configured scale: %.2f.", min_val, max_val, scale);
+        ROS_WARN("[MapManager] Interpretation:");
+        if (max_val > 100.0 && min_val > 100.0 && scale > 0.1) 
+            ROS_WARN("  -> Values seem large (likely mm). Recommend setting depth_scale = 0.001.");
+        else if (max_val > 100.0 && min_val < 10.0 && scale > 0.1)
+            ROS_WARN("  -> Values seem to be Meters using a large value (%.2f) for sky. Keep depth_scale = 1.0.", max_val);
+        else if (max_val > 0.0 && max_val < 20.0 && scale > 0.1)
+            ROS_WARN("  -> Values seem normal (likely meters). Keep depth_scale = 1.0.");
+        else if (max_val > 240.0 && max_val < 260.0)
+            ROS_WARN("  -> Values could be 0-255 pixels? Verify if max saturates at 255.");
+            
+        first_depth = false;
+    }
+
+    // Iterate over pixels
+    for (int v = margin; v < msg->height - margin; v += skip) {
+        for (int u = margin; u < msg->width - margin; u += skip) {
+            float depth = cv_ptr->image.at<float>(v, u) * static_cast<float>(scale);
+
+            if (std::isnan(depth) || depth < 0.1) continue;
+
+            bool is_clearing = false;
+            double final_depth = depth;
+            
+            // Sky detection: if depth > max_range, treat as clearing point at max_range
+            if (depth > max_range) {
+                final_depth = max_range;
+                is_clearing = true;
+            }
+
+            // Project to Camera Frame (x right, y down, z forward)
+            float x_c = (u - cx) * final_depth / fx;
+            float y_c = (v - cy) * final_depth / fy;
+            float z_c = final_depth;
+
+            // Transform to Body Frame first, then to World
+            // p_body = R_cam_body * p_c
+            // p_world = R_body_world * p_body + pos_world
+            
+            // Note: cam_rot is R_body_world (from odom)
+            // config_.body_R_cam is R_cam_body
+            
+            Eigen::Vector3f p_c(x_c, y_c, z_c);
+            Eigen::Vector3f p_b = config_.body_R_cam * p_c;
+            Eigen::Vector3f p_w = cam_rot * p_b + cam_pos;
+
+            if (is_clearing) {
+                cloud_clearing.push_back(pcl::PointXYZ(p_w.x(), p_w.y(), p_w.z()));
+            } else {
+                cloud_obstacle.push_back(pcl::PointXYZ(p_w.x(), p_w.y(), p_w.z()));
+            }
+        }
+    }
+
+    // ROS_INFO("depth cloud size: %zu, clearing size: %zu", cloud_obstacle.size(), cloud_clearing.size());
+
+    // 1. Process Obstacles (Occupancy + Clearing)
+    if (!cloud_obstacle.empty()) {
+        sensor_msgs::PointCloud2 cloud_msg;
+        pcl::toROSMsg(cloud_obstacle, cloud_msg);
+        cloud_msg.header = msg->header;
+        cloud_msg.header.frame_id = config_.frame_id;
+        local_map_->insertPointCloud(cloud_msg, cam_pos);
+    }
+    
+    // 2. Process Clearing Points (Clearing Only, No Occupancy at Endpoint)
+    if (!cloud_clearing.empty()) {
+        sensor_msgs::PointCloud2 cloud_msg;
+        pcl::toROSMsg(cloud_clearing, cloud_msg);
+        cloud_msg.header = msg->header;
+        cloud_msg.header.frame_id = config_.frame_id;
+        local_map_->insertClearingCloud(cloud_msg, cam_pos);
+    }
+
+    // Sync to global
+    syncLocalToGlobal();
+    
+    // Extract Frontier
+    global_map_->extractGlobalFrontierIncremental();
 }
 
 void MapManager::vizTimerCallback(const ros::TimerEvent& event) {

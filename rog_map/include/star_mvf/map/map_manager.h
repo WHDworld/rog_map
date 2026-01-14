@@ -50,7 +50,21 @@ struct MapManagerConfig {
     std::string odom_topic = "/odom";
     std::string camera_pose_topic = "/camera/pose";
     std::string camera_rgb_topic = "/camera/color/image_raw";
+    std::string depth_topic = "/camera/depth_image"; // [Added] Depth topic
     std::string frame_id = "map";
+    
+    // Camera Intrinsics [Added]
+    double fx = 320.0;
+    double fy = 320.0;
+    double cx = 320.0;
+    double cy = 240.0;
+    int depth_filter_margin = 0;
+    int skip_pixel = 2;
+    double depth_scale = 1.0; // [Added]
+    
+    // Extrinsics: Rotation from Camera Frame to Body Frame (FLU)
+    // Default: Standard Optical to FLU (Z forward -> X forward, X right -> Y left (-y), Y down -> Z down (-z))
+    Eigen::Matrix3f body_R_cam = Eigen::Matrix3f::Identity();
     
     // 更新频率
     float viz_rate = 5.0f;        // 可视化频率
@@ -265,6 +279,7 @@ protected:
     ros::Subscriber odom_sub_;
     ros::Subscriber camera_pose_sub_;
     ros::Subscriber camera_rgb_sub_;
+    ros::Subscriber depth_sub_; // [Added]
     ros::Timer sync_timer_;
     ros::Timer viz_timer_;
     
@@ -288,6 +303,7 @@ protected:
     void odomCallback(const nav_msgs::OdometryConstPtr& msg);
     void cameraOdomCallback(const nav_msgs::OdometryConstPtr& msg);
     void cameraRgbCallback(const sensor_msgs::ImageConstPtr& msg);
+    void depthCallback(const sensor_msgs::ImageConstPtr& msg); // [Added]
     void vizTimerCallback(const ros::TimerEvent& event);
     
     // 同步局部地图到全局地图

@@ -58,6 +58,7 @@ struct HistoryGraphConfig {
   float max_assoc_dist = 10.0f;
   float takeoff_height = 1.0;
   float uav_radius = 0.3f; // [New] for collision check
+  float safety_margin = 0.25f; // [New] for strict safety
 };
 
 // ==================== HistoryGraph 类 ====================
@@ -96,6 +97,12 @@ class HistoryGraph {
   void computeDijkstraToTargets(int start_node_id,
                                std::unordered_set<int> targets,
                                DijkstraResult& result);
+                               
+  int findNearestSafeNode(const Eigen::Vector3d& pos, double range_limit);
+  int findNearestNode(const Eigen::Vector3d& pos);
+  
+  std::vector<int> findNodesInRange(const Eigen::Vector3d& pos, double range);
+  std::vector<Eigen::Vector3d> runLocalAStar(const Eigen::Vector3d& start, const Eigen::Vector3d& end);
 
   double evaluateViewpointCost(const Eigen::Vector3d& curr_pos,
                                int anchor_node_id,
@@ -107,8 +114,6 @@ class HistoryGraph {
                                 int end_node_id,
                                 std::vector<Eigen::Vector3d>& out_path);
 
-  int findNearestNode(const Eigen::Vector3d& pos);
-  std::vector<Eigen::Vector3d> runLocalAStar(const Eigen::Vector3d& start, const Eigen::Vector3d& end);
   std::vector<Eigen::Vector3d> shortcutPath(const Eigen::Vector3d& start, const std::vector<Eigen::Vector3d>& path);
   double calculatePathLength(const std::vector<Eigen::Vector3d>& path);
   Eigen::Vector3d getNodePos(int id);
@@ -139,7 +144,7 @@ class HistoryGraph {
   std::vector<Eigen::Vector3d> simplifyPathInternal(const std::vector<Eigen::Vector3d>& path);
   std::vector<Eigen::Vector3d> shortcutPathInternal(const Eigen::Vector3d& start,
                                                     const std::vector<Eigen::Vector3d>& path);
-  std::vector<Eigen::Vector3d> runLocalAStarInternal(const Eigen::Vector3d& start, const Eigen::Vector3d& end);
+  std::vector<Eigen::Vector3d> runLocalAStarInternal(const Eigen::Vector3d& start, const Eigen::Vector3d& end, bool relaxed = false);
 
   void runDijkstraInternal(int target_id,
                            std::unordered_map<int, double>& dists,

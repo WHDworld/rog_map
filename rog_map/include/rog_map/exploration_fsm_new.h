@@ -301,7 +301,7 @@ private:
     
     // 4. 双缓存机制 (处理 Time_Start > Time_Now 的情况)
     // 当收到一条为了平滑而设定在"未来"开始的轨迹时，我们需要保留旧轨迹继续飞，直到新轨迹开始
-    rog_map::PolyTraj prev_traj_;          // 旧轨迹缓存
+    poly_traj::Trajectory prev_traj_;      // [Fix] Change to Trajectory class for execution
     bool has_prev_traj_ = false;          // 是否有旧轨迹
     double prev_traj_start_time_;
     double prev_traj_duration_;
@@ -354,9 +354,18 @@ private:
     bool takeoff_complete_ = false;
     
     // 当前探索目标
+    // 当前探索目标
     int current_viewpoint_id_ = -1;       // 当前目标视点ID
     std::vector<WaypointInfo> waypoint_queue_; // 航点队列（历史节点+视点）
     int current_waypoint_idx_ = 0;        // 当前航点索引
+    
+    // 状态计时
+    ros::Time state_start_time_;
+    
+    // 黑名单簇 (用于规划失败时的即时切换)
+    std::unordered_set<int> blacklisted_clusters_;
+    
+    // 黑盒/覆盖检测
     std::vector<Eigen::Vector3f> current_frontier_; // 目标簇
     Eigen::Vector3d current_viewpoint_centroid_;            // 目标簇质心(辅助黑名单)
     Eigen::Vector3d current_vp_pos_; // 当前视点位置

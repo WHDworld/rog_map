@@ -31,11 +31,14 @@ find_package(catkin REQUIRED COMPONENTS
         quadrotor_msgs    # GCOPTER 轨迹服务器需要
         mavros_msgs       # PX4 模式切换和解锁
         tf                # 姿态转换
+        cv_bridge         # [Added]
+        image_transport   # [Added]
         )
 find_package(Eigen3 REQUIRED)
 find_package(PCL REQUIRED)
 find_package(ompl REQUIRED)
 find_package(NLopt REQUIRED)  # B-spline 优化器依赖
+find_package(OpenCV REQUIRED) # [Added]
 
 #add dynamic reconfigure api
 set (DYNAMIC_RECONFIGURE_PATH config/visualization.cfg)
@@ -79,6 +82,7 @@ include_directories(
         ${Eigen3_INCLUDE_DIRS}
         ${PCL_INCLUDE_DIRS}
         ${OMPL_INCLUDE_DIRS}
+        ${OpenCV_INCLUDE_DIRS} # [Added]
 
 )
 
@@ -86,6 +90,7 @@ set(THIRD_PARTY
         ${catkin_LIBRARIES}
         ${PCL_LIBRARIES}
         ${OMPL_LIBRARIES}     # GCOPTER/OMPL 依赖
+        ${OpenCV_LIBRARIES}   # [Added]
         -ldw
         )
 

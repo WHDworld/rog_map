@@ -40,7 +40,10 @@ int HistoryGraph::update(const Eigen::Vector3d& curr_pos) {
   double t_start = ros::Time::now().toSec();
   if (nodes_.empty()) {
     int new_id = addNodeInternal(curr_pos, -1);
-    refreshSubGridOwnershipInternal();
+    // [Added] Check if initial node failed (unlikely but possible if taking off near wall)
+    if (new_id != -1) {
+        refreshSubGridOwnershipInternal();
+    }
     return new_id;
   }
 
@@ -51,10 +54,17 @@ int HistoryGraph::update(const Eigen::Vector3d& curr_pos) {
 
   if (dist >= config_.node_spacing) {
     int new_id = addNodeInternal(curr_pos, nearest_id);
-    performLoopClosureInternal(new_id);
-    refreshSubGridOwnershipInternal();
-    ROS_INFO("HistoryGraph add node time: %f ms", (ros::Time::now().toSec() - t_start) * 1000.0);
-    return new_id;
+    
+    // [Added] Check if node added successfully
+    if (new_id != -1) {
+        performLoopClosureInternal(new_id);
+        refreshSubGridOwnershipInternal();
+        ROS_INFO("HistoryGraph add node time: %f ms", (ros::Time::now().toSec() - t_start) * 1000.0);
+        return new_id;
+    } else {
+        // Failed to add (e.g. unsafe), keep using nearest
+        return nearest_id;
+    }
   }
   // ROS_INFO("HistoryGraph update time: %f ms", (ros::Time::now().toSec() - t_start) * 1000.0);
 
@@ -159,8 +169,8 @@ double HistoryGraph::evaluateViewpointCost(const Eigen::Vector3d& curr_pos,
 
   // 1. 近场快速通道 (< 5m)
   if (euclidean_dist < 5.0) {
-    // A. 射线检测
-    if (global_map_ && global_map_->isLineFreeInflate(curr_pos.cast<float>(), vp_pos.cast<float>(), true)) {
+    // A. 射线检测 [Fix]: strict collision check
+    if (global_map_ && global_map_->isPathSafe(curr_pos.cast<float>(), vp_pos.cast<float>(), config_.uav_radius + 0.15)) {
       if (out_path) *out_path = {curr_pos, vp_pos};
       return euclidean_dist;
     }
@@ -187,10 +197,12 @@ double HistoryGraph::evaluateViewpointCost(const Eigen::Vector3d& curr_pos,
   std::vector<Eigen::Vector3d> exit_path;
   const Eigen::Vector3d& anchor_pos = nodes_[anchor_node_id].position;
 
-  if (global_map_ && global_map_->isLineFreeInflate(anchor_pos.cast<float>(), vp_pos.cast<float>(), true)) {
+  if (global_map_ && global_map_->isPathSafe(anchor_pos.cast<float>(), vp_pos.cast<float>(), config_.uav_radius + 0.15)) {
     exit_path = {anchor_pos, vp_pos};
   } else {
-    exit_path = runLocalAStarInternal(anchor_pos, vp_pos);
+    // [Fixed] Relaxed A* for viewpoint evaluation (User Request)
+    // "Just a simple A* path is enough, not necessarily safe obstacle-avoidance path"
+    exit_path = runLocalAStarInternal(anchor_pos, vp_pos, true); 
     if (exit_path.empty()) return std::numeric_limits<double>::max();
   }
 
@@ -231,7 +243,7 @@ int HistoryGraph::findNearestNode(const Eigen::Vector3d& pos) {
 
 std::vector<Eigen::Vector3d> HistoryGraph::runLocalAStar(const Eigen::Vector3d& start,
                                                          const Eigen::Vector3d& end) {
-  return runLocalAStarInternal(start, end);
+  return runLocalAStarInternal(start, end, false);
 }
 
 std::vector<Eigen::Vector3d> HistoryGraph::shortcutPath(const Eigen::Vector3d& start,
@@ -293,6 +305,17 @@ void HistoryGraph::refreshSubGridOwnershipInternal() {
 }
 
 int HistoryGraph::addNodeInternal(const Eigen::Vector3d& pos, int prev_id) {
+  // [Added] Safety Check: Strict safety check using UAV radius
+  // User Requirement: "Use uav_radius + safety_margin for safety check"
+  if (global_map_) {
+      star_mvf::Position p(pos.x(), pos.y(), pos.z());
+      float safe_dist = config_.uav_radius + config_.safety_margin;
+      if (!global_map_->isSphereSafe(p, safe_dist)) {
+          ROS_WARN_THROTTLE(1.0, "[HistGraph] Cannot add node at (%.2f, %.2f): Wall collision.", pos.x(), pos.y());
+          return -1;
+      }
+  }
+
   int id = next_id_++;
   NavNode node;
   node.id = id;
@@ -378,12 +401,18 @@ std::vector<Eigen::Vector3d> HistoryGraph::shortcutPathInternal(const Eigen::Vec
 }
 
 std::vector<Eigen::Vector3d> HistoryGraph::runLocalAStarInternal(const Eigen::Vector3d& start,
-                                                                 const Eigen::Vector3d& end) {
+                                                                 const Eigen::Vector3d& end,
+                                                                 bool relaxed) {
   if (!global_map_) return {};
 
   // [Fix] Use isPathSafe with radius check instead of point-check isLineFree
-  if (global_map_->isPathSafe(start.cast<float>(), end.cast<float>(), config_.uav_radius + 0.15f)) {
+  // If relaxed, skip strict SAFE check (direct line check still good optimization though)
+  if (!relaxed && global_map_->isPathSafe(start.cast<float>(), end.cast<float>(), config_.uav_radius + 0.05f)) {
     return {start, end};
+  }
+  // If relaxed, use smaller margin for direct check
+  if (relaxed && global_map_->isPathSafe(start.cast<float>(), end.cast<float>(), 0.0f)) {
+      return {start, end};
   }
   std::priority_queue<AStarNode*, std::vector<AStarNode*>, AStarCompare> open_list;
   std::unordered_map<VoxelIndex, double, VoxelIndexHash> g_scores;
@@ -419,7 +448,16 @@ std::vector<Eigen::Vector3d> HistoryGraph::runLocalAStarInternal(const Eigen::Ve
         n_idx.y += dy;
         // if (global_map_->isOccupiedInflate(n_idx)) continue;
         bool is_target_voxel = (n_idx == e_idx);
-        if (!is_target_voxel && global_map_->isOccupiedInflate(n_idx)) 
+        
+        // [Optimized] Relaxed check: use isOccupied (raw) vs isOccupiedInflate (safe)
+        bool collision = false;
+        if (relaxed) {
+            collision = global_map_->isOccupied(n_idx); // Allow close to walls
+        } else {
+            collision = global_map_->isOccupiedInflate(n_idx); // Strict safety
+        }
+        
+        if (!is_target_voxel && collision) 
         {
           continue;
         }
@@ -533,6 +571,30 @@ int HistoryGraph::findNearestNode2DInternal(const Eigen::Vector3d& pos) {
   }
 
   return bid;
+}
+
+std::vector<int> HistoryGraph::findNodesInRange(const Eigen::Vector3d& pos, double range) {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    return findNodesInRange2DInternal(pos, range);
+}
+
+int HistoryGraph::findNearestSafeNode(const Eigen::Vector3d& pos, double range_limit) {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    auto cands = findNodesInRange2DInternal(pos, range_limit);
+    if (cands.empty()) return -1;
+
+    // Sort by distance
+    std::sort(cands.begin(), cands.end(), [&](int a, int b) {
+        return (nodes_[a].position - pos).squaredNorm() < (nodes_[b].position - pos).squaredNorm();
+    });
+
+    for (int id : cands) {
+        // Check safety (Strict margin to ensure Planner success)
+        if (global_map_ && global_map_->isPathSafe(pos.cast<float>(), nodes_[id].position.cast<float>(), config_.uav_radius + 0.3f)) {
+            return id;
+        }
+    }
+    return -1;
 }
 
 std::vector<Eigen::Vector3d> HistoryGraph::reconstructPathInternal(AStarNode* end_node) {
