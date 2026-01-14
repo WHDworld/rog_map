@@ -250,7 +250,7 @@ private:
     void visualizeFrustums();
     void visualizeExplorationInfo();
     void clearVisualization();
-    
+    void visualizeHistoryGraph();
     /**
      * @brief 创建视锥体marker
      */
@@ -275,6 +275,7 @@ private:
     
     ros::Publisher exploration_state_pub_; // 探索状态
     ros::Publisher frontier_cluster_pub_;  // 前沿簇可视化
+    ros::Publisher region_route_pub_; // [Visual] 历史节点拓扑
     ros::Publisher viewpoint_marker_pub_;  // 视点可视化
     ros::Publisher frustum_marker_pub_;    // 视锥体可视化
     ros::Publisher info_marker_pub_;       // 信息可视化
@@ -356,7 +357,18 @@ private:
     int current_viewpoint_id_ = -1;       // 当前目标视点ID
     std::vector<WaypointInfo> waypoint_queue_; // 航点队列（历史节点+视点）
     int current_waypoint_idx_ = 0;        // 当前航点索引
-    
+    std::vector<Eigen::Vector3f> current_frontier_; // 目标簇
+    Eigen::Vector3d current_viewpoint_centroid_;            // 目标簇质心(辅助黑名单)
+    Eigen::Vector3d current_vp_pos_; // 当前视点位置
+    double current_vp_yaw_; // 当前视点朝向
+    int current_frontier_history_id_ = -1; // 目标簇历史ID
+    bool triggerSeamlessReplan();
+    bool checkCurrentGoalCovered();
+
+    bool use_replan_start_ = false;
+    Eigen::Vector3d replan_start_pos_, replan_start_vel_, replan_start_acc_;
+    double replan_start_time_;
+
     DijkstraResult cached_dijkstra_result_;
 
     std::vector<Eigen::Vector3d> current_global_path_; // 用于长距离导航的拓扑路径

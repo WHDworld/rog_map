@@ -15,6 +15,7 @@ void HistoryGraph::init(ros::NodeHandle& nh, GlobalMap::Ptr global_map) {
   nh_.param("history_graph/update_rate", config_.update_rate, 2.0f);
   nh_.param("history_graph/node_spacing", config_.node_spacing, 5.0f);
   nh_.param("history_graph/max_assoc_dist", config_.max_assoc_dist, 10.0f);
+  nh_.param("viewpoint_manager/uav_radius", config_.uav_radius, 0.3f); // Read from shared param
   resolution_ = global_map_ ? global_map_->getResolution() : 0.0f;
   next_id_ = 0;
 }
@@ -98,6 +99,7 @@ void HistoryGraph::releaseSubGrid(int subgrid_id) {
 }
 
 void HistoryGraph::refreshSubGridOwnership() {
+  std::lock_guard<std::mutex> lock(data_mutex_);
   refreshSubGridOwnershipInternal();
 }
 
@@ -223,6 +225,7 @@ bool HistoryGraph::reconstructPathFromCache(const DijkstraResult& cache,
 }
 
 int HistoryGraph::findNearestNode(const Eigen::Vector3d& pos) {
+  std::lock_guard<std::mutex> lock(data_mutex_);
   return findNearestNode2DInternal(pos);
 }
 
@@ -241,6 +244,7 @@ double HistoryGraph::calculatePathLength(const std::vector<Eigen::Vector3d>& pat
 }
 
 Eigen::Vector3d HistoryGraph::getNodePos(int id) {
+  std::lock_guard<std::mutex> lock(data_mutex_);
   if (nodes_.count(id)) return nodes_[id].position;
   return Eigen::Vector3d::Zero();
 }
@@ -302,7 +306,7 @@ int HistoryGraph::addNodeInternal(const Eigen::Vector3d& pos, int prev_id) {
 
 void HistoryGraph::performLoopClosureInternal(int new_node_id) {
   const Eigen::Vector3d& pos = nodes_[new_node_id].position;
-  std::vector<int> nearby = findNodesInRange2DInternal(pos, config_.node_spacing * 1.2);
+  std::vector<int> nearby = findNodesInRange2DInternal(pos, config_.node_spacing * 2);
   for (int nid : nearby) {
     if (nid == new_node_id || hasEdgeBetweenInternal(new_node_id, nid)) continue;
     tryAddEdgeInternal(new_node_id, nid);
@@ -326,7 +330,12 @@ bool HistoryGraph::tryAddEdgeInternal(int id_a, int id_b) {
 
 std::vector<Eigen::Vector3d> HistoryGraph::computeSimplifiedPathInternal(const Eigen::Vector3d& start,
                                                                         const Eigen::Vector3d& end) {
-  if (global_map_ && global_map_->isLineFreeInflate(start.cast<float>(), end.cast<float>(), true)) return {start, end};
+  // [Fix] Use isPathSafe instead of isLineFreeInflate for robust collision check
+  // isLineFreeInflate relies on pre-computed inflation map which might be broken or desync.
+  // isPathSafe checks raw voxels with dynamic margin.
+  if (global_map_ && global_map_->isPathSafe(start.cast<float>(), end.cast<float>(), config_.uav_radius + 0.15f)) {
+      return {start, end};
+  }
   auto raw = runLocalAStarInternal(start, end);
   if (raw.size() < 2) return {};
   return simplifyPathInternal(raw);
@@ -347,7 +356,8 @@ std::vector<Eigen::Vector3d> HistoryGraph::shortcutPathInternal(const Eigen::Vec
     Eigen::Vector3d cur_pt = (curr_idx == -1) ? start : path[curr_idx];
     int best_next = -1;
     for (int i = static_cast<int>(path.size()) - 1; i > curr_idx; --i) {
-      if (global_map_ && global_map_->isLineFreeInflate(cur_pt.cast<float>(), path[i].cast<float>(), true)) {
+      // [Fix] Use isPathSafe here too
+      if (global_map_ && global_map_->isPathSafe(cur_pt.cast<float>(), path[i].cast<float>(), config_.uav_radius + 0.1f)) {
         best_next = i;
         break;
       }
@@ -371,7 +381,8 @@ std::vector<Eigen::Vector3d> HistoryGraph::runLocalAStarInternal(const Eigen::Ve
                                                                  const Eigen::Vector3d& end) {
   if (!global_map_) return {};
 
-  if (global_map_->isLineFree(start.cast<float>(), end.cast<float>(), true)) {
+  // [Fix] Use isPathSafe with radius check instead of point-check isLineFree
+  if (global_map_->isPathSafe(start.cast<float>(), end.cast<float>(), config_.uav_radius + 0.15f)) {
     return {start, end};
   }
   std::priority_queue<AStarNode*, std::vector<AStarNode*>, AStarCompare> open_list;
@@ -411,6 +422,15 @@ std::vector<Eigen::Vector3d> HistoryGraph::runLocalAStarInternal(const Eigen::Ve
         if (!is_target_voxel && global_map_->isOccupiedInflate(n_idx)) 
         {
           continue;
+        }
+
+        // [Fix] Diagonal Safety Check: prevent cutting corners
+        if (dx != 0 && dy != 0) {
+            VoxelIndex idx1 = curr->index; idx1.x += dx;
+            VoxelIndex idx2 = curr->index; idx2.y += dy;
+            if (global_map_->isOccupiedInflate(idx1) || global_map_->isOccupiedInflate(idx2)) {
+                continue;
+            }
         }
         double step = (dx != 0 && dy != 0) ? 1.414 : 1.0;
         double tg = curr->g_score + step * resolution_;
@@ -548,6 +568,33 @@ bool HistoryGraph::hasEdgeBetweenInternal(int id_a, int id_b) {
     if (edges_[eid].node_a == id_b || edges_[eid].node_b == id_b) return true;
   }
   return false;
+}
+
+// ==================== [Visual] Visualization Helpers ====================
+std::vector<NavEdge> HistoryGraph::getAllEdges() const {
+  std::lock_guard<std::mutex> lock(data_mutex_);
+  std::vector<NavEdge> res;
+  res.reserve(edges_.size());
+  for (const auto& kv : edges_) {
+    res.push_back(kv.second);
+  }
+  return res;
+}
+
+std::vector<NavNode> HistoryGraph::getAllNodes() const {
+  std::lock_guard<std::mutex> lock(data_mutex_);
+  std::vector<NavNode> res;
+  res.reserve(nodes_.size());
+  for (const auto& kv : nodes_) {
+    res.push_back(kv.second);
+  }
+  return res;
+}
+
+Eigen::Vector3d HistoryGraph::getSubGridCenter(int subgrid_id) {
+  if (!global_map_) return Eigen::Vector3d::Zero();
+  const auto& sg = global_map_->getSubGrid(subgrid_id);
+  return sg.center.cast<double>();
 }
 
 }  // namespace rog_map

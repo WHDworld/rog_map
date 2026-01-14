@@ -300,13 +300,14 @@ namespace ego_planner
     // ====================================================================================
     // [ADD] RETRY LOGIC for Long Detours / Infeasible Constraints
     // ====================================================================================
+    // 定义扩展时间步长，供多次重试复用
+    double ts_extended = ts * 1.5;
+
     if (!flag_success)
     {
         ROS_WARN("[EGOPlanner] Optimization failed! Retrying with extended time step...");
         
         // 策略：将时间分配扩大 1.5 倍，降低动力学要求
-        double ts_extended = ts * 1.5; 
-        
         poly_traj::MinJerkOpt initMJO_retry;
         // 使用新的时间片长度重新计算初值
         bool init_success = computeInitState(start_pt, start_vel, start_acc, local_target_pt, local_target_vel,
@@ -343,6 +344,46 @@ namespace ego_planner
              }
         }
     }
+
+    // [New] 第二次重试：如果单纯延长时间不够，尝试引入随机扰动 (Random Perturbation)
+    // 应对直连路径正好穿过障碍物中心导致的梯度为零/局部极小值问题
+    if (!flag_success)
+    {
+         ROS_WARN("[EGOPlanner] Retry 1 Failed. Trying Random Perturbation...");
+         poly_traj::MinJerkOpt initMJO_random;
+         bool init_random_success = computeInitState(start_pt, start_vel, start_acc, local_target_pt, local_target_vel,
+                                       flag_polyInit, true, ts_extended, initMJO_random); // flag_random=true
+
+         if (init_random_success)
+         {
+             std::vector<std::pair<int, int>> segments_random;
+             Eigen::MatrixXd cstr_pts_random = initMJO_random.getInitConstraintPoints(ploy_traj_opt_->get_cps_num_prePiece_());
+             auto check_ret_random = ploy_traj_opt_->finelyCheckAndSetConstraintPoints(segments_random, initMJO_random, true);
+             
+             if (check_ret_random != PolyTrajOptimizer::CHK_RET::ERR)
+             {
+                 poly_traj::Trajectory initTrajRandom = initMJO_random.getTraj();
+                 int PN_rand = initTrajRandom.getPieceNum();
+                 Eigen::MatrixXd all_pos_rand = initTrajRandom.getPositions();
+                 Eigen::MatrixXd innerPts_rand = all_pos_rand.block(0, 1, 3, PN_rand - 1);
+                 
+                 Eigen::Matrix<double, 3, 3> headState_rand, tailState_rand;
+                 headState_rand << initTrajRandom.getJuncPos(0), initTrajRandom.getJuncVel(0), initTrajRandom.getJuncAcc(0);
+                 tailState_rand << initTrajRandom.getJuncPos(PN_rand), initTrajRandom.getJuncVel(PN_rand), initTrajRandom.getJuncAcc(PN_rand);
+                 
+                 double final_cost_rand;
+                 bool rand_success = ploy_traj_opt_->optimizeTrajectory(headState_rand, tailState_rand, 
+                                                                       innerPts_rand, initTrajRandom.getDurations(), 
+                                                                       cstr_pts_random, final_cost_rand);
+                 if (rand_success) {
+                     ROS_INFO("[EGOPlanner] Retry 2 (Random) SUCCESS!");
+                     flag_success = true;
+                     best_MJO = ploy_traj_opt_->getMinJerkOpt();
+                 }
+             }
+         }
+    }
+
     // save and display planned results
     if (!flag_success)
     {

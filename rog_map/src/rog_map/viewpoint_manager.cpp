@@ -132,7 +132,7 @@ void ViewpointManager::triggerUpdate() {
 // ==================== 主更新函数 ====================
 
 void ViewpointManager::update() {
-    history_graph_->refreshSubGridOwnership();
+    // history_graph_->refreshSubGridOwnership();
     ros::Time t_start = ros::Time::now();
     
     if (!global_map_ || !history_graph_) {
@@ -364,6 +364,7 @@ void ViewpointManager::clusterByHistoryNode(const std::vector<Eigen::Vector3f>& 
     std::vector<bool> visited(points.size(), false);
     
     for (size_t i = 0; i < points.size(); ++i) {
+        // if(points[i].z() > config_.frontier_height_max || points[i].z() < config_.frontier_height_min) continue;
         if (visited[i]) continue;
         
         // BFS聚类
@@ -382,11 +383,13 @@ void ViewpointManager::clusterByHistoryNode(const std::vector<Eigen::Vector3f>& 
             // 查找邻居
             for (size_t j = 0; j < points.size(); ++j) {
                 if (visited[j]) continue;
-                
+                // if(points[j].z() > config_.frontier_height_max || points[j].z() < config_.frontier_height_min) continue;
                 float dist = (points[j] - points[curr]).norm();
                 if (dist <= config_.cluster_eps) {
-                    visited[j] = true;
-                    q.push(j);
+                    if (checkRayVisibility(points[curr], points[j])) {
+                        visited[j] = true;
+                        q.push(j);
+                    }
                 }
             }
         }

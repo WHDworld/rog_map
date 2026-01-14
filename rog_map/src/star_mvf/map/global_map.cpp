@@ -1479,7 +1479,7 @@ bool GlobalMap::isLineFreeInflate(const Position& start, const Position& end,
     if (length < 1e-6) return true;
     
     dir.normalize();
-    double step = config_.resolution;
+    double step = config_.resolution * 0.5; // [Fix] Use finer step size for safety
     int num_steps = static_cast<int>(length / step) + 1;
     
     for (int i = 0; i <= num_steps; i++) {

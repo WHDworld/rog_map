@@ -57,6 +57,7 @@ struct HistoryGraphConfig {
   float node_spacing = 5.0f;
   float max_assoc_dist = 10.0f;
   float takeoff_height = 1.0;
+  float uav_radius = 0.3f; // [New] for collision check
 };
 
 // ==================== HistoryGraph 类 ====================
@@ -82,9 +83,15 @@ class HistoryGraph {
   std::vector<int> getAllNodeIds() const;
   size_t getHistoryNodeCount() const;
   Eigen::Vector3d getHistoryNodePos(int id);
+  
   std::vector<int> getAssociatedSubGrids(int node_id);
   void releaseSubGrid(int subgrid_id);
   void refreshSubGridOwnership();
+  
+  // [Visual] Visualization Helpers
+  std::vector<NavEdge> getAllEdges() const;
+  std::vector<NavNode> getAllNodes() const; // Return copy for safety
+  Eigen::Vector3d getSubGridCenter(int subgrid_id);
 
   void computeDijkstraToTargets(int start_node_id,
                                std::unordered_set<int> targets,
