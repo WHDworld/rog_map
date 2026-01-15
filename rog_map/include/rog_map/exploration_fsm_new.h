@@ -179,14 +179,15 @@ private:
      * @param selected_viewpoint_id 输出选中的视点ID
      * @return 是否找到有效视点
      */
-    bool selectBestViewpoint(int& selected_viewpoint_id);
+    bool selectBestViewpoint(int& selected_viewpoint_id, const Eigen::Vector3d* from_pos = nullptr);
     
     /**
-     * @brief 规划到视点的路径
-     * @param viewpoint_id 视点ID
-     * @return 是否规划成功
-     */
-    bool planToViewpoint(int viewpoint_id);
+      * @brief 规划到视点的路径
+      * @param viewpoint_id 视点ID
+      * @param from_pos 可选的起始位置 (用于无缝切换时的预测位置)
+      * @return 是否规划成功
+      */
+    bool planToViewpoint(int viewpoint_id, const Eigen::Vector3d* from_pos = nullptr);
     
     /**
      * @brief 规划到下一个航点的轨迹
@@ -264,7 +265,7 @@ private:
     
     void polyTraj2ROSMsg(rog_map::PolyTraj &poly_msg);
     bool planTrajectory(const Eigen::Vector3d& target, double target_yaw, 
-        const Eigen::Vector3d& target_vel, bool use_latest_traj);
+        const Eigen::Vector3d& target_vel);
 private:
     // ROS
     ros::NodeHandle nh_;
@@ -296,8 +297,9 @@ private:
     ros::Time last_replan_time_;
     double end_yaw_;                       // 轨迹末端期望 Yaw
 
-    double last_yaw_, last_yaw_dot_;      // Yaw 平滑专用
-    Eigen::Vector3d last_pos_;             // 上一帧位置（用于异常处理）
+    double last_yaw_ = 0.0, last_yaw_dot_ = 0.0;      // Yaw 平滑专用
+    Eigen::Vector3d last_pos_ = Eigen::Vector3d::Zero();  // 上一帧位置（用于异常处理）
+    bool exec_initialized_ = false;  // [新增] 标志：executionCallback 是否已初始化
     
     // 4. 双缓存机制 (处理 Time_Start > Time_Now 的情况)
     // 当收到一条为了平滑而设定在"未来"开始的轨迹时，我们需要保留旧轨迹继续飞，直到新轨迹开始
@@ -305,6 +307,10 @@ private:
     bool has_prev_traj_ = false;          // 是否有旧轨迹
     double prev_traj_start_time_;
     double prev_traj_duration_;
+
+    // ==================== [新增] 轨迹日志记录 ====================
+    std::ofstream traj_log_file_;         // 轨迹日志文件流
+    bool enable_traj_logging_ = true;     // 是否启用轨迹日志
 
     // ==================== [新增] 核心函数声明 ====================
     
@@ -374,9 +380,7 @@ private:
     bool triggerSeamlessReplan();
     bool checkCurrentGoalCovered();
 
-    bool use_replan_start_ = false;
-    Eigen::Vector3d replan_start_pos_, replan_start_vel_, replan_start_acc_;
-    double replan_start_time_;
+    // [已删除] use_replan_start_ 相关变量已被 planTrajectory 内部统一预测逻辑替代
 
     DijkstraResult cached_dijkstra_result_;
 

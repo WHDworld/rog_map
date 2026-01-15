@@ -4,7 +4,11 @@
  */
 
 #include "rog_map/exploration_fsm_new.h"
+#include "ego_planner/yaw_optimizer.h"
 #include <tf/transform_datatypes.h>
+#include <fstream>
+#include <iomanip>
+#include <ros/package.h>
 
 // 简化日志宏
 #define LOG_INFO(msg) ROS_INFO_STREAM("[FSM_NEW] " << msg)
@@ -89,6 +93,36 @@ void ExplorationFSMNew::init(ros::NodeHandle& nh, MapManager::Ptr map_manager) {
                                   &ExplorationFSMNew::fsmCallback, this);
     execution_timer_ = nh_.createTimer(ros::Duration(0.01), &ExplorationFSMNew::executionCallback, this);
     traj_vis_pub = nh_.advertise<visualization_msgs::Marker>("/ego_planner/trajectory_vis", 10);
+
+    // [新增] 初始化轨迹日志文件
+    if (enable_traj_logging_) {
+        // 自动获取 rog_map 包路径
+        std::string package_path = ros::package::getPath("rog_map");
+        if (package_path.empty()) {
+            ROS_WARN("[FSM] Failed to find rog_map package path, trajectory logging disabled");
+            enable_traj_logging_ = false;
+        } else {
+            std::string log_dir = package_path + "/log";
+            std::string log_file = log_dir + "/trajectory_log.csv";
+            
+            // 创建目录（如果不存在）
+            int ret = system(("mkdir -p " + log_dir).c_str());
+            (void)ret;  // 忽略返回值警告
+            
+            traj_log_file_.open(log_file, std::ios::out | std::ios::trunc);
+            if (traj_log_file_.is_open()) {
+                // 写入 CSV 头
+                traj_log_file_ << "timestamp,cmd_x,cmd_y,cmd_z,cmd_vx,cmd_vy,cmd_vz,cmd_yaw,cmd_yaw_dot,"
+                              << "odom_x,odom_y,odom_z,odom_vx,odom_vy,odom_vz,odom_yaw,"
+                              << "traj_end_x,traj_end_y,traj_end_z,plan_time,plan_target_yaw\n";
+                traj_log_file_.flush();
+                ROS_INFO("[FSM] Trajectory logging enabled: %s", log_file.c_str());
+            } else {
+                ROS_WARN("[FSM] Failed to open trajectory log file: %s", log_file.c_str());
+                enable_traj_logging_ = false;
+            }
+        }
+    }
 
     // 初始化状态
     state_ = ExplorationState::INIT;
@@ -313,13 +347,8 @@ void ExplorationFSMNew::processWaitTrigger() {
 }
 
 void ExplorationFSMNew::processLocalPlan() {
-    // [Fix] 进入局部规划状态时，必须强制重置"无缝重规划"标志，
-    // 否则如果上次无缝切换失败残留了该标志，会导致 planToViewpoint 使用错误的 replan_start_pos_ (0,0,0)
-    use_replan_start_ = false; 
-    
     ros::Time t_start = ros::Time::now();
     
-    // 1. 选择最佳视点 (两阶段 + 缓存)
     // 1. 选择最佳视点 (两阶段 + 缓存)
     int selected_vp_id = -1;
     if (!selectBestViewpoint(selected_vp_id)) {
@@ -362,16 +391,12 @@ void ExplorationFSMNew::processLocalPlan() {
     ros::Time t_plan_to_vp = ros::Time::now();
     // 3. 锁定目标，准备起飞
     current_viewpoint_id_ = selected_vp_id;
-    current_waypoint_idx_ = 0;
     
     // 重置计时器
-    trajectory_start_time_ = ros::Time::now();
     last_collision_check_time_ = ros::Time::now();
-    last_replan_time_ = ros::Time::now();         // [New]
     last_coverage_check_time_ = ros::Time::now();
-    
     has_prev_traj_ = false;  // [New] 清空旧轨迹缓存
-    has_trajectory_ = true;
+    
     ROS_INFO("[FSM] LOCALPLAN: processLocalPlan success, current_viewpoint_id_: %d, select_vp_time: %.2fms, plan_to_vp_time: %.2fms, plan all_time: %.2fms", 
         current_viewpoint_id_, (t_select_vp - t_start).toSec() * 1000.0, (t_plan_to_vp - t_select_vp).toSec() * 1000.0, (ros::Time::now() - t_start).toSec() * 1000.0);
     transitState(ExplorationState::EXEC_EXPLORATION, "Plan success");
@@ -429,20 +454,22 @@ void ExplorationFSMNew::processExecExploration() {
     if (need_replan) 
     {
         double t_start = ros::Time::now().toSec();
-         Eigen::Vector3d target = waypoint_queue_[current_waypoint_idx_].position;
-         Eigen::Vector3d next_vel = Eigen::Vector3d::Zero();
+        const WaypointInfo& wp = waypoint_queue_[current_waypoint_idx_];
+        Eigen::Vector3d target_vel = Eigen::Vector3d::Zero();
          
-         if (current_waypoint_idx_ < waypoint_queue_.size() - 1) {
-             next_vel = (waypoint_queue_[current_waypoint_idx_+1].position - target).normalized() * config_.max_vel;
+         if (current_waypoint_idx_ + 1 < waypoint_queue_.size()) 
+         {
+            const WaypointInfo& next_wp = waypoint_queue_[current_waypoint_idx_ + 1];
+            Eigen::Vector3d dir = next_wp.position - wp.position;
+            double dist = dir.norm();
+            if (dist > 2.0) {
+                target_vel = dir.normalized() * config_.max_vel * 0.8;
+            }
          }
 
          // 调用带预测的规划接口 (use_latest_traj = true)
          // [Fix] 传入正确的 Yaw，否则会导致最后时刻 Yaw 对不准而卡死
-         double target_yaw = waypoint_queue_[current_waypoint_idx_].yaw;
-         if (planTrajectory(target, target_yaw, next_vel, true)) {
-             last_replan_time_ = now;
-             // 更新这一段轨迹的开始时间
-             trajectory_start_time_ = now;
+         if (planTrajectory(wp.position, wp.yaw, target_vel)) {
             ROS_INFO("[FSM] EXEC_EXPLORATION: Receding replan success, plan time: %f ms", (ros::Time::now().toSec() - t_start) * 1000.0);
          } else {
              ROS_WARN_THROTTLE(1.0, "[FSM] EXEC_EXPLORATION: Receding replan failed");
@@ -450,12 +477,12 @@ void ExplorationFSMNew::processExecExploration() {
     }
     
     // 2. 航点追踪与切换 (核心执行逻辑)
-    // 2. 航点追踪与切换 (核心执行逻辑)
-    if (checkReachWaypoint()) {
+    if (checkReachWaypoint()) 
+    {
         // [Safe Switch] 尝试切换到下一个航点
         int next_idx = current_waypoint_idx_ + 1;
         
-        // 2.1 如果是最终视点，直接切换
+        // 2.1 抵达最终视点，任务完成
         if (next_idx >= static_cast<int>(waypoint_queue_.size())) {
             current_waypoint_idx_ = next_idx;
             ROS_INFO("[FSM] EXEC_EXPLORATION: Reached Final Viewpoint %d. Task Complete.", current_viewpoint_id_);
@@ -467,7 +494,6 @@ void ExplorationFSMNew::processExecExploration() {
             transitState(ExplorationState::LOCALPLAN, "Reached Goal");
             return;
         }
-        
         // 2.2 如果是中间点，先尝试规划，只有规划成功才真的切换
         int prev_idx = current_waypoint_idx_;
         current_waypoint_idx_ = next_idx; // 暂时切换，供 planNextWaypoint 使用
@@ -495,9 +521,8 @@ void ExplorationFSMNew::processExecExploration() {
     }
     
     // 3. 超时检测
-    if (checkTimeout()) {
-        ROS_WARN("[FSM] EXEC_EXPLORATION: Trajectory execution timeout. Aborting.");
-        
+    if (checkTimeout()) 
+    {        
         // [Step 1] 更新悬停点为当前位置 (防止 hover_pos_ 过期)
         hover_pos_ = odom_pos_;
         hover_yaw_ = odom_yaw_;
@@ -571,7 +596,7 @@ bool ExplorationFSMNew::checkCurrentGoalCovered() {
     }
 
     // 如果活跃锚点比例低于 70% (即 >30% 已覆盖)，则认为目标已完成
-    if (active_ratio < 0.7) {
+    if (active_ratio < 0.3) {
         ROS_INFO("[Coverage] Covered! Active ratio: %.2f (%d/%d)", active_ratio, active_anchors, total_anchors);
         return true;
     }
@@ -580,13 +605,16 @@ bool ExplorationFSMNew::checkCurrentGoalCovered() {
 }
 
 // ==================== LOCALPLAN 核心方法 ====================
-bool ExplorationFSMNew::selectBestViewpoint(int& selected_viewpoint_id) {
+bool ExplorationFSMNew::selectBestViewpoint(int& selected_viewpoint_id, const Eigen::Vector3d* from_pos) {
     // 1. 直接从 VM 获取最新 Clusters
     std::vector<FrontierCluster> clusters = viewpoint_manager_->getClusters();
     if (clusters.empty()) return false;
     
+    // 使用传入的 from_pos (预测位置) 或里程计位置
     Eigen::Vector3d current_pos;
-    {
+    if (from_pos) {
+        current_pos = *from_pos;
+    } else {
         std::lock_guard<std::mutex> lock(odom_mutex_);
         current_pos = odom_pos_;
     }
@@ -720,14 +748,16 @@ bool ExplorationFSMNew::selectBestViewpoint(int& selected_viewpoint_id) {
     return true;
 }
 
-bool ExplorationFSMNew::planToViewpoint(int viewpoint_id) {
+bool ExplorationFSMNew::planToViewpoint(int viewpoint_id, const Eigen::Vector3d* from_pos) {
     if (current_frontier_.empty()) {
         ROS_ERROR("[FSM] PlanToViewpoint: Cluster %d not found!", viewpoint_id);
         return false;
     }
+    
+    // 使用传入的 from_pos (预测位置) 或里程计位置用于路径生成
     Eigen::Vector3d current_pos;
-    if (use_replan_start_) {
-        current_pos = replan_start_pos_;
+    if (from_pos) {
+        current_pos = *from_pos;
     } else {
         std::lock_guard<std::mutex> lock(odom_mutex_);
         current_pos = odom_pos_;
@@ -752,7 +782,8 @@ bool ExplorationFSMNew::planToViewpoint(int viewpoint_id) {
         // ROS_INFO("[FSM] Plan: Close range (%.1fm). Direct.", dist_direct);
     } 
     // 【策略 B】远距离 (>= 5.0m) -> 拓扑引导 (Topological)
-    else {
+    else 
+    {
         std::vector<Eigen::Vector3d> topo_path;
         bool graph_ok = false;
         
@@ -865,7 +896,7 @@ bool ExplorationFSMNew::planToViewpoint(int viewpoint_id) {
     }
     return true;
 }
-
+// 切换到下一个航点
 bool ExplorationFSMNew::planNextWaypoint() {
     if (current_waypoint_idx_ >= static_cast<int>(waypoint_queue_.size())) return false;
     
@@ -884,118 +915,122 @@ bool ExplorationFSMNew::planNextWaypoint() {
         }
     }
     
-    return planTrajectory(wp.position, wp.yaw, target_vel, true);
+    return planTrajectory(wp.position, wp.yaw, target_vel);
 }
 
-// [新增] 无缝重规划触发器
-bool ExplorationFSMNew::triggerSeamlessReplan() {
+// [重构] 无缝重规划触发器 - 简化版
+bool ExplorationFSMNew::triggerSeamlessReplan() 
+{
     double t_now = ros::Time::now().toSec();
-    double t_start = trajectory_start_time_.toSec();
+    double t_cur = t_now - traj_start_time_;
+    double t_predict = t_cur + 0.05;  // 50ms 前瞻 (与 planTrajectory 保持一致)
     
-    // 1. 预测未来状态
-    double lookahead = 0.1; // 150ms 前瞻
-    double t_predict = (t_now - t_start) + lookahead;
-    
-    if (t_predict > traj_duration_ - 0.5) return false; // 快到了就不切了
+    // 快到终点了就不切换了
+    if (t_predict > traj_duration_ - 0.5) return false;
 
-    auto& traj = planner_manager_->traj_.local_traj.traj;
-    
-    // 2. 注入显式起点 (Explicit Start Injection)
-    replan_start_pos_ = traj.getPos(t_predict);
-    replan_start_vel_ = traj.getVel(t_predict);
-    replan_start_acc_ = traj.getAcc(t_predict);
-    replan_start_time_ = t_now + lookahead; // 绝对时间
-    use_replan_start_ = true; // [FLAG ON]
+    // 1. 计算预测位置 (用于选点)
+    Eigen::Vector3d pred_pos = planner_manager_->traj_.local_traj.traj.getPos(t_predict);
 
-    // 3. 选点
+    // 2. 用预测位置选点 [关键修复：选点和规划使用相同的预测起点]
     int best_id = -1;
-    if (!selectBestViewpoint(best_id) || best_id == -1) {
-        use_replan_start_ = false; 
+    if (!selectBestViewpoint(best_id, &pred_pos) || best_id == -1) {
         return false;
     }
-    double t_select = ros::Time::now().toSec();
-    // 4. 复用标准规划管线
-    // 内部会读取 use_replan_start_ 标志，使用我们预测的状态作为起点
-    if (planToViewpoint(best_id)) {
-        // 成功! 
-        use_replan_start_ = false; // [FLAG OFF]
+    
+    // 3. 规划到新视点 (路径生成和轨迹规划都使用预测位置)
+    if (planToViewpoint(best_id, &pred_pos)) {
         current_viewpoint_id_ = best_id;
-        trajectory_start_time_ = ros::Time(replan_start_time_); // 更新时间基准
-        
         ROS_WARN("[Seamless] Replan Success -> VP %d", best_id);
         return true;
     }
-    double t_plan = ros::Time::now().toSec();
-    ROS_WARN("[Seamless] triggerSeamlessReplan: Replan Failed -> VP %d, t_select: %.2f ms, t_plan: %.2f ms", best_id,
-         (t_select - t_start) * 1000, (t_plan - t_select) * 1000);
-    use_replan_start_ = false; // [FLAG OFF]
+    
+    ROS_WARN("[Seamless] Replan Failed -> VP %d", best_id);
     return false;
 }
 
 bool ExplorationFSMNew::planTrajectory(const Eigen::Vector3d& target, double target_yaw, 
-    const Eigen::Vector3d& target_vel, bool use_latest_traj) 
+    const Eigen::Vector3d& target_vel) 
 {
     Eigen::Vector3d start_pos, start_vel, start_acc;
+    double start_yaw;
     double t_now = ros::Time::now().toSec();
 
-    // === 预测逻辑 ===
-    if (use_replan_start_) {
-        // [新增] 显式起点模式
-        start_pos = replan_start_pos_;
-        start_vel = replan_start_vel_;
-        start_acc = replan_start_acc_;
-        planner_manager_->setReplanStartTime(replan_start_time_);
-        
-        // 保留旧轨迹用于拼接
-        if (has_trajectory_) {
-             has_prev_traj_ = true;
-             prev_traj_start_time_ = traj_start_time_;
-             prev_traj_duration_ = traj_duration_;
-             // [Fix] Save the actual trajectory object for execution
-             prev_traj_ = planner_manager_->traj_.local_traj.traj;
-        }
-    } 
-    else if (use_latest_traj && has_trajectory_) {
+    // === 统一预测逻辑 ===
+    if (has_trajectory_) {
+        // [模式A] 预测模式：从当前轨迹的未来点开始，实现平滑衔接
         has_prev_traj_ = true;
         prev_traj_start_time_ = traj_start_time_;
         prev_traj_duration_ = traj_duration_;
+        prev_traj_ = planner_manager_->traj_.local_traj.traj;
 
-        double lookahead = 0.05; 
+        double lookahead = 0.05;  // 50ms 前瞻
         double t_cur = t_now - traj_start_time_;
-        double t_predict = t_cur + lookahead; 
-
-        if (t_predict > traj_duration_) t_predict = traj_duration_;
+        double t_predict = std::min(t_cur + lookahead, traj_duration_);
 
         auto& traj = planner_manager_->traj_.local_traj.traj;
+        auto& local_data = planner_manager_->traj_.local_traj;
+        
         start_pos = traj.getPos(t_predict);
         start_vel = traj.getVel(t_predict);
         start_acc = traj.getAcc(t_predict);
 
+        // [关键修复] 预测 Yaw (从 Yaw 轨迹采样或从速度方向推断)
+        if (local_data.use_yaw_traj && !local_data.yaw_ctrl_pts.empty()) {
+            start_yaw = ego_planner::YawOptimizer::evaluateYaw(
+                local_data.yaw_ctrl_pts, t_predict, local_data.duration);
+            
+            // [关键修复] 立即归一化！
+            // evaluateYaw 返回展开角度以保持执行时的连续性，
+            // 但传给 YawOptimizer 的 start_yaw 必须归一化到 [-π, π]
+            while (start_yaw > M_PI) start_yaw -= 2 * M_PI;
+            while (start_yaw < -M_PI) start_yaw += 2 * M_PI;
+        } else {
+            // Fallback: 从速度方向推断 (已经归一化)
+            start_yaw = (start_vel.norm() > 0.1) ? atan2(start_vel.y(), start_vel.x()) : last_yaw_;
+        }
+
+        // [New] 安全检查：如果预测Yaw与当前里程计Yaw偏差过大，强制使用里程计Yaw
+        // 防止由于之前的跟踪误差累积，导致新规划基于错误的假设开始
+        double yaw_diff = start_yaw - odom_yaw_;
+        while (yaw_diff > M_PI) yaw_diff -= 2 * M_PI;
+        while (yaw_diff < -M_PI) yaw_diff += 2 * M_PI;
+
+        if (std::abs(yaw_diff) > 45.0 * M_PI / 180.0) { // 阈值 45度
+            ROS_WARN("[FSM] Yaw divergence detected (%.2f deg). Resetting start_yaw to Odom.", 
+                     yaw_diff * 180.0 / M_PI);
+            start_yaw = odom_yaw_;
+        }
+
         planner_manager_->setReplanStartTime(traj_start_time_ + t_predict);
-    } else {
+    } 
+    else {
+        // [模式B] 冷启动模式：从当前位置开始 (初始规划)
         start_pos = odom_pos_;
         start_vel = odom_vel_;
         start_acc = Eigen::Vector3d::Zero();
+        start_yaw = last_yaw_;
         planner_manager_->setReplanStartTime(t_now);
     }
 
     end_yaw_ = target_yaw; 
-    
-    // Set desired height for height retention (using start height)
     planner_manager_->setDesiredHeight(start_pos.z());
-    // 调用 Planner
+    
+    // 调用 Planner (传入预测的 start_yaw)
     bool success = planner_manager_->reboundReplan(
-    start_pos, start_vel, start_acc, target, target_vel, 
-    true, false, true); 
+        start_pos, start_vel, start_acc, target, target_vel, 
+        true, false, true, start_yaw, target_yaw); 
 
     if (success) {
         traj_start_time_ = planner_manager_->traj_.local_traj.start_time;
         traj_duration_ = planner_manager_->traj_.local_traj.duration;
         has_trajectory_ = true;
         last_replan_time_ = ros::Time::now();
-        
-        // 更新超时计时器的基准时间，防止误报超时
         trajectory_start_time_ = ros::Time(traj_start_time_);
+    } 
+    else {
+        // [关键修复] 规划失败时，撤销预设的 has_prev_traj_ 标志
+        // 确保 executionCallback 继续执行当前轨迹，而不是尝试切换到不存在的新轨迹
+        has_prev_traj_ = false;
     }
 
     return success;
@@ -1028,8 +1063,24 @@ std::pair<double, double> ExplorationFSMNew::calculate_yaw(double t_cur, Eigen::
         return normalizeAngle(diff);
     };
 
-    // 为简化工程，建议直接使用 planner_manager_ 中的 traj 数据
     poly_traj::Trajectory* active_traj_ptr = &planner_manager_->traj_.local_traj.traj;
+    auto& local_data = planner_manager_->traj_.local_traj;
+
+    // [Innovation] Use Optimized Yaw Trajectory if available
+    if (local_data.use_yaw_traj && !local_data.yaw_ctrl_pts.empty()) {
+        double t_eval = t_cur; 
+        if (t_eval < 0) t_eval = 0;
+        if (t_eval > local_data.duration) t_eval = local_data.duration;
+
+        double yaw = ego_planner::YawOptimizer::evaluateYaw(
+            local_data.yaw_ctrl_pts, t_eval, local_data.duration);
+        double yaw_dot = ego_planner::YawOptimizer::evaluateYawDot(
+            local_data.yaw_ctrl_pts, t_eval, local_data.duration);
+
+        last_yaw_ = yaw;
+        last_yaw_dot_ = yaw_dot;
+        return {yaw, yaw_dot};
+    }
     
     if (t_cur + time_forward <= traj_duration_) {
         dir = active_traj_ptr->getPos(t_cur + time_forward) - pos;
@@ -1097,6 +1148,16 @@ void ExplorationFSMNew::executionCallback(const ros::TimerEvent& e) {
     static ros::Time last_time = now;
     double dt = (now - last_time).toSec();
     if (dt <= 0) dt = 0.01;
+
+    // [关键修复] 首次进入时初始化状态
+    if (!exec_initialized_) {
+        last_pos_ = odom_pos_;
+        last_yaw_ = odom_yaw_;
+        last_yaw_dot_ = 0.0;
+        exec_initialized_ = true;
+        ROS_INFO("[Exec] Initialized: pos=(%.2f,%.2f,%.2f), yaw=%.2f", 
+                 last_pos_.x(), last_pos_.y(), last_pos_.z(), last_yaw_);
+    }
 
     Eigen::Vector3d pos, vel, acc;
     std::pair<double, double> yaw_state;
@@ -1167,10 +1228,14 @@ void ExplorationFSMNew::executionCallback(const ros::TimerEvent& e) {
                 
                 publishCmd(pos, vel, acc, yaw, yaw_dot);
             } else {
-                // Old traj finished, just hold
+                // [关键修复] Old traj finished, hold at last known position
+                // 更新 last_pos_ 为当前里程计位置，避免悬停在错误位置
+                last_pos_ = odom_pos_;
                 publishCmd(last_pos_, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), last_yaw_, 0);
             }
         } else {
+             // [关键修复] 无 prev_traj，使用当前里程计位置悬停
+             last_pos_ = odom_pos_;
              publishCmd(last_pos_, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), last_yaw_, 0);
         }
         last_time = now;
@@ -1194,10 +1259,9 @@ void ExplorationFSMNew::executionCallback(const ros::TimerEvent& e) {
         auto& traj = planner_manager_->traj_.local_traj.traj;
         pos = traj.getPos(traj_duration_);
         
-        // --- [Fix] Replace manual rotation with unified calculate_yaw ---
-        // calculate_yaw will handle the target alignment with dynamic limits (Fly-and-Turn)
-        // Even after traj finishes, we keep calling this to ensure precise alignment
-        yaw_state = calculate_yaw(t_cur, pos, dt);
+        // [关键修复] Clamp t_cur 避免 calculate_yaw 处理超出范围的时间
+        double t_clamped = std::min(t_cur, traj_duration_);
+        yaw_state = calculate_yaw(t_clamped, pos, dt);
         last_pos_ = pos;
         
         publishCmd(pos, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), yaw_state.first, yaw_state.second);
@@ -1222,7 +1286,7 @@ void ExplorationFSMNew::publishCmd(const Eigen::Vector3d& p, const Eigen::Vector
         cmd.trajectory_id = planner_manager_->traj_.local_traj.traj_id;
     }
     
-    cmd.position.x = p.x();
+    cmd.position.x =p.x();
     cmd.position.y = p.y();
     cmd.position.z = p.z();
     
@@ -1234,8 +1298,51 @@ void ExplorationFSMNew::publishCmd(const Eigen::Vector3d& p, const Eigen::Vector
     cmd.acceleration.y = a.y();
     cmd.acceleration.z = a.z();
     
-    cmd.yaw = yaw;
+    // [关键修复] 归一化 Yaw 到 [-π, π]
+    // evaluateYaw 返回展开的角度以保持连续性，
+    // 但控制器期望归一化的角度
+    double yaw_normalized = yaw;
+    while (yaw_normalized > M_PI) yaw_normalized -= 2 * M_PI;
+    while (yaw_normalized < -M_PI) yaw_normalized += 2 * M_PI;
+    
+    cmd.yaw = yaw_normalized;
     cmd.yaw_dot = yaw_dot;
+    
+    // [新增] 记录轨迹日志
+    if (enable_traj_logging_ && traj_log_file_.is_open()) {
+        double timestamp = cmd.header.stamp.toSec();
+        
+        // 获取当前里程计状态
+        Eigen::Vector3d odom_p, odom_v;
+        double odom_y;
+        {
+            std::lock_guard<std::mutex> lock(odom_mutex_);
+            odom_p = odom_pos_;
+            odom_v = odom_vel_;
+            odom_y = odom_yaw_;
+        }
+        
+        // 获取轨迹终点位置
+        Eigen::Vector3d traj_end = p;  // 默认当前位置
+        if (has_trajectory_ && planner_manager_) {
+            auto& traj = planner_manager_->traj_.local_traj.traj;
+            if (traj.getPieceNum() > 0) {
+                traj_end = traj.getPos(traj_duration_);
+            }
+        }
+        
+        // 写入 CSV
+        traj_log_file_ << std::fixed << std::setprecision(6)
+                       << timestamp << ","
+                       << p.x() << "," << p.y() << "," << p.z() << ","
+                       << v.x() << "," << v.y() << "," << v.z() << ","
+                       << yaw << "," << yaw_dot << ","
+                       << odom_p.x() << "," << odom_p.y() << "," << odom_p.z() << ","
+                       << odom_v.x() << "," << odom_v.y() << "," << odom_v.z() << ","
+                       << odom_y << ","
+                       << traj_end.x() << "," << traj_end.y() << "," << traj_end.z() << ","
+                       << traj_start_time_ << "," << end_yaw_ << "\n";
+    }
     
     pos_cmd_pub_.publish(cmd);
 }
@@ -1341,6 +1448,20 @@ bool ExplorationFSMNew::checkTimeout() {
     double elapsed = (ros::Time::now() - trajectory_start_time_).toSec();
     // 动态超时判定：基于实际规划时长 + 5秒缓冲
     double timeout_thresh = std::max(config_.trajectory_timeout, traj_duration_ + 5.0);
+    if(elapsed > timeout_thresh)
+    {
+        const WaypointInfo& wp = waypoint_queue_[current_waypoint_idx_];
+        Eigen::Vector3d current_pos;
+        double current_yaw;
+        {
+            std::lock_guard<std::mutex> lock(odom_mutex_);
+            current_pos = odom_pos_;
+            current_yaw = odom_yaw_;
+        }
+        double dist = (current_pos - wp.position).norm();
+        double yaw_diff = std::abs(getYawDiff(current_yaw, wp.yaw));
+        ROS_WARN("[FSM] EXEC_EXPLORATION: Trajectory execution timeout. Aborting. dist: %.2f, yaw_diff: %.2f", dist, yaw_diff);
+    }
     return elapsed > timeout_thresh;
 }
 

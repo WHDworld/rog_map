@@ -21,6 +21,11 @@ namespace ego_planner
     double duration;
     double start_time; // ros::Time time
     Eigen::Vector3d start_pos;
+    
+    // [Innovation] Explicit Yaw Trajectory for 4D Planning
+    bool use_yaw_traj = false;
+    std::vector<double> yaw_ctrl_pts;
+    double yaw_start_time = 0.0;
   };
 
   struct GlobalTrajData

@@ -129,6 +129,7 @@ set(EGO_PLANNER_SRCS
         src/ego_planner/poly_traj_optimizer.cpp
         src/ego_planner/ego_planner_manager.cpp
         src/ego_planner/ego_replan_fsm.cpp
+        src/ego_planner/yaw_optimizer.cpp
 )
 
 add_library(ego_planner_lib STATIC ${EGO_PLANNER_SRCS})

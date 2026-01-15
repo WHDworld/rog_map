@@ -79,6 +79,11 @@ rog_map:
 viewpoint_manager:
   update_rate: 5.0                  # Hz
   
+  # ---------- 安全参数 ----------
+  uav_radius: 0.3                   # 无人机机身半径 [m]
+  safety_margin: 0.25                # 额外安全边距 [m]
+
+
   # ---------- 传感器参数 ----------
   sensor_range_min: 2.0             # 最小感知距离 [m]
   sensor_range_max: 5.0             # 最大感知距离 [m]
@@ -101,10 +106,6 @@ viewpoint_manager:
   min_cluster_size: 50              # 最小簇大小
   cluster_split_threshold: 10.0      # 簇分裂阈值 [m]
   max_clusters: 10                  # 最大簇数量
-  
-  # ---------- 安全参数 ----------
-  uav_radius: 0.3                   # 无人机机身半径 [m]
-  safety_margin: 0.25                # 额外安全边距 [m]
   
   # ---------- 滤波参数 ----------
   min_viewpoint_distance: 1.5       # 视点最小间距 [m]
@@ -134,7 +135,7 @@ viewpoint_manager:
 # ========== HistoryGraph (2Hz) ==========
 history_graph:
   update_rate: 2.0                  # Hz
-  node_spacing: 5.0                 # 节点间距 [m]
+  node_spacing: 3.0                 # 节点间距 [m]
   max_assoc_dist: 10.0              # 最大关联距离 [m]
 
 # ========== 探索状态机 (100Hz) ==========

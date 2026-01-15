@@ -58,6 +58,17 @@ int HistoryGraph::update(const Eigen::Vector3d& curr_pos) {
     // [Added] Check if node added successfully
     if (new_id != -1) {
         performLoopClosureInternal(new_id);
+        // ▼▼▼▼▼▼ [新增] 孤立检查与强制重连 ▼▼▼▼▼▼
+        if (nodes_[new_id].edge_ids.empty()) {
+            ROS_WARN("[HistoryGraph] Node %d is ORPHANED (No edges)! Trying aggressive reconnect...", new_id);
+            // 尝试连接最近的 3 个节点，哪怕稍微远一点
+            std::vector<int> nearby = findNodesInRange2DInternal(curr_pos, config_.node_spacing * 3.0);
+            for (int nid : nearby) {
+                if (nid == new_id) continue;
+                // 强制尝试连边，这里我们甚至可以考虑再次放宽条件
+                tryAddEdgeInternal(new_id, nid); 
+            }
+        }
         refreshSubGridOwnershipInternal();
         ROS_INFO("HistoryGraph add node time: %f ms", (ros::Time::now().toSec() - t_start) * 1000.0);
         return new_id;
@@ -359,7 +370,7 @@ std::vector<Eigen::Vector3d> HistoryGraph::computeSimplifiedPathInternal(const E
   if (global_map_ && global_map_->isPathSafe(start.cast<float>(), end.cast<float>(), config_.uav_radius + 0.15f)) {
       return {start, end};
   }
-  auto raw = runLocalAStarInternal(start, end);
+  auto raw = runLocalAStarInternal(start, end, true);
   if (raw.size() < 2) return {};
   return simplifyPathInternal(raw);
 }

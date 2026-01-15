@@ -23,7 +23,7 @@ namespace ego_planner
 
     variable_num_ = 4 * (piece_num_ - 1) + 1;
 
-    ros::WallTime t0 = ros::WallTime::now(), t1, t2;  // Use wall time for accurate profiling in simulation
+    ros::WallTime t1, t2;  // Use wall time for accurate profiling in simulation
     int restart_nums = 0, rebound_times = 0;
     bool flag_force_return, flag_still_occ, flag_success;
 

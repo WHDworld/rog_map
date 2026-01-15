@@ -8,6 +8,7 @@
 #include "ego_planner/poly_traj_optimizer.h"
 #include "ego_planner/plan_container.hpp"
 #include "ego_planner/optimizer/poly_traj_utils.hpp"
+#include "ego_planner/yaw_optimizer.h"
 // 使用新的 STAR-MVF 地图系统
 #include "star_mvf/star_mvf.h"
 
@@ -38,7 +39,8 @@ namespace ego_planner
         const Eigen::Vector3d &start_pt, const Eigen::Vector3d &start_vel,
         const Eigen::Vector3d &start_acc, const Eigen::Vector3d &end_pt,
         const Eigen::Vector3d &end_vel, const bool flag_polyInit, 
-        const bool flag_randomPolyTraj, const bool touch_goal);
+        const bool flag_randomPolyTraj, const bool touch_goal,
+        double start_yaw = 0.0, double end_yaw = 10000.0);
     
     bool planGlobalTrajWaypoints(
         const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
@@ -78,6 +80,8 @@ namespace ego_planner
     double replan_time_offset_{0.0};  // 重规划时间偏移，用于延迟新轨迹生效
     double replan_start_time_{0.0};   // 精确的重规划开始时间
     bool use_precise_start_time_{false};  // 是否使用精确的开始时间
+
+    std::unique_ptr<YawOptimizer> yaw_optimizer_;
 
   public:
     typedef std::unique_ptr<EGOPlannerManager> Ptr;

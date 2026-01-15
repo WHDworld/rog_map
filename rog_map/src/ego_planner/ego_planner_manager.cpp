@@ -4,7 +4,9 @@
 namespace ego_planner
 {
 
-  EGOPlannerManager::EGOPlannerManager() {}
+  EGOPlannerManager::EGOPlannerManager() {
+    yaw_optimizer_ = std::make_unique<YawOptimizer>();
+  }
 
   EGOPlannerManager::~EGOPlannerManager() { std::cout << "EGOPlannerManager destroyed" << std::endl; }
 
@@ -242,7 +244,8 @@ namespace ego_planner
       const Eigen::Vector3d &start_pt, const Eigen::Vector3d &start_vel,
       const Eigen::Vector3d &start_acc, const Eigen::Vector3d &local_target_pt,
       const Eigen::Vector3d &local_target_vel, const bool flag_polyInit,
-      const bool flag_randomPolyTraj, const bool touch_goal)
+      const bool flag_randomPolyTraj, const bool touch_goal,
+      double start_yaw, double end_yaw)
   {
     // 检查优化器是否初始化
     if (!ploy_traj_opt_) {
@@ -400,6 +403,31 @@ namespace ego_planner
 
     // FALCON风格：使用 replan_time_offset_ 延迟新轨迹生效
     setLocalTrajFromOpt(best_MJO, touch_goal, replan_time_offset_);
+
+    // [Innovation] Yaw Trajectory Optimization (4D Planning)
+    // Only optimize if end_yaw is valid (passed from FSM)
+    if (yaw_optimizer_ && end_yaw < 9999.0)
+    {
+       // Use start_yaw passed from FSM (or default 0 which assumes aligned?)
+       // Actually if start_yaw is 0.0 and drone is at PI, this is bad.
+       // We trust FSM passes valid start_yaw.
+       
+       std::vector<double> yaw_cps;
+       bool yaw_success = yaw_optimizer_->optimize(traj_.local_traj.traj, 
+                                                  start_yaw, end_yaw, yaw_cps);
+       
+       if (yaw_success) {
+           traj_.local_traj.use_yaw_traj = true;
+           traj_.local_traj.yaw_ctrl_pts = yaw_cps;
+           traj_.local_traj.yaw_start_time = traj_.local_traj.start_time;
+           // ROS_INFO("[EGOPlanner] Yaw Optimization SUCCESS. Start=%.2f, End=%.2f", start_yaw, end_yaw);
+       } else {
+           traj_.local_traj.use_yaw_traj = false;
+           ROS_WARN("[EGOPlanner] Yaw Optimization FAILED. Fallback to velocity alignment.");
+       }
+    } else {
+        traj_.local_traj.use_yaw_traj = false;
+    }
 
     // success
     continous_failures_count_ = 0;
