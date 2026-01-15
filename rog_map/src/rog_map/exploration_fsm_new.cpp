@@ -827,6 +827,27 @@ bool ExplorationFSMNew::planToViewpoint(int viewpoint_id, const Eigen::Vector3d*
             // 如果能直接飞到下一个节点，就不要去中间的那个（解决V字形回溯问题）
             global_path = history_graph_->shortcutPath(current_pos, global_path);
             
+            // [关键修复] 去除重复点
+            // shortcutPath 可能返回重复点，导致规划失败
+            std::vector<Eigen::Vector3d> dedup_path;
+            dedup_path.push_back(global_path[0]);
+            for (size_t i = 1; i < global_path.size(); ++i) {
+                if ((global_path[i] - dedup_path.back()).norm() > 0.3) {  // 距离>0.3m才保留
+                    dedup_path.push_back(global_path[i]);
+                }
+            }
+            global_path = dedup_path;
+            
+            // [Debug] 打印过滤后的实际路径
+            std::cout << "\033[1;32m[GlobalPath] After Filtering & Shortcut:\033[0m" << std::endl;
+            for (size_t k = 0; k < global_path.size(); ++k) {
+                double dist_to_current = (global_path[k] - current_pos).norm();
+                std::cout << "  WP" << k << ": (" 
+                          << global_path[k].x() << ", " 
+                          << global_path[k].y() << ", " 
+                          << global_path[k].z() << ") dist=" << dist_to_current << "m" << std::endl;
+            }
+            
             // 计算总长
             path_len = 0;
             for(size_t i=0; i<global_path.size()-1; ++i) {
@@ -979,14 +1000,20 @@ bool ExplorationFSMNew::planTrajectory(const Eigen::Vector3d& target, double tar
             start_yaw = ego_planner::YawOptimizer::evaluateYaw(
                 local_data.yaw_ctrl_pts, t_predict, local_data.duration);
             
-            // [关键修复] 立即归一化！
-            // evaluateYaw 返回展开角度以保持执行时的连续性，
-            // 但传给 YawOptimizer 的 start_yaw 必须归一化到 [-π, π]
-            while (start_yaw > M_PI) start_yaw -= 2 * M_PI;
-            while (start_yaw < -M_PI) start_yaw += 2 * M_PI;
+            // [重要] 不要归一化！保持展开空间连续性
+            // 如果旧轨迹在 3.7 rad 附近，新轨迹也应该从 3.7 开始
+            // YawOptimizer 内部会正确处理 end_yaw 的展开
+            // 最终归一化在 publishCmd 中进行
         } else {
-            // Fallback: 从速度方向推断 (已经归一化)
-            start_yaw = (start_vel.norm() > 0.1) ? atan2(start_vel.y(), start_vel.x()) : last_yaw_;
+            // Fallback: 从速度方向推断
+            // 注意：atan2 返回 [-π, π]，可能导致不连续
+            // 使用 last_yaw_ 的展开版本来保持连续
+            double vel_yaw = (start_vel.norm() > 0.1) ? atan2(start_vel.y(), start_vel.x()) : 0.0;
+            // 选择最接近 last_yaw_ 的等价角度
+            double diff = vel_yaw - last_yaw_;
+            while (diff > M_PI) diff -= 2 * M_PI;
+            while (diff < -M_PI) diff += 2 * M_PI;
+            start_yaw = last_yaw_ + diff;
         }
 
         // [New] 安全检查：如果预测Yaw与当前里程计Yaw偏差过大，强制使用里程计Yaw
@@ -998,7 +1025,10 @@ bool ExplorationFSMNew::planTrajectory(const Eigen::Vector3d& target, double tar
         if (std::abs(yaw_diff) > 45.0 * M_PI / 180.0) { // 阈值 45度
             ROS_WARN("[FSM] Yaw divergence detected (%.2f deg). Resetting start_yaw to Odom.", 
                      yaw_diff * 180.0 / M_PI);
-            start_yaw = odom_yaw_;
+            // 将 odom_yaw_ 展开到与 start_yaw 最接近的等价角度
+            // 这样保持了展开空间的连续性
+            double odom_yaw_expanded = start_yaw - yaw_diff;
+            start_yaw = odom_yaw_expanded;
         }
 
         planner_manager_->setReplanStartTime(traj_start_time_ + t_predict);
@@ -1298,14 +1328,11 @@ void ExplorationFSMNew::publishCmd(const Eigen::Vector3d& p, const Eigen::Vector
     cmd.acceleration.y = a.y();
     cmd.acceleration.z = a.z();
     
-    // [关键修复] 归一化 Yaw 到 [-π, π]
-    // evaluateYaw 返回展开的角度以保持连续性，
-    // 但控制器期望归一化的角度
-    double yaw_normalized = yaw;
-    while (yaw_normalized > M_PI) yaw_normalized -= 2 * M_PI;
-    while (yaw_normalized < -M_PI) yaw_normalized += 2 * M_PI;
-    
-    cmd.yaw = yaw_normalized;
+    // [关键修复] 不归一化 Yaw！直接使用展开角度
+    // 原因：SO3Control 使用 cos(yaw) 和 sin(yaw)，天然处理任意角度
+    // 归一化会在跨越 ±π 边界时产生跳变（如 3.15 -> -3.13）
+    // 保持展开空间的连续性，避免控制器看到突变指令
+    cmd.yaw = yaw;
     cmd.yaw_dot = yaw_dot;
     
     // [新增] 记录轨迹日志
