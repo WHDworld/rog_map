@@ -380,7 +380,7 @@ public:
     // 相机状态（公开访问以兼容旧代码）
     Position current_cam_origin_ = Position::Zero();
     Quaternion current_cam_rot_ = Quaternion::Identity();
-    bool enable_camera_map_ = false;
+    bool enable_camera_map_ = true;
     
 protected:
     // 配置

@@ -13,7 +13,7 @@
     
     <!-- ========== 参数 ========== -->
     <arg name="map_name" default="octa_maze"/>
-    <arg name="sim_mode" default="1"/>  <!-- 0=Gazebo, 1=Open3D, 2=Real -->
+    <arg name="sim_mode" default="0"/>  <!-- 0=Gazebo, 1=Open3D, 2=Real -->
     <arg name="auto_start" default="false"/>
     
     <!-- ========== 新架构探索规划节点 ========== -->

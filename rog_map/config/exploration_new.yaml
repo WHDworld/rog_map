@@ -16,8 +16,8 @@ map_name: "octa_maze"
 
 rog_map:
   # 话题配置
-  lidar_topic: "/livox/lidar" #  /livox/lidar
-  odom_topic: "/uav_simulator/odometry"
+  lidar_topic: "/cloud_registered" #  /livox/lidar /cloud_registered
+  odom_topic: "/ground_truth/odom" # /ground_truth/odom /uav_simulator/odometry
   camera_pose_topic: "/camera/pose"
   camera_rgb_topic: "/camera/color/image_raw"
   # depth_topic: "/uav_simulator/depth_image"

@@ -71,6 +71,19 @@ void ExplorationFSMNew::init(ros::NodeHandle& nh, MapManager::Ptr map_manager) {
     odom_sub_ = nh_.subscribe(config_.odom_topic, 1, &ExplorationFSMNew::odometryCallback, this);
     trigger_sub_ = nh_.subscribe("/move_base_simple/goal", 1, &ExplorationFSMNew::triggerCallback, this);
     
+    // [新增] 仿真模式参数
+    nh_.param("fsm/sim_mode", sim_mode_, 1);  // 默认 SIM_OPEN3D
+    const char* sim_mode_str[] = {"GAZEBO", "OPEN3D", "REAL"};
+    ROS_INFO("[FSM_NEW] Simulation mode: %s", sim_mode_str[sim_mode_]);
+    
+    // [新增] MAVROS (仅 Gazebo/Real 模式)
+    if (sim_mode_ != SIM_OPEN3D) {
+        state_sub_ = nh_.subscribe<mavros_msgs::State>("/mavros/state", 10, &ExplorationFSMNew::stateCallback, this);
+        arming_client_ = nh_.serviceClient<mavros_msgs::CommandBool>("/mavros/cmd/arming");
+        set_mode_client_ = nh_.serviceClient<mavros_msgs::SetMode>("/mavros/set_mode");
+        ROS_INFO("[FSM_NEW] MAVROS clients initialized");
+    }
+    
     // 发布者
     exploration_state_pub_ = nh_.advertise<std_msgs::Int8>("/exploration/state", 10);
     
@@ -134,6 +147,8 @@ void ExplorationFSMNew::init(ros::NodeHandle& nh, MapManager::Ptr map_manager) {
 std::string ExplorationFSMNew::getStateString() const {
     switch (state_.load()) {
         case ExplorationState::INIT: return "INIT";
+        case ExplorationState::PRE_ARM: return "PRE_ARM";
+        case ExplorationState::TAKEOFF: return "TAKEOFF";
         case ExplorationState::WAIT_TRIGGER: return "WAIT_TRIGGER";
         case ExplorationState::LOCALPLAN: return "LOCALPLAN";
         case ExplorationState::EXEC_EXPLORATION: return "EXEC_EXPLORATION";
@@ -211,6 +226,12 @@ void ExplorationFSMNew::fsmCallback(const ros::TimerEvent& e) {
         case ExplorationState::INIT:
             processInit();
             break;
+        case ExplorationState::PRE_ARM:
+            processPreArm();
+            break;
+        case ExplorationState::TAKEOFF:
+            processTakeoff();
+            break;
         case ExplorationState::WAIT_TRIGGER:
             processWaitTrigger();
             break;
@@ -270,53 +291,142 @@ void ExplorationFSMNew::processInit()
         return;
     }
     
-    double elapsed = (ros::Time::now() - fsm_init_time_).toSec();
+    // 记录初始位置
+    initial_pos_ = odom_pos_;
     
-    // 检查起飞状态
-    if (!takeoff_complete_) {
-        // 发布起飞命令
-        if (elapsed < 0.5) {
-            takeoff_start_time_ = ros::Time::now();
-            ROS_INFO("[FSM_NEW] INIT: Starting takeoff to height %.2f", config_.takeoff_height);
-        }
-        
-        publishTakeoffCmd();
-        
-        // 检查是否到达起飞高度
-        double height_diff = odom_pos_.z() - initial_pos_.z();
-        ROS_INFO_THROTTLE(1.0, "[FSM_NEW] TAKEOFF: z=%.2f, initial_z=%.2f, diff=%.2f, target=%.2f",
-                          odom_pos_.z(), initial_pos_.z(), height_diff, config_.takeoff_height);
-        
-        if (height_diff > config_.takeoff_height - 0.02) {
-            takeoff_complete_ = true;
-            hover_pos_ = odom_pos_;
-            hover_yaw_ = odom_yaw_;
-            ROS_INFO("[FSM_NEW] TAKEOFF_DONE: Reached height %.2f", odom_pos_.z());
-        }
-        
-        // 起飞超时
-        double takeoff_elapsed = (ros::Time::now() - takeoff_start_time_).toSec();
-        if (takeoff_elapsed > config_.takeoff_timeout) {
-            LOG_WARN("Takeoff timeout, proceeding anyway");
-            takeoff_complete_ = true;
-            hover_pos_ = odom_pos_;
-            hover_yaw_ = odom_yaw_;
-        }
-        
-        return;
+    if (sim_mode_ == SIM_OPEN3D) {
+        // Open3D 模式：无 FCU，直接起飞
+        offboard_ready_ = true;
+        takeoff_start_time_ = ros::Time::now();
+        hover_pos_ = Eigen::Vector3d(initial_pos_.x(), initial_pos_.y(), 
+                                      initial_pos_.z() + config_.takeoff_height);
+        hover_yaw_ = odom_yaw_;
+        ROS_INFO("[FSM_NEW] Open3D mode: skipping PRE_ARM, starting takeoff to z=%.2f", 
+                 initial_pos_.z() + config_.takeoff_height);
+        transitState(ExplorationState::TAKEOFF, "Open3D: direct takeoff");
+    } else {
+        // Gazebo/Real 模式：需要 PRE_ARM
+        transitState(ExplorationState::PRE_ARM, "Need FCU arming");
     }
-    
-    // 等待初始化时间
-    if (elapsed < config_.init_wait_time) {
+}
+
+void ExplorationFSMNew::processPreArm() 
+{
+    if (sim_mode_ == SIM_REAL) {
+        // 真机模式：等待手动解锁
+        static bool waiting_printed = false;
+        
+        if (!current_state_.connected) {
+            ROS_INFO_THROTTLE(1.0, "[FSM_NEW] REAL mode: Waiting for FCU connection...");
+            return;
+        }
+        
+        if (!waiting_printed) {
+            ROS_INFO("[FSM_NEW] REAL mode: Waiting for manual arming and OFFBOARD mode...");
+            waiting_printed = true;
+        }
+        
+        // 发送悬停命令保持 setpoint 活跃
         publishHoverCmd();
-        return;
+        
+        // 检测手动解锁
+        if (current_state_.mode == "OFFBOARD" && current_state_.armed) {
+            offboard_ready_ = true;
+            takeoff_start_time_ = ros::Time::now();
+            hover_pos_ = odom_pos_;
+            hover_yaw_ = odom_yaw_;
+            waiting_printed = false;
+            ROS_INFO("[FSM_NEW] REAL mode: Manual arming detected, starting takeoff");
+            transitState(ExplorationState::TAKEOFF, "Manual arm OK");
+        } else {
+            ROS_INFO_THROTTLE(2.0, "[FSM_NEW] REAL mode: armed=%d, mode=%s (waiting for OFFBOARD+armed)", 
+                             current_state_.armed, current_state_.mode.c_str());
+        }
+    } else {
+        // Gazebo 模式：自动请求 OFFBOARD + ARM
+        static ros::Time last_request = ros::Time::now();
+        
+        if (!current_state_.connected) {
+            ROS_INFO_THROTTLE(1.0, "[FSM_NEW] GAZEBO mode: Waiting for FCU connection...");
+            return;
+        }
+        
+        // 发送悬停命令
+        publishHoverCmd();
+        
+        if (current_state_.mode != "OFFBOARD" && 
+            ros::Time::now() - last_request > ros::Duration(2.0)) {
+            mavros_msgs::SetMode mode;
+            mode.request.custom_mode = "OFFBOARD";
+            if (set_mode_client_.call(mode) && mode.response.mode_sent) {
+                ROS_INFO("[FSM_NEW] GAZEBO mode: OFFBOARD mode requested");
+            }
+            last_request = ros::Time::now();
+        } else if (!current_state_.armed && 
+                   ros::Time::now() - last_request > ros::Duration(2.0)) {
+            mavros_msgs::CommandBool arm;
+            arm.request.value = true;
+            if (arming_client_.call(arm) && arm.response.success) {
+                ROS_INFO("[FSM_NEW] GAZEBO mode: Vehicle armed");
+            }
+            last_request = ros::Time::now();
+        }
+        
+        if (current_state_.mode == "OFFBOARD" && current_state_.armed) {
+            offboard_ready_ = true;
+            takeoff_start_time_ = ros::Time::now();
+            hover_pos_ = odom_pos_;
+            hover_yaw_ = odom_yaw_;
+            ROS_INFO("[FSM_NEW] GAZEBO mode: OFFBOARD enabled, starting takeoff");
+            transitState(ExplorationState::TAKEOFF, "Auto arm OK");
+        }
     }
+}
+
+void ExplorationFSMNew::processTakeoff() 
+{
+    double elapsed = (ros::Time::now() - takeoff_start_time_).toSec();
+    double target_height = initial_pos_.z() + config_.takeoff_height;
     
-    // 启动模块
-    history_graph_->start();
-    viewpoint_manager_->start();
+    publishTakeoffCmd();
     
-    transitState(ExplorationState::WAIT_TRIGGER, "Init complete");
+    // 检查是否完成起飞
+    if (odom_pos_.z() > target_height - 0.1 && elapsed > 2.0) {
+        takeoff_complete_ = true;
+        hover_pos_ = Eigen::Vector3d(initial_pos_.x(), initial_pos_.y(), target_height);
+        hover_yaw_ = odom_yaw_;
+        
+        // 启动模块
+        history_graph_->start();
+        viewpoint_manager_->start();
+        
+        if (config_.auto_start) {
+            triggered_ = true;
+            ROS_INFO("[FSM_NEW] Takeoff complete (z=%.2f), auto starting exploration", odom_pos_.z());
+            transitState(ExplorationState::LOCALPLAN, "Takeoff done, auto start");
+        } else {
+            ROS_INFO("[FSM_NEW] Takeoff complete (z=%.2f), waiting for trigger", odom_pos_.z());
+            transitState(ExplorationState::WAIT_TRIGGER, "Takeoff done");
+        }
+    } else if (elapsed > config_.takeoff_timeout) {
+        ROS_WARN("[FSM_NEW] Takeoff timeout!");
+        takeoff_complete_ = true;
+        hover_pos_ = odom_pos_;
+        hover_yaw_ = odom_yaw_;
+        
+        history_graph_->start();
+        viewpoint_manager_->start();
+        
+        transitState(ExplorationState::WAIT_TRIGGER, "Takeoff timeout");
+    } else {
+        ROS_INFO_THROTTLE(1.0, "[FSM_NEW] TAKEOFF: z=%.2f, target=%.2f, elapsed=%.1fs",
+                          odom_pos_.z(), target_height, elapsed);
+    }
+}
+
+void ExplorationFSMNew::stateCallback(const mavros_msgs::State::ConstPtr& msg) 
+{
+    current_state_ = *msg;
 }
 
 void ExplorationFSMNew::processWaitTrigger() {

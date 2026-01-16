@@ -26,6 +26,9 @@
 #include <sensor_msgs/PointCloud2.h>
 #include <quadrotor_msgs/PositionCommand.h>
 #include <std_msgs/Int8.h>
+#include <mavros_msgs/State.h>
+#include <mavros_msgs/CommandBool.h>
+#include <mavros_msgs/SetMode.h>
 
 #include <vector>
 #include <memory>
@@ -47,10 +50,20 @@ namespace rog_map {
 using MapManager = star_mvf::MapManager;
 using GlobalMap = star_mvf::GlobalMap;
 
+// ==================== 仿真模式枚举 ====================
+
+enum SimMode {
+    SIM_GAZEBO = 0,   // Gazebo + PX4 SITL (自动请求 OFFBOARD + ARM)
+    SIM_OPEN3D = 1,   // Open3D 纯仿真 (无 FCU，直接起飞)
+    SIM_REAL = 2      // 真机飞行 (等待手动解锁)
+};
+
 // ==================== 状态枚举 ====================
 
 enum class ExplorationState {
-    INIT = 0,           // 初始化（等待里程计、起飞）
+    INIT = 0,           // 初始化（等待里程计）
+    PRE_ARM,            // 预解锁（Gazebo自动/Real等待手动）
+    TAKEOFF,            // 起飞中
     WAIT_TRIGGER,       // 等待触发
     LOCALPLAN,          // 本地规划（选择视点、生成轨迹）
     EXEC_EXPLORATION    // 执行探索（监控轨迹执行）
@@ -168,9 +181,14 @@ private:
     // ==================== 状态处理函数 ====================
     
     void processInit();
+    void processPreArm();           // [新增] 预解锁处理
+    void processTakeoff();          // [新增] 起飞处理
     void processWaitTrigger();
     void processLocalPlan();
     void processExecExploration();
+    
+    // ==================== MAVROS 回调 ====================
+    void stateCallback(const mavros_msgs::State::ConstPtr& msg);
     
     // ==================== LOCALPLAN 核心方法 ====================
     
@@ -358,6 +376,14 @@ private:
     Eigen::Vector3d initial_pos_ = Eigen::Vector3d::Zero();
     ros::Time takeoff_start_time_;
     bool takeoff_complete_ = false;
+    
+    // 仿真模式与 MAVROS
+    int sim_mode_ = SIM_OPEN3D;              // 默认 Open3D 模式
+    mavros_msgs::State current_state_;       // FCU 状态
+    ros::Subscriber state_sub_;              // FCU 状态订阅
+    ros::ServiceClient arming_client_;       // 解锁服务
+    ros::ServiceClient set_mode_client_;     // 模式切换服务
+    bool offboard_ready_ = false;            // OFFBOARD 模式是否就绪
     
     // 当前探索目标
     // 当前探索目标
