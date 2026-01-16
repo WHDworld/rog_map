@@ -33,6 +33,9 @@ find_package(catkin REQUIRED COMPONENTS
         tf                # 姿态转换
         cv_bridge         # [Added]
         image_transport   # [Added]
+        decomp_ros_msgs
+        decomp_ros_utils
+        vision_msgs
         )
 find_package(Eigen3 REQUIRED)
 find_package(PCL REQUIRED)

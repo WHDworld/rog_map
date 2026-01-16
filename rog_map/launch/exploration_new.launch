@@ -43,5 +43,9 @@
     <arg name="rviz" default="true"/>
     <node if="$(arg rviz)" pkg="rviz" type="rviz" name="rviz" 
           args="-d $(find rog_map)/config/exploration_open3d.rviz"/>
+
+    <node pkg="my_control_package" type="mpc_analyzer_chw.py" name="record_data" output="screen">
+        <rosparam command="load" file="$(find my_control_package)/config/controller_param.yaml" ns="controller" />
+    </node>
     
 </launch>

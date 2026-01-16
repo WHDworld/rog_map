@@ -155,7 +155,7 @@ Visualization Manager:
           Marker Topic: /odom_visualization/robot
           Name: Robot
           Namespaces:
-            mesh: true
+            {}
           Queue Size: 100
           Value: true
         - Alpha: 1
@@ -181,7 +181,7 @@ Visualization Manager:
           Size (Pixels): 3
           Size (m): 0.10000000149011612
           Style: Boxes
-          Topic: /livox/lidar
+          Topic: /cloud_registered
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
@@ -775,7 +775,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/XYOrbit
-      Distance: 40.421504974365234
+      Distance: 38.700321197509766
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -783,17 +783,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: -3.9067044258117676
-        Y: 0.8653199672698975
+        X: -5.868496894836426
+        Y: 8.588133811950684
         Z: -1.2149972462793812e-05
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.2297968864440918
+      Pitch: 0.9947971105575562
       Target Frame: perfect_drone
-      Yaw: 2.1072676181793213
+      Yaw: 1.9222667217254639
     Saved:
       - Class: rviz/ThirdPersonFollower
         Distance: 17.48538589477539
