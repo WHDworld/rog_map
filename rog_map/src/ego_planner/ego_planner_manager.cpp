@@ -508,13 +508,20 @@ namespace ego_planner
       des_vel /= 1.5;
     }
 
+    // 统一使用 local_traj 存储轨迹（简化后的接口）
     auto time_now = ros::Time::now();
-    traj_.setGlobalTraj(globalMJO.getTraj(), time_now.toSec());
+    poly_traj::Trajectory traj = globalMJO.getTraj();
+    double duration = traj.getTotalDuration();
     
-    // 同时设置为local_traj以便执行和yaw优化
-    traj_.local_traj.traj = globalMJO.getTraj();
+    // 设置 local_traj（主要执行轨迹）
+    traj_.local_traj.traj = traj;
     traj_.local_traj.start_time = time_now.toSec();
-    traj_.local_traj.duration = globalMJO.getTraj().getTotalDuration();
+    traj_.local_traj.duration = duration;
+    traj_.local_traj.start_pos = traj.getPos(0);
+    ++traj_.local_traj.traj_id;
+    
+    // 兼容性：保留 global_traj.duration 供外部查询
+    traj_.global_traj.duration = duration;
     
     // [新增] Yaw轨迹优化 (适用于重建任务)
     if (yaw_optimizer_ && end_yaw < 9999.0)
@@ -527,8 +534,8 @@ namespace ego_planner
             traj_.local_traj.use_yaw_traj = true;
             traj_.local_traj.yaw_ctrl_pts = yaw_cps;
             traj_.local_traj.yaw_start_time = traj_.local_traj.start_time;
-            ROS_INFO("[EGOPlanner] Global trajectory Yaw optimized. Start=%.2f, End=%.2f", 
-                     start_yaw, end_yaw);
+            // ROS_INFO("[EGOPlanner] Global trajectory Yaw optimized. Start=%.2f, End=%.2f", 
+            //          start_yaw, end_yaw);
         } else {
             traj_.local_traj.use_yaw_traj = false;
             ROS_WARN("[EGOPlanner] Global Yaw Optimization FAILED.");

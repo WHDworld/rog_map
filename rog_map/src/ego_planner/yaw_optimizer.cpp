@@ -318,12 +318,12 @@ bool YawOptimizer::optimize(const poly_traj::Trajectory& xyz_traj,
     for(int i=0; i<N; ++i) yaw_ctrl_pts[i] = x(i);
     
     // [Debug] 验证优化结果
-    double yaw_at_start = (x(0) + 4*x(1) + x(2)) / 6.0;
-    double yaw_at_end = (x(N-3) + 4*x(N-2) + x(N-1)) / 6.0;
-    ROS_INFO("[YawOpt] start_yaw=%.2f, end_yaw=%.2f, final_target=%.2f", 
-             start_yaw, end_yaw, final_target);
-    ROS_INFO("[YawOpt] Result: yaw(0)=%.2f, yaw(T)=%.2f, error=%.2f deg", 
-             yaw_at_start, yaw_at_end, (end_yaw - yaw_at_end) * 180.0 / M_PI);
+    // double yaw_at_start = (x(0) + 4*x(1) + x(2)) / 6.0;
+    // double yaw_at_end = (x(N-3) + 4*x(N-2) + x(N-1)) / 6.0;
+    // ROS_INFO("[YawOpt] start_yaw=%.2f, end_yaw=%.2f, final_target=%.2f", 
+    //          start_yaw, end_yaw, final_target);
+    // ROS_INFO("[YawOpt] Result: yaw(0)=%.2f, yaw(T)=%.2f, error=%.2f deg", 
+    //          yaw_at_start, yaw_at_end, (end_yaw - yaw_at_end) * 180.0 / M_PI);
     
     return true;
   }

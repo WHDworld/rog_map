@@ -376,7 +376,6 @@ private:
     std::vector<ReconViewpoint> recon_path_;      // 完整重建路径
     int recon_path_idx_;                          // 当前执行到的路径索引(全局)
     int recon_window_start_;                      // 当前窗口起始索引
-    bool has_recon_trajectory_;                   // 是否有批量规划的重建轨迹
     static constexpr int RECON_WINDOW_SIZE = 3;   // 滑动窗口大小
     
     /**
@@ -404,6 +403,8 @@ private:
     
     // 触发标志
     std::atomic<bool> triggered_{false};
+    ros::Time trigger_time_;           // 记录触发时刻，用于延迟启动
+    bool trigger_delay_started_{false}; // 是否已开始延迟计时
     
     // 起飞状态
     Eigen::Vector3d initial_pos_ = Eigen::Vector3d::Zero();

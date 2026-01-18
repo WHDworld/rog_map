@@ -170,16 +170,16 @@ fsm:
   close_viewpoint_threshold: 5.0    # 近距离视点阈值 [m]
   
   # 探索控制
-  auto_start: false                 # 自动开始探索
+  auto_start: true                 # 自动开始探索
   enable_visualization: true        # 启用可视化
   
 # ========== 规划管理器 ==========
 manager:
   # 动力学约束
-  max_vel: 2.5                      # 最大速度 [m/s]
-  max_acc: 2.0                      # 最大加速度 [m/s²]
-  max_yaw_rate: 0.50                # 最大偏航角速度 [rad/s]
-  max_yaw_acc: 0.50                 # 最大偏航角加速度 [rad/s²]
+  max_vel: 0.5                      # 最大速度 [m/s]
+  max_acc: 0.5                      # 最大加速度 [m/s²]
+  max_yaw_rate: 0.25                # 最大偏航角速度 [rad/s]
+  max_yaw_acc: 0.25                 # 最大偏航角加速度 [rad/s²]
   
   # 其他参数
   feasibility_tolerance: 0.05       # 可行性容差
@@ -236,20 +236,20 @@ target_recon:
   
   # ---------- 球面采样参数 ----------
   spherical:
-    min_distance: 1.5                 # 最小采样距离 [m]
+    min_distance: 1.50                 # 最小采样距离 [m]
     max_distance: 3.0                 # 最大采样距离 [m]
-    num_layers: 3                     # 采样层数
+    num_layers: 4                     # 采样层数
     min_elevation: 15.0               # 最小仰角 [deg]
     max_elevation: 60.0               # 最大仰角 [deg]
-    points_per_layer: 12              # 每层采样点数
+    points_per_layer: 8              # 每层采样点数
   
   # ---------- 圆柱采样参数 ----------
   cylindrical:
     radius: 2.5                       # 圆柱半径 [m]
-    min_height: 0.5                   # 最小高度 [m]
-    max_height: 3.0                   # 最大高度 [m]
-    num_height_layers: 4              # 高度层数
-    points_per_circle: 12             # 每圈采样点数
+    min_height: 0.3                   # 最小高度 [m]
+    max_height: 2.0                   # 最大高度 [m]
+    num_height_layers: 5              # 高度层数
+    points_per_circle: 10             # 每圈采样点数
   
   # ---------- 半球采样参数 ----------
   hemisphere:
@@ -290,3 +290,9 @@ target_recon:
   
   # ---------- 更新频率 ----------
   update_rate: 2.0                    # 视点优化更新频率 [Hz]
+
+extrin_calib:
+  Rcl: [0, 1, 0,
+        0, 0, -1,
+        -1, 0, 0]
+  Pcl: [0.0, -0.075, -0.05]

@@ -267,6 +267,8 @@ private:
     int matchOrCreateTarget(const TargetInfo& detection);  // 匹配或创建新目标，返回目标ID
     TrackedTarget* getActiveTarget();                       // 获取当前活跃目标
     TrackedTarget* getTargetById(int id);                   // 根据ID获取目标
+    TrackedTarget* getActiveTargetNoLock();                 // 无锁版本（供已持锁函数内部调用）
+    TrackedTarget* getTargetByIdNoLock(int id);             // 无锁版本（供已持锁函数内部调用）
     bool selectNextTarget();                                // 选择下一个待重建目标
     void updateTargetTracking(const std::vector<TargetInfo>& detections);  // 批量更新目标跟踪
     
@@ -532,7 +534,7 @@ private:
     
     // 多目标跟踪参数
     double target_match_distance_ = 1.0;   // 匹配距离阈值 (米)
-    int confirmation_frames_ = 3;          // 确认所需连续帧数
+    int confirmation_frames_ = 2;          // 确认所需连续帧数
     double target_timeout_ = 5.0;          // 目标丢失超时 (秒)
     
     // 评分权重

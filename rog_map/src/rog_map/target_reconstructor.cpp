@@ -11,11 +11,11 @@ void TargetReconstructor::init(ros::NodeHandle& nh) {
     
     // 初始化发布者
     corridor_pub_ = nh_.advertise<decomp_ros_msgs::PolyhedronArray>(
-        "target_recon/corridor", 1, true);
+        "/target_recon/corridor", 1, true);
     viewpoints_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(
-        "target_recon/viewpoints", 1, true);
+        "/target_recon/viewpoints", 1, true);
     path_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(
-        "target_recon/optimized_path", 1, true);
+        "/target_recon/optimized_path", 1, true);
         
     // 订阅话题（使用从参数加载的话题名）
     target_sub_ = nh_.subscribe(target_detection_topic_, 1, &TargetReconstructor::triggerCallback, this);
@@ -142,7 +142,6 @@ void TargetReconstructor::loadParameters() {
 bool TargetReconstructor::setTarget(const TargetInfo& target) {
     if (!initialized_) return false;
     
-    std::lock_guard<std::mutex> lock(data_mutex_);
     current_target_ = target;
     
     if (obstacle_cloud_.size() > 0) {
@@ -159,7 +158,6 @@ bool TargetReconstructor::setTarget(const TargetInfo& target) {
 // ========== 多目标跟踪管理 ==========
 
 int TargetReconstructor::matchOrCreateTarget(const TargetInfo& detection) {
-    std::lock_guard<std::mutex> lock(data_mutex_);
     
     // 1. 尝试匹配现有目标
     int matched_id = -1;
@@ -215,8 +213,10 @@ int TargetReconstructor::matchOrCreateTarget(const TargetInfo& detection) {
     return new_target.id;
 }
 
-TrackedTarget* TargetReconstructor::getActiveTarget() {
-    std::lock_guard<std::mutex> lock(data_mutex_);
+// ==================== 无锁版本辅助函数 ====================
+// 仅供内部已持锁函数调用，调用者必须已持有 data_mutex_
+
+TrackedTarget* TargetReconstructor::getActiveTargetNoLock() {
     for (auto& target : tracked_targets_) {
         if (target.id == active_target_id_) {
             return &target;
@@ -225,8 +225,7 @@ TrackedTarget* TargetReconstructor::getActiveTarget() {
     return nullptr;
 }
 
-TrackedTarget* TargetReconstructor::getTargetById(int id) {
-    std::lock_guard<std::mutex> lock(data_mutex_);
+TrackedTarget* TargetReconstructor::getTargetByIdNoLock(int id) {
     for (auto& target : tracked_targets_) {
         if (target.id == id) {
             return &target;
@@ -235,8 +234,15 @@ TrackedTarget* TargetReconstructor::getTargetById(int id) {
     return nullptr;
 }
 
+TrackedTarget* TargetReconstructor::getActiveTarget() {
+    return getActiveTargetNoLock();
+}
+
+TrackedTarget* TargetReconstructor::getTargetById(int id) {
+    return getTargetByIdNoLock(id);
+}
+
 bool TargetReconstructor::selectNextTarget() {
-    std::lock_guard<std::mutex> lock(data_mutex_);
     
     // 优先选择已确认但尚未开始重建的目标
     for (auto& target : tracked_targets_) {
@@ -290,7 +296,6 @@ void TargetReconstructor::updateTargetTracking(const std::vector<TargetInfo>& de
     // 1. 清理过期目标
     ros::Time now = ros::Time::now();
     {
-        std::lock_guard<std::mutex> lock(data_mutex_);
         tracked_targets_.erase(
             std::remove_if(tracked_targets_.begin(), tracked_targets_.end(),
                 [&](const TrackedTarget& t) {
@@ -311,7 +316,6 @@ void TargetReconstructor::updateTargetTracking(const std::vector<TargetInfo>& de
 
 // ==================== 新增状态查询接口实现 ====================
 bool TargetReconstructor::hasReconstructionTask() const {
-    std::lock_guard<std::mutex> lock(data_mutex_);
     
     for (const auto& target : tracked_targets_) {
         // 条件1: 已确认目标
@@ -333,7 +337,6 @@ bool TargetReconstructor::hasReconstructionTask() const {
 }
 
 bool TargetReconstructor::getActiveReconstructionStatus(int& target_id, ReconstructionState& recon_state) const {
-    std::lock_guard<std::mutex> lock(data_mutex_);
     
     for (const auto& target : tracked_targets_) {
         if (target.id == active_target_id_) {
@@ -347,7 +350,6 @@ bool TargetReconstructor::getActiveReconstructionStatus(int& target_id, Reconstr
 }
 
 double TargetReconstructor::getReconstructionProgress(int target_id) const {
-    std::lock_guard<std::mutex> lock(data_mutex_);
     
     for (const auto& target : tracked_targets_) {
         if (target.id == target_id) {
@@ -360,7 +362,6 @@ double TargetReconstructor::getReconstructionProgress(int target_id) const {
 
 // ==================== 新增重建流程控制接口实现 ====================
 bool TargetReconstructor::startReconstruction(const Eigen::Vector3d& drone_pos, int target_id) {
-    std::lock_guard<std::mutex> lock(data_mutex_);
     
     // 更新无人机位置(用于后续TSP计算)
     drone_position_ = drone_pos;
@@ -376,7 +377,7 @@ bool TargetReconstructor::startReconstruction(const Eigen::Vector3d& drone_pos, 
             }
         }
     } else {
-        target = getTargetById(target_id);
+        target = getTargetByIdNoLock(target_id);
     }
     
     if (!target || !target->is_confirmed) {
@@ -394,9 +395,7 @@ bool TargetReconstructor::startReconstruction(const Eigen::Vector3d& drone_pos, 
         octree_ = target->octree;
         
         // 暂时解锁以调用generateViewpoints (避免死锁)
-        data_mutex_.unlock();
         bool success = generateViewpoints();
-        data_mutex_.lock();
         
         if (!success) {
             ROS_ERROR("[TargetReconstructor] Failed to generate viewpoints for target %d", target->id);
@@ -433,9 +432,8 @@ bool TargetReconstructor::startReconstruction(const Eigen::Vector3d& drone_pos, 
 }
 
 bool TargetReconstructor::getCurrentReconViewpoint(ReconViewpoint& viewpoint) {
-    std::lock_guard<std::mutex> lock(data_mutex_);
     
-    TrackedTarget* target = getActiveTarget();
+    TrackedTarget* target = getActiveTargetNoLock();
     if (!target) {
         ROS_WARN_THROTTLE(1.0, "[TargetReconstructor] No active target for reconstruction");
         return false;
@@ -463,10 +461,9 @@ bool TargetReconstructor::getCurrentReconViewpoint(ReconViewpoint& viewpoint) {
 }
 
 int TargetReconstructor::getReconstructionPath(std::vector<ReconViewpoint>& path) {
-    std::lock_guard<std::mutex> lock(data_mutex_);
     
     path.clear();
-    TrackedTarget* target = getActiveTarget();
+    TrackedTarget* target = getActiveTargetNoLock();
     if (!target) return 0;
     
     // 返回从当前视点开始的所有剩余视点
@@ -483,9 +480,8 @@ int TargetReconstructor::getReconstructionPath(std::vector<ReconViewpoint>& path
 }
 
 bool TargetReconstructor::markCurrentViewpointComplete() {
-    std::lock_guard<std::mutex> lock(data_mutex_);
     
-    TrackedTarget* target = getActiveTarget();
+    TrackedTarget* target = getActiveTargetNoLock();
     if (!target) return false;
     
     // 移动到下一个视点
@@ -506,9 +502,8 @@ bool TargetReconstructor::markCurrentViewpointComplete() {
 }
 
 void TargetReconstructor::pauseReconstruction() {
-    std::lock_guard<std::mutex> lock(data_mutex_);
     
-    TrackedTarget* target = getActiveTarget();
+    TrackedTarget* target = getActiveTargetNoLock();
     if (target && target->recon_state == ReconstructionState::RECONSTRUCTING) {
         target->recon_state = ReconstructionState::VIEWPOINT_READY;
         ROS_INFO("[TargetReconstructor] Paused reconstruction of target %d at viewpoint %d/%lu", 
@@ -521,9 +516,8 @@ void TargetReconstructor::pauseReconstruction() {
 // ==================== 新增实时更新接口实现 ====================
 void TargetReconstructor::updateReconstructionData(const pcl::PointCloud<pcl::PointXYZ>& target_cloud, 
                                                      const Eigen::Vector3d& sensor_pose) {
-    std::lock_guard<std::mutex> lock(data_mutex_);
     
-    TrackedTarget* target = getActiveTarget();
+    TrackedTarget* target = getActiveTargetNoLock();
     if (!target || !target->octree) return;
     
     // 更新octree
@@ -538,10 +532,14 @@ void TargetReconstructor::updateReconstructionData(const pcl::PointCloud<pcl::Po
 }
 
 bool TargetReconstructor::optimizeRemainingViewpoints() {
-    std::lock_guard<std::mutex> lock(data_mutex_);
+    // [修复] 使用 unique_lock 代替 lock_guard，以支持手动 unlock/lock
+    ros::Time t0 = ros::Time::now();
     
-    TrackedTarget* target = getActiveTarget();
+    ROS_DEBUG("[optimizeRemainingViewpoints] Start, t=%.3f", t0.toSec());
+    
+    TrackedTarget* target = getActiveTargetNoLock();
     if (!target || target->recon_state != ReconstructionState::RECONSTRUCTING) {
+        ROS_DEBUG("[optimizeRemainingViewpoints] No active target, returning");
         return false;
     }
     
@@ -594,10 +592,8 @@ bool TargetReconstructor::optimizeRemainingViewpoints() {
     if (updated && target->tour.size() < 3) {
         ROS_WARN("[TargetReconstructor] Too few remaining viewpoints (%lu), triggering dynamic replanning", 
                  target->tour.size());
-        // 触发动态重规划 (需要解锁以避免死锁)
-        data_mutex_.unlock();
+        // 触发动态重规划
         bool replan_success = triggerDynamicReplanning();
-        data_mutex_.lock();
         
         if (replan_success) {
             // 将新生成的视点追加到target
@@ -618,19 +614,18 @@ bool TargetReconstructor::optimizeRemainingViewpoints() {
             }
         }
     }
-    
+    double optimize_remaining_viewpoints_time = (ros::Time::now() - t0).toSec() * 1000;
+    ROS_INFO("[processExecRecon] Optimized remaining viewpoints, optimize_remaining_viewpoints_time: %f ms", optimize_remaining_viewpoints_time);
     return updated;
 }
 
 
 
 void TargetReconstructor::updateObstacleCloud(const pcl::PointCloud<pcl::PointXYZ>& cloud) {
-    std::lock_guard<std::mutex> lock(data_mutex_);
     obstacle_cloud_ = cloud;
 }
 
 void TargetReconstructor::updateDronePosition(const Eigen::Vector3d& pos) {
-    std::lock_guard<std::mutex> lock(data_mutex_);
     drone_position_ = pos;
 }
 
@@ -638,7 +633,6 @@ void TargetReconstructor::obstacleCloudCallback(const sensor_msgs::PointCloud2Co
     pcl::PointCloud<pcl::PointXYZ> cloud;
     pcl::fromROSMsg(*msg, cloud);
     
-    std::lock_guard<std::mutex> lock(data_mutex_);
     obstacle_cloud_ = cloud;
     
     // 剔除目标区域的点云后用于安全走廊生成
@@ -659,31 +653,54 @@ void TargetReconstructor::targetCloudCallback(const sensor_msgs::PointCloud2Cons
     
     if (target_cloud.empty()) return;
     
-    std::lock_guard<std::mutex> lock(data_mutex_);
     
-    // 更新 Octree
-    if (octree_) {
-        // 计算传感器位置 (从消息头或使用当前无人机位置)
-        Eigen::Vector3d sensor_pose = drone_position_;
-        octree_->update(target_cloud, sensor_pose);
-        
-        ROS_DEBUG("[TargetReconstructor] Updated Octree with %lu target points", target_cloud.size());
+    // 1. 检查是否有活跃的重建目标
+    if (active_target_id_ < 0) {
+        ROS_DEBUG_THROTTLE(5.0, "[TargetReconstructor] Ignoring target cloud: no active reconstruction target");
+        return;
     }
+    
+    // 2. 获取活跃目标
+    TrackedTarget* active_target = nullptr;
+    for (auto& target : tracked_targets_) {
+        if (target.id == active_target_id_) {
+            active_target = &target;
+            break;
+        }
+    }
+    
+    if (!active_target || !active_target->octree) {
+        ROS_WARN_THROTTLE(2.0, "[TargetReconstructor] Active target %d not found or octree not initialized", 
+                          active_target_id_);
+        return;
+    }
+    
+    // 3. 更新活跃目标的 Octree（而非全局 octree_）
+    Eigen::Vector3d sensor_pose = drone_position_;
+    active_target->octree->update(target_cloud, sensor_pose);
+    
+    // 4. 同步更新覆盖率
+    active_target->coverage_ratio = active_target->octree->getCoverageRatio();
+    active_target->last_update_time = ros::Time::now();
+    
+    ROS_DEBUG("[TargetReconstructor] Updated target %d octree: %lu points, coverage %.1f%%", 
+              active_target_id_, target_cloud.size(), active_target->coverage_ratio * 100.0);
 }
 
 bool TargetReconstructor::generateViewpoints() {
     if (!initialized_) return false;
     
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    
+    ros::Time t0 = ros::Time::now();
     // 1. 生成安全走廊
     if (!generateCorridor()) {
         ROS_WARN("[TargetReconstructor] Failed to generate corridor");
         return false;
     }
+    double generate_corridor_time = (ros::Time::now() - t0).toSec() * 1000;
     
     // 2. 采样视点
     std::vector<ReconViewpoint> raw_vps;
+    ros::Time t1 = ros::Time::now();
     switch (sampling_mode_) {
         case SPHERICAL:
             raw_vps = sampleSphericalViewpoints();
@@ -699,56 +716,64 @@ bool TargetReconstructor::generateViewpoints() {
             raw_vps = sampleSphericalViewpoints();
             break;
     }
-    
+    double sample_viewpoints_time = (ros::Time::now() - t1).toSec() * 1000;
     if (raw_vps.empty()) {
         ROS_WARN("[TargetReconstructor] No viewpoints sampled");
         return false;
     }
     
     // 3. 滤波
+    ros::Time t2 = ros::Time::now();
     std::vector<ReconViewpoint> filtered_vps = filterViewpoints(raw_vps);
+    double filter_viewpoints_time = (ros::Time::now() - t2).toSec() * 1000;
     if (filtered_vps.empty()) {
         ROS_WARN("[TargetReconstructor] No viewpoints passed filtering");
         return false;
     }
-    
+    ros::Time t3 = ros::Time::now();
     // 4. 评分
     scoreViewpoints(filtered_vps);
-    
+    double score_viewpoints_time = (ros::Time::now() - t3).toSec() * 1000;
+    ros::Time t4 = ros::Time::now();
     // 5. 序列优化
     viewpoints_ = filtered_vps; // 保存有效视点
     tour_ = optimizeSequence(viewpoints_);
-    
-    ROS_INFO("[TargetReconstructor] Generated %lu viewpoints, tour length %lu", 
-             viewpoints_.size(), tour_.size());
+    double optimize_sequence_time = (ros::Time::now() - t4).toSec() * 1000;
+    ROS_INFO("[TargetReconstructor] Target center: %.2f, %.2f, %.2f, Generated %zu viewpoints, "
+             "corridor: %.1fms, sample: %.1fms, filter: %.1fms, score: %.1fms, optimize: %.1fms", 
+             current_target_.center.x(), current_target_.center.y(), current_target_.center.z(), 
+             viewpoints_.size(), generate_corridor_time, sample_viewpoints_time, 
+             filter_viewpoints_time, score_viewpoints_time, optimize_sequence_time);
              
     return !tour_.empty();
 }
 
 void TargetReconstructor::triggerCallback(const vision_msgs::Detection3DArrayConstPtr& msg) {
     if (msg->detections.empty()) return;
+
+    // 1. 解析所有检测结果
+    std::vector<TargetInfo> detections;
+    for (const auto& detection : msg->detections) {
+        TargetInfo target;
+        target.center = Eigen::Vector3d(
+            detection.bbox.center.position.x, 
+            detection.bbox.center.position.y, 
+            detection.bbox.center.position.z
+        );
+        target.size = Eigen::Vector3d(
+            detection.bbox.size.x, 
+            detection.bbox.size.y, 
+            detection.bbox.size.z
+        );
+        detections.push_back(target);
+    }
     
-    // 取第一个检测到的目标
-    const auto& detection = msg->detections[0];
+    // 2. 使用多目标跟踪机制匹配或创建目标
+    updateTargetTracking(detections);
     
-    TargetInfo target;
-    target.center = Eigen::Vector3d(
-        detection.bbox.center.position.x, 
-        detection.bbox.center.position.y, 
-        detection.bbox.center.position.z
-    );
-    target.size = Eigen::Vector3d(
-        detection.bbox.size.x, 
-        detection.bbox.size.y, 
-        detection.bbox.size.z
-    );
-    
-    setTarget(target);
-    
-    // 设置标志位，触发视点生成
-    target_updated_ = true;
-    
-    ROS_INFO_THROTTLE(5.0, "[TargetReconstructor] Target updated from Detection3DArray.");
+    // 3. 日志输出（调试用）
+    ROS_INFO_THROTTLE(5.0, "[TargetReconstructor] Processed %lu detections, tracked %lu targets", 
+                      detections.size(), tracked_targets_.size());
 }
 
 void TargetReconstructor::executionTimerCallback(const ros::TimerEvent& e) {
@@ -761,14 +786,13 @@ void TargetReconstructor::executionTimerCallback(const ros::TimerEvent& e) {
     // 保留向后兼容警告
     bool has_old_style_update = false;
     {
-        std::lock_guard<std::mutex> lock(data_mutex_);
         has_old_style_update = target_updated_;
     }
     
-    if (has_old_style_update) {
-        ROS_WARN_THROTTLE(5.0, "[TargetReconstructor] Detected old-style target_updated_ flag. "
-                          "Please use startReconstruction() API instead.");
-    }
+    // if (has_old_style_update) {
+    //     ROS_WARN_THROTTLE(5.0, "[TargetReconstructor] Detected old-style target_updated_ flag. "
+    //                       "Please use startReconstruction() API instead.");
+    // }
 }
 
 
@@ -848,7 +872,9 @@ std::vector<ReconViewpoint> TargetReconstructor::sampleSphericalViewpoints() {
             vp.position.x() = current_target_.center.x() + r * cos(elev) * cos(azimuth);
             vp.position.y() = current_target_.center.y() + r * cos(elev) * sin(azimuth);
             vp.position.z() = current_target_.center.z() + r * sin(elev);
-            
+            if (vp.position.z() > current_target_.center.z() + 1.0) {
+                continue;
+            }
             // 计算yaw: 指向目标
             double dx = current_target_.center.x() - vp.position.x();
             double dy = current_target_.center.y() - vp.position.y();
@@ -942,7 +968,6 @@ bool TargetReconstructor::triggerDynamicReplanning() {
     // 4. 添加到路径
     // 取前几个追加到现有视点列表
     // TODO: 应该只追加真正有效的，并重新优化。这里简化为追加
-    std::lock_guard<std::mutex> lock(data_mutex_);
     
     int added = 0;
     for (const auto& vp : filtered) {
@@ -1013,16 +1038,29 @@ std::vector<ReconViewpoint> TargetReconstructor::filterViewpoints(
     const std::vector<ReconViewpoint>& vps) 
 {
     std::vector<ReconViewpoint> filtered;
+    int corridor_rejected = 0;
+    int obstruction_rejected = 0;
+    
     for (const auto& vp : vps) {
         // 1. 走廊检查
-        if (!isInsideCorridor(vp.position)) continue;
+        if (!isInsideCorridor(vp.position)) {
+            corridor_rejected++;
+            continue;
+        }
         
         // 2. 遮挡检查
         if (enable_obstruction_check_ && 
-            !isViewUnobstructed(vp.position, current_target_.center)) continue;
+            !isViewUnobstructed(vp.position, current_target_.center)) {
+            obstruction_rejected++;
+            continue;
+        }
             
         filtered.push_back(vp);
     }
+    
+    ROS_INFO("[TargetReconstructor] Filter: input=%zu, corridor_rejected=%d, obstruction_rejected=%d, passed=%zu",
+             vps.size(), corridor_rejected, obstruction_rejected, filtered.size());
+    
     return filtered;
 }
 
@@ -1046,15 +1084,29 @@ bool TargetReconstructor::isViewUnobstructed(const Eigen::Vector3d& from,
     double dist = dir.norm();
     dir.normalize();
     
-    // 简单射线检测: 在视线上采样几点
-    std::vector<double> ratios = {0.2, 0.4, 0.6, 0.8}; // 避开端点
+    // 目标BBox范围(用于跳过目标本身的点云)
+    Eigen::Vector3d bbox_min = current_target_.center - current_target_.size / 2.0 - Eigen::Vector3d(0.3, 0.3, 0.3);
+    Eigen::Vector3d bbox_max = current_target_.center + current_target_.size / 2.0 + Eigen::Vector3d(0.3, 0.3, 0.3);
+    
+    // 简单射线检测: 在视线中段采样几点(避开端点附近)
+    std::vector<double> ratios = {0.25, 0.5, 0.75};
+    double obstruction_threshold = 0.35; // 放宽阈值到35cm
+    
     for (double r : ratios) {
         Eigen::Vector3d pt = from + dir * dist * r;
         
         // 检查附近是否有障碍点
         for (const auto& obs_pt : obstacle_cloud_.points) {
             Eigen::Vector3d p(obs_pt.x, obs_pt.y, obs_pt.z);
-            if ((p - pt).squaredNorm() < 0.2 * 0.2) { // 20cm阈值
+            
+            // 跳过目标BBox内的点(避免目标本身影响遮挡判断)
+            if (p.x() > bbox_min.x() && p.x() < bbox_max.x() &&
+                p.y() > bbox_min.y() && p.y() < bbox_max.y() &&
+                p.z() > bbox_min.z() && p.z() < bbox_max.z()) {
+                continue;
+            }
+            
+            if ((p - pt).squaredNorm() < obstruction_threshold * obstruction_threshold) {
                 return false;
             }
         }
@@ -1409,7 +1461,7 @@ void TargetReconstructor::publishViewpoints() {
     visualization_msgs::MarkerArray msg;
     int id = 0;
     
-    // 显示所有采样点（半透明）
+    // 显示所有采样点（半透明球体）
     visualization_msgs::Marker m;
     m.header.frame_id = "map";
     m.header.stamp = ros::Time::now();
@@ -1426,6 +1478,86 @@ void TargetReconstructor::publishViewpoints() {
         m.pose.position.z = vp.position.z();
         msg.markers.push_back(m);
     }
+    
+    // 显示相机视锥体（LINE_LIST方式）
+    // 视锥体参数
+    double fov_h = camera_params_.hfov;  // 水平视场角
+    double fov_v = camera_params_.vfov;  // 垂直视场角
+    double frustum_length = 0.75;         // 视锥体显示长度
+    
+    visualization_msgs::Marker frustum;
+    frustum.header.frame_id = "map";
+    frustum.header.stamp = ros::Time::now();
+    frustum.ns = "camera_frustum";
+    frustum.action = visualization_msgs::Marker::ADD;
+    frustum.type = visualization_msgs::Marker::LINE_LIST;
+    frustum.scale.x = 0.02;  // 线宽
+    frustum.color.r = 0.0;
+    frustum.color.g = 1.0;
+    frustum.color.b = 0.5;
+    frustum.color.a = 0.7;
+    frustum.pose.orientation.w = 1.0;
+    
+    for (size_t i = 0; i < viewpoints_.size(); ++i) {
+        const auto& vp = viewpoints_[i];
+        frustum.id = id++;
+        frustum.points.clear();
+        
+        // 视锥体顶点（相机坐标系，相机朝向+X）
+        // 根据yaw旋转到世界坐标系
+        double yaw = vp.yaw;
+        double cos_yaw = cos(yaw);
+        double sin_yaw = sin(yaw);
+        
+        // 视锥体四个角点在相机前方的偏移（相机坐标系）
+        double half_h = frustum_length * tan(fov_h / 2.0);
+        double half_v = frustum_length * tan(fov_v / 2.0);
+        
+        // 四个角点（相机坐标系：前方为+X，右为+Y，下为+Z）
+        // 转换到世界坐标系时：yaw角绕Z轴旋转
+        Eigen::Vector3d origin = vp.position;
+        
+        // 在相机坐标系下的四个角点（相对于相机原点）
+        // 左上、右上、右下、左下
+        std::vector<Eigen::Vector3d> corners_cam = {
+            Eigen::Vector3d(frustum_length, -half_h,  half_v),  // 左上
+            Eigen::Vector3d(frustum_length,  half_h,  half_v),  // 右上
+            Eigen::Vector3d(frustum_length,  half_h, -half_v),  // 右下
+            Eigen::Vector3d(frustum_length, -half_h, -half_v)   // 左下
+        };
+        
+        // 转换到世界坐标系（只应用yaw旋转）
+        std::vector<Eigen::Vector3d> corners_world;
+        for (const auto& c : corners_cam) {
+            Eigen::Vector3d rotated;
+            rotated.x() = c.x() * cos_yaw - c.y() * sin_yaw;
+            rotated.y() = c.x() * sin_yaw + c.y() * cos_yaw;
+            rotated.z() = c.z();
+            corners_world.push_back(origin + rotated);
+        }
+        
+        // 绘制视锥体边线
+        // 从原点到四个角点
+        for (int j = 0; j < 4; ++j) {
+            geometry_msgs::Point p1, p2;
+            p1.x = origin.x(); p1.y = origin.y(); p1.z = origin.z();
+            p2.x = corners_world[j].x(); p2.y = corners_world[j].y(); p2.z = corners_world[j].z();
+            frustum.points.push_back(p1);
+            frustum.points.push_back(p2);
+        }
+        
+        // 四个角点之间的连线（形成矩形框）
+        for (int j = 0; j < 4; ++j) {
+            geometry_msgs::Point p1, p2;
+            p1.x = corners_world[j].x(); p1.y = corners_world[j].y(); p1.z = corners_world[j].z();
+            p2.x = corners_world[(j+1)%4].x(); p2.y = corners_world[(j+1)%4].y(); p2.z = corners_world[(j+1)%4].z();
+            frustum.points.push_back(p1);
+            frustum.points.push_back(p2);
+        }
+        
+        msg.markers.push_back(frustum);
+    }
+    
     viewpoints_pub_.publish(msg);
 }
 

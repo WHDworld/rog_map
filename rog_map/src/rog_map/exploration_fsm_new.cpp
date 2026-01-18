@@ -156,13 +156,23 @@ std::string ExplorationFSMNew::getStateString() const {
         case ExplorationState::WAIT_TRIGGER: return "WAIT_TRIGGER";
         case ExplorationState::LOCALPLAN: return "LOCALPLAN";
         case ExplorationState::EXEC_EXPLORATION: return "EXEC_EXPLORATION";
+        case ExplorationState::RECON_PLAN: return "RECON_PLAN";
+        case ExplorationState::EXEC_RECON: return "EXEC_RECON";
+        case ExplorationState::FINISH: return "FINISH";
         default: return "UNKNOWN";
     }
 }
 
 void ExplorationFSMNew::visualizeTrajectory()
 {
-    if (!planner_manager_ || !planner_manager_->traj_.local_traj.traj_id) return;
+    if (!planner_manager_ || !has_trajectory_) return;
+    
+    auto& traj = planner_manager_->traj_.local_traj.traj;
+    double duration = planner_manager_->traj_.local_traj.duration;
+    
+    // 安全检查：确保轨迹有效
+    if (traj.getPieceNum() == 0 || duration <= 0) return;
+    
     visualization_msgs::Marker marker;
     marker.header.frame_id = "map";
     marker.header.stamp = ros::Time::now();
@@ -176,18 +186,19 @@ void ExplorationFSMNew::visualizeTrajectory()
     marker.color.g = 0.5;
     marker.color.b = 1.0;
     marker.color.a = 1.0;
-  
-    auto& traj = planner_manager_->traj_.local_traj.traj;
-    double duration = planner_manager_->traj_.local_traj.duration;
     
     for (double t = 0; t < duration; t += 0.1) {
         Eigen::Vector3d pos = traj.getPos(t);
+        // 检查NaN
+        if (std::isnan(pos.x()) || std::isnan(pos.y()) || std::isnan(pos.z())) continue;
         geometry_msgs::Point pt;
         pt.x = pos.x(); pt.y = pos.y(); pt.z = pos.z();
         marker.points.push_back(pt);
     }
-  
-    traj_vis_pub.publish(marker);
+    
+    if (!marker.points.empty()) {
+        traj_vis_pub.publish(marker);
+    }
 }
 
 void ExplorationFSMNew::transitState(ExplorationState new_state, const std::string& reason) {
@@ -197,9 +208,14 @@ void ExplorationFSMNew::transitState(ExplorationState new_state, const std::stri
     std::string new_state_str;
     switch (new_state) {
         case ExplorationState::INIT: new_state_str = "INIT"; break;
+        case ExplorationState::PRE_ARM: new_state_str = "PRE_ARM"; break;
+        case ExplorationState::TAKEOFF: new_state_str = "TAKEOFF"; break;
         case ExplorationState::WAIT_TRIGGER: new_state_str = "WAIT_TRIGGER"; break;
         case ExplorationState::LOCALPLAN: new_state_str = "LOCALPLAN"; break;
         case ExplorationState::EXEC_EXPLORATION: new_state_str = "EXEC_EXPLORATION"; break;
+        case ExplorationState::RECON_PLAN: new_state_str = "RECON_PLAN"; break;
+        case ExplorationState::EXEC_RECON: new_state_str = "EXEC_RECON"; break;
+        case ExplorationState::FINISH: new_state_str = "FINISH"; break;
         default: new_state_str = "UNKNOWN"; break;
     }
     
@@ -224,8 +240,7 @@ void ExplorationFSMNew::stopExploration() {
 // ==================== 回调函数 ====================
 
 void ExplorationFSMNew::fsmCallback(const ros::TimerEvent& e) {
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    
+    // [调试] 入口日志    
     switch (state_.load()) {
         case ExplorationState::INIT:
             processInit();
@@ -253,7 +268,7 @@ void ExplorationFSMNew::fsmCallback(const ros::TimerEvent& e) {
             break;
     }
     
-    // 可视化
+    // 可视化 (暂时禁用以调试)
     if (config_.enable_visualization) {
         visualize();
     }
@@ -484,9 +499,32 @@ void ExplorationFSMNew::processWaitTrigger() {
     }
     
     if (triggered_) {
+        // [新增] 非阻塞延迟 3 秒启动
+        constexpr double TRIGGER_DELAY_SEC = 5.0;
+        
+        if (!trigger_delay_started_) {
+            // 首次触发，记录时间并开始计时
+            trigger_time_ = ros::Time::now();
+            trigger_delay_started_ = true;
+            ROS_INFO("[FSM] Triggered! Waiting %.1f seconds before starting...", TRIGGER_DELAY_SEC);
+        }
+        
+        double elapsed = (ros::Time::now() - trigger_time_).toSec();
+        if (elapsed < TRIGGER_DELAY_SEC) {
+            // 延迟期间，定期打印倒计时（每秒一次）
+            ROS_INFO_THROTTLE(1.0, "[FSM] Starting in %.1f s...", TRIGGER_DELAY_SEC - elapsed);
+            return;  // 继续等待，不进入后续状态
+        }
+        
+        // 延迟结束，正式开始
+        // [优化] 优先检查重建任务，实现起飞即重建
+        if (target_reconstructor_->hasReconstructionTask()) {
+            ROS_INFO("[FSM] Detected reconstruction task at startup, switching to RECON_PLAN");
+            transitState(ExplorationState::RECON_PLAN, "recon_task_at_startup");
+            return;
+        }
         // 检查是否有有效视点        
         if (viewpoint_manager_->hasValidViewpoints()) {
-            
             transitState(ExplorationState::LOCALPLAN, "Triggered with viewpoints");
         } else {
             // 没有视点，等待视点生成
@@ -552,8 +590,16 @@ void ExplorationFSMNew::processLocalPlan() {
 }
 
 void ExplorationFSMNew::processExecExploration() {
-
-
+    // [新增] 检查重建任务 (每0.5秒)
+    if ((ros::Time::now() - last_recon_check_time_).toSec() > 0.5) {
+        last_recon_check_time_ = ros::Time::now();
+        
+        if (target_reconstructor_->hasReconstructionTask()) {
+            ROS_INFO("[FSM] Detected reconstruction task, from ExecExploration switching to RECON_PLAN");
+            transitState(ExplorationState::RECON_PLAN, "recon_task_detected");
+            return;
+        }
+    }
     // 0. 基础状态检查
     if (!has_trajectory_) {
         transitState(ExplorationState::LOCALPLAN, "No trajectory");
@@ -562,16 +608,7 @@ void ExplorationFSMNew::processExecExploration() {
     
     ros::Time now = ros::Time::now();
 
-    // [新增] 检查重建任务 (每0.5秒)
-    if ((now - last_recon_check_time_).toSec() > 0.5) {
-        last_recon_check_time_ = ros::Time::now();
-        
-        if (target_reconstructor_->hasReconstructionTask()) {
-            ROS_INFO("[FSM] Detected reconstruction task, switching to RECON_PLAN");
-            transitState(ExplorationState::RECON_PLAN, "recon_task_detected");
-            return;
-        }
-    }
+
 
         // ==================== [新增] 覆盖检测与无缝切换 ====================
     // 频率控制: 2Hz (每0.5秒检查一次)
@@ -701,10 +738,7 @@ void ExplorationFSMNew::processExecExploration() {
         // 立即触发 processLocalPlan，那里有全套的变量重置逻辑。
         
         transitState(ExplorationState::LOCALPLAN, "Timeout");
-    }
-    
-    // 4. 发布控制指令给底层控制器
-    // publishTrajectoryCmd();
+    }    
 }
 
 void ExplorationFSMNew::processReconPlan(const ros::TimerEvent& e) {
@@ -735,7 +769,8 @@ void ExplorationFSMNew::processReconPlan(const ros::TimerEvent& e) {
     }
     
     // 4. 批量规划整条重建轨迹
-    if (planReconstructionTrajectory(recon_path, 0)) {
+    if (planReconstructionTrajectory(recon_path, 0)) 
+    {
         current_recon_viewpoint_ = recon_path[0];
         double total_time = (ros::Time::now() - t_start).toSec() * 1000.0;
         ROS_INFO("[%.3f][RECON] Started: %d vps, first=(%.2f,%.2f,%.2f), gen=%.1fms, total=%.1fms",
@@ -748,91 +783,98 @@ void ExplorationFSMNew::processReconPlan(const ros::TimerEvent& e) {
         planner_manager_->setEnableHeightKeeping(true);
         transitState(ExplorationState::LOCALPLAN, "recon_batch_plan_failed");
     }
+    has_prev_traj_ = false;  // [New] 清空旧轨迹缓存
 }
 
 void ExplorationFSMNew::processExecRecon(const ros::TimerEvent& e) {
-    ros::Time now = ros::Time::now();
-    static ros::Time last_status_print = ros::Time(0);
-    
     // 1. 碰撞检测 - 发现不安全时从当前位置重规划
-    if (checkCollision()) {
-        ROS_WARN("[%.3f][RECON] Collision! idx=%d, replan", now.toSec(), recon_path_idx_);
-        if (planReconstructionTrajectory(recon_path_, recon_path_idx_)) {
-            ROS_INFO("[%.3f][RECON] Replan OK", now.toSec());
-        } else {
-            planner_manager_->setEnableHeightKeeping(true);
-            has_recon_trajectory_ = false;
-            transitState(ExplorationState::LOCALPLAN, "recon_replan_failed");
-        }
+    // if (checkCollision()) {
+    //     has_trajectory_ = false;
+    //     hover_pos_ = odom_pos_;
+    //     hover_yaw_ = last_yaw_;
+    //     if (planReconstructionTrajectory(recon_path_, recon_window_start_)) {
+    //         ROS_WARN("[ProcessExecRecon] Collision! Replan from window %d", recon_window_start_);
+    //     } else {
+    //         planner_manager_->setEnableHeightKeeping(true);
+    //         transitState(ExplorationState::LOCALPLAN, "recon_replan_failed");
+    //     }
+    //     return;
+    // }
+    
+    // 2. 实时更新重建数据 (每0.5秒)
+    // if ((ros::Time::now() - last_recon_update_time_).toSec() > 0.5) {
+    //     last_recon_update_time_ = ros::Time::now();
+    //     target_reconstructor_->optimizeRemainingViewpoints();
+    // }
+    
+    // 3. 计算当前窗口范围 [window_start, window_end)
+    int window_end = std::min(recon_window_start_ + RECON_WINDOW_SIZE, (int)recon_path_.size());
+    int window_last_idx = window_end - 1;  // 窗口内最后一个视点索引
+    
+    if (window_last_idx < 0 || window_last_idx >= (int)recon_path_.size()) {
+        ROS_WARN("[ProcessExecRecon] Invalid window range! Completing.");
+        planner_manager_->setEnableHeightKeeping(true);
+        recon_path_.clear();
+        transitState(ExplorationState::LOCALPLAN, "recon_complete");
         return;
     }
     
-    // 2. 实时更新重建数据 (每0.5秒)
-    if ((now - last_recon_update_time_).toSec() > 0.5) {
-        last_recon_update_time_ = now;
-        target_reconstructor_->optimizeRemainingViewpoints();
-    }
-    
-    // 3. 检查是否到达当前视点
-    if (recon_path_idx_ < (int)recon_path_.size()) {
-        current_recon_viewpoint_ = recon_path_[recon_path_idx_];
-    }
-    
-    double dist_to_goal = (odom_pos_ - current_recon_viewpoint_.position).norm();
-    double yaw_diff = fabs(odom_yaw_ - current_recon_viewpoint_.yaw);
+    // 4. 只检测窗口最后一个视点是否到达
+    const ReconViewpoint& target_vp = recon_path_[window_last_idx];
+    double dist_to_goal = (odom_pos_ - target_vp.position).norm();
+    double yaw_diff = fabs(odom_yaw_ - target_vp.yaw);
     if (yaw_diff > M_PI) yaw_diff = 2 * M_PI - yaw_diff;
     
-    // 定期打印状态 (每2秒)
-    if ((now - last_status_print).toSec() > 2.0) {
-        last_status_print = now;
-        ROS_INFO("[%.3f][RECON] idx=%d/%lu, pos=(%.2f,%.2f,%.2f)->goal=(%.2f,%.2f,%.2f), d=%.2f, yaw_err=%.1fdeg",
-                 now.toSec(), recon_path_idx_, recon_path_.size(),
-                 odom_pos_.x(), odom_pos_.y(), odom_pos_.z(),
-                 current_recon_viewpoint_.position.x(), current_recon_viewpoint_.position.y(), current_recon_viewpoint_.position.z(),
-                 dist_to_goal, yaw_diff * 180.0 / M_PI);
-    }
+    // 调试日志：每秒打印一次当前状态
+    ROS_INFO("[ProcessExecRecon] Window[%d-%d], target_vp[%d]=(%.2f,%.2f,%.2f), odom=(%.2f,%.2f,%.2f), dist=%.2f",
+                      recon_window_start_, window_last_idx, window_last_idx,
+                      target_vp.position.x(), target_vp.position.y(), target_vp.position.z(),
+                      odom_pos_.x(), odom_pos_.y(), odom_pos_.z(), dist_to_goal);
     
-    bool reached_viewpoint = (dist_to_goal < 0.3) && (yaw_diff < 0.15);  // 30cm + ~8.6度
+    bool reached_window_end = (dist_to_goal < 0.4);  // 40cm阈值
     
-    if (reached_viewpoint) {
-        bool has_more = target_reconstructor_->markCurrentViewpointComplete();
-        recon_path_idx_++;
+    if (reached_window_end) 
+    {
+        // 标记窗口内所有视点完成
+        for (int i = recon_window_start_; i <= window_last_idx; ++i) {
+            target_reconstructor_->markCurrentViewpointComplete();
+        }
         
-        ROS_INFO("[%.3f][RECON] VP %d reached! remain=%lu, has_more=%s", 
-                 now.toSec(), recon_path_idx_ - 1, recon_path_.size() - recon_path_idx_,
-                 has_more ? "Y" : "N");
+        ROS_INFO("[ProcessExecRecon] Window [%d-%d] complete! dist=%.2f", 
+                 recon_window_start_, window_last_idx, dist_to_goal);
         
-        if (!has_more || recon_path_idx_ >= (int)recon_path_.size()) {
-            ROS_INFO("[%.3f][RECON] COMPLETE! Total %lu viewpoints", now.toSec(), recon_path_.size());
+        // 检查是否所有视点都完成
+        if (window_end >= (int)recon_path_.size()) {
+            ROS_INFO("[ProcessExecRecon] COMPLETE! Total %lu viewpoints", recon_path_.size());
             planner_manager_->setEnableHeightKeeping(true);
-            has_recon_trajectory_ = false;
             recon_path_.clear();
             transitState(ExplorationState::LOCALPLAN, "recon_complete");
             return;
         }
         
-        // 滚动窗口规划
-        int window_end = recon_window_start_ + RECON_WINDOW_SIZE;
-        if (recon_path_idx_ >= window_end - 1) {
-            ROS_INFO("[%.3f][RECON] Sliding window: %d -> %d", now.toSec(), recon_path_idx_, recon_path_idx_ + RECON_WINDOW_SIZE);
-            if (!planReconstructionTrajectory(recon_path_, recon_path_idx_, RECON_WINDOW_SIZE)) {
-                planner_manager_->setEnableHeightKeeping(true);
-                transitState(ExplorationState::LOCALPLAN, "sliding_window_failed");
-            }
+        // 滑动窗口到下一批视点
+        int next_window_start = window_end;
+        ROS_INFO("[ProcessExecRecon] Sliding window: [%d-%d] -> [%d-%d]", 
+                 recon_window_start_, window_last_idx,
+                 next_window_start, std::min(next_window_start + RECON_WINDOW_SIZE - 1, (int)recon_path_.size() - 1));
+        
+        if (!planReconstructionTrajectory(recon_path_, next_window_start, RECON_WINDOW_SIZE)) {
+            planner_manager_->setEnableHeightKeeping(true);
+            transitState(ExplorationState::LOCALPLAN, "sliding_window_failed");
         }
     }
     
-    // 4. 检查轨迹超时
-    double t_elapsed = now.toSec() - traj_start_time_;
-    int window_end = std::min(recon_window_start_ + RECON_WINDOW_SIZE, (int)recon_path_.size());
-    if (t_elapsed > traj_duration_ + 1.0 && recon_path_idx_ < window_end) {
-        ROS_WARN("[%.3f][RECON] Timeout! t=%.1f/%.1f, replan from %d", 
-                 now.toSec(), t_elapsed, traj_duration_, recon_path_idx_);
-        if (!planReconstructionTrajectory(recon_path_, recon_path_idx_, RECON_WINDOW_SIZE)) {
-            planner_manager_->setEnableHeightKeeping(true);
-            transitState(ExplorationState::LOCALPLAN, "recon_timeout");
-        }
-    }
+    // 5. 检查轨迹超时
+    // double t_elapsed = ros::Time::now().toSec() - traj_start_time_;
+    // if (t_elapsed > traj_duration_ + 2.0) {
+    //     ROS_WARN("[ProcessExecRecon] Timeout! t=%.1f/%.1f, replan from window %d", 
+    //              t_elapsed, traj_duration_, recon_window_start_);
+    //     if (!planReconstructionTrajectory(recon_path_, recon_window_start_, RECON_WINDOW_SIZE)) {
+    //         planner_manager_->setEnableHeightKeeping(true);
+    //         transitState(ExplorationState::LOCALPLAN, "recon_timeout");
+    //     }
+    // }
+    ROS_INFO("[ProcessExecRecon] End");
 }
 
 bool ExplorationFSMNew::planReconstructionTrajectory(
@@ -842,7 +884,11 @@ bool ExplorationFSMNew::planReconstructionTrajectory(
         ROS_WARN("[FSM] Invalid reconstruction path for sliding window planning");
         return false;
     }
-    
+
+    Eigen::Vector3d start_pos, start_vel, start_acc;
+    double start_yaw;
+    double t_now = ros::Time::now().toSec();
+
     // 1. 禁用高度保持，允许垂直方向自由移动
     planner_manager_->setEnableHeightKeeping(false);
     
@@ -851,11 +897,62 @@ bool ExplorationFSMNew::planReconstructionTrajectory(
     
     // 3. 构建waypoints序列
     std::vector<Eigen::Vector3d> waypoints;
-    
-    // 添加当前位置作为起点
-    Eigen::Vector3d start_pos = odom_pos_;
+    if(has_trajectory_)
+    {
+        // [模式A] 预测模式：从当前轨迹的未来点开始，实现平滑衔接
+        has_prev_traj_ = true;
+        prev_traj_start_time_ = traj_start_time_;
+        prev_traj_duration_ = traj_duration_;
+        prev_traj_ = planner_manager_->traj_.local_traj.traj;
+
+        double lookahead = 0.05;  // 50ms 前瞻
+        double t_cur = t_now - traj_start_time_;
+        double t_predict = std::min(t_cur + lookahead, traj_duration_);
+
+        auto& traj = planner_manager_->traj_.local_traj.traj;
+        auto& local_data = planner_manager_->traj_.local_traj;
+        
+        start_pos = traj.getPos(t_predict);
+        start_vel = traj.getVel(t_predict);
+        start_acc = traj.getAcc(t_predict);
+
+        // [关键修复] 预测 Yaw (从 Yaw 轨迹采样或从速度方向推断)
+        if (local_data.use_yaw_traj && !local_data.yaw_ctrl_pts.empty()) {
+            start_yaw = ego_planner::YawOptimizer::evaluateYaw(
+                local_data.yaw_ctrl_pts, t_predict, local_data.duration);
+        } else {
+            double vel_yaw = (start_vel.norm() > 0.1) ? atan2(start_vel.y(), start_vel.x()) : 0.0;
+
+            double diff = vel_yaw - last_yaw_;
+            while (diff > M_PI) diff -= 2 * M_PI;
+            while (diff < -M_PI) diff += 2 * M_PI;
+            start_yaw = last_yaw_ + diff;
+        }
+        // [New] 安全检查：如果预测Yaw与当前里程计Yaw偏差过大，强制使用里程计Yaw
+        // 防止由于之前的跟踪误差累积，导致新规划基于错误的假设开始
+        double yaw_diff = start_yaw - odom_yaw_;
+        while (yaw_diff > M_PI) yaw_diff -= 2 * M_PI;
+        while (yaw_diff < -M_PI) yaw_diff += 2 * M_PI;
+        if (std::abs(yaw_diff) > 45.0 * M_PI / 180.0) { // 阈值 45度
+            ROS_WARN("[FSM] Yaw divergence detected (%.2f deg). Resetting start_yaw to Odom.", 
+                     yaw_diff * 180.0 / M_PI);
+            // 将 odom_yaw_ 展开到与 start_yaw 最接近的等价角度
+            // 这样保持了展开空间的连续性
+            double odom_yaw_expanded = start_yaw - yaw_diff;
+            start_yaw = odom_yaw_expanded;
+        }
+        planner_manager_->setReplanStartTime(traj_start_time_ + t_predict);
+    }
+    else
+    {
+        // 添加当前位置作为起点
+        start_pos = odom_pos_;
+        start_vel = odom_vel_;
+        start_acc = Eigen::Vector3d::Zero();
+        start_yaw = last_yaw_;
+        planner_manager_->setReplanStartTime(t_now);
+    }
     waypoints.push_back(start_pos);
-    
     // 只添加窗口内的视点
     for (int i = from_idx; i < end_idx; ++i) {
         waypoints.push_back(viewpoints[i].position);
@@ -867,15 +964,12 @@ bool ExplorationFSMNew::planReconstructionTrajectory(
     }
     
     // 4. 使用多点规划接口
-    Eigen::Vector3d start_vel = odom_vel_;
-    Eigen::Vector3d start_acc = Eigen::Vector3d::Zero();
     // 如果窗口未到终点，终点速度非零以便衔接
     bool is_last_window = (end_idx >= (int)viewpoints.size());
-    Eigen::Vector3d end_vel = is_last_window ? Eigen::Vector3d::Zero() : Eigen::Vector3d(0.3, 0, 0);
+    Eigen::Vector3d end_vel = is_last_window ? Eigen::Vector3d::Zero() : Eigen::Vector3d(0.0, 0.3, 0);
     Eigen::Vector3d end_acc = Eigen::Vector3d::Zero();
     
     // 获取起始yaw和终点yaw用于轨迹优化
-    double start_yaw = odom_yaw_;
     double end_yaw = viewpoints[end_idx - 1].yaw;  // 窗口最后一个视点的yaw
     
     bool plan_success = planner_manager_->planGlobalTrajWaypoints(
@@ -886,22 +980,22 @@ bool ExplorationFSMNew::planReconstructionTrajectory(
         // 保存完整路径(首次规划时)
         if (recon_path_.empty() || from_idx == 0) {
             recon_path_ = viewpoints;
+            recon_path_idx_ = 0;  // 只在首次规划时重置索引
         }
         recon_window_start_ = from_idx;
-        recon_path_idx_ = from_idx;
-        has_recon_trajectory_ = true;
+        // [Fix] 滑窗切换时不重置recon_path_idx_，该索引由processExecRecon的到达检测管理
         
         // 设置轨迹参数
         traj_start_time_ = ros::Time::now().toSec();
-        traj_duration_ = planner_manager_->traj_.global_traj.duration;
+        traj_duration_ = planner_manager_->traj_.local_traj.duration;
         has_trajectory_ = true;
-        
-        ROS_INFO("[FSM] Sliding window recon trajectory: window[%d-%d], %lu waypoints, %.2fs",
-                 from_idx, end_idx - 1, waypoints.size(), traj_duration_);
+        last_recon_update_time_ = ros::Time::now();
+        ROS_INFO("[FSM] Sliding window recon trajectory: window[%d-%d], %lu waypoints, %.2fs, current_pos: %f %f %f, first_goal: %f %f %f",
+                 from_idx, end_idx - 1, waypoints.size(), traj_duration_, odom_pos_.x(), odom_pos_.y(), odom_pos_.z(), waypoints[1].x(), waypoints[1].y(), waypoints[1].z());
         return true;
     } else {
         ROS_WARN("[FSM] Failed to plan sliding window trajectory");
-        has_recon_trajectory_ = false;
+        has_prev_traj_ = false;
         planner_manager_->setEnableHeightKeeping(true);
         return false;
     }
@@ -1420,7 +1514,6 @@ bool ExplorationFSMNew::planTrajectory(const Eigen::Vector3d& target, double tar
         trajectory_start_time_ = ros::Time(traj_start_time_);
     } 
     else {
-        // [关键修复] 规划失败时，撤销预设的 has_prev_traj_ 标志
         // 确保 executionCallback 继续执行当前轨迹，而不是尝试切换到不存在的新轨迹
         has_prev_traj_ = false;
     }
@@ -1531,7 +1624,19 @@ std::pair<double, double> ExplorationFSMNew::calculate_yaw(double t_cur, Eigen::
 }
 
 void ExplorationFSMNew::executionCallback(const ros::TimerEvent& e) {
-    if (state_ != ExplorationState::EXEC_EXPLORATION || !has_trajectory_) {
+    // [修复] 同时支持探索模式和重建模式的轨迹执行
+    bool in_exec_state = (state_ == ExplorationState::EXEC_EXPLORATION || 
+                          state_ == ExplorationState::EXEC_RECON);
+    
+    // [调试] 每秒打印一次执行状态
+    // static ros::Time last_debug_time = ros::Time(0);
+    // if ((ros::Time::now() - last_debug_time).toSec() > 1.0) {
+    //     last_debug_time = ros::Time::now();
+    //     ROS_INFO_THROTTLE(1.0, "[ExecCallback DEBUG] state=%d, in_exec_state=%d, has_trajectory=%d, has_recon_trajectory=%d",
+    //                       static_cast<int>(state_.load()), in_exec_state, has_trajectory_, has_recon_trajectory_);
+    // }
+    
+    if (!in_exec_state || !has_trajectory_) {
         return;
     }
 
@@ -1767,23 +1872,35 @@ void ExplorationFSMNew::polyTraj2ROSMsg(rog_map::PolyTraj &poly_msg)
 // ==================== EXEC_EXPLORATION 检测方法 ====================
 
 bool ExplorationFSMNew::checkCollision() {
-    if (!planner_manager_->traj_.local_traj.traj_id) {
+    // 如果没有有效轨迹，不检测碰撞
+    if (!has_trajectory_) {
         return false;
     }
     
-    double t_cur = ros::Time::now().toSec() - planner_manager_->traj_.local_traj.start_time;
-    double duration = planner_manager_->traj_.local_traj.duration;
+    // 使用成员变量的轨迹时间（与重建轨迹一致）
+    double t_cur = ros::Time::now().toSec() - traj_start_time_;
     
-    if (t_cur < 0 || t_cur > duration) {
+    if (t_cur < 0 || t_cur > traj_duration_) {
+        return false;
+    }
+    
+    // 检查轨迹是否有效
+    auto& traj = planner_manager_->traj_.local_traj.traj;
+    if (traj.getPieceNum() == 0) {
         return false;
     }
     
     // 检查当前位置 + 前瞻时间
     for (double dt = 0; dt <= config_.collision_lookahead; dt += 0.1) {
         double check_t = t_cur + dt;
-        if (check_t > duration) break;
+        if (check_t > traj_duration_) break;
         
-        Eigen::Vector3d pos = planner_manager_->traj_.local_traj.traj.getPos(check_t);
+        Eigen::Vector3d pos = traj.getPos(check_t);
+        
+        // 检查NaN
+        if (std::isnan(pos.x()) || std::isnan(pos.y()) || std::isnan(pos.z())) {
+            continue;
+        }
         
         if (global_map_->isOccupiedInflate(pos.cast<float>())) {
             ROS_ERROR("[FSM_NEW] COLLISION: at t=%.2f, pos=(%.2f,%.2f,%.2f)",

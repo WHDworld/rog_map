@@ -11,7 +11,7 @@ Panels:
         - /Global_map1
         - /planner1
         - /Exploration1
-        - /Image1
+        - /reconstructor1
       Splitter Ratio: 0.4043392539024353
     Tree Height: 1158
   - Class: rviz/Selection
@@ -30,7 +30,7 @@ Panels:
   - Class: rviz/Time
     Name: Time
     SyncMode: 0
-    SyncSource: visited_voxels
+    SyncSource: occupied_voxels
 Preferences:
   PromptSaveOnExit: true
 Toolbars:
@@ -435,7 +435,7 @@ Visualization Manager:
           Color: 239; 41; 41
           Color Transformer: RGB8
           Decay Time: 0
-          Enabled: true
+          Enabled: false
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -450,7 +450,7 @@ Visualization Manager:
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
-          Value: true
+          Value: false
         - Alpha: 1
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
@@ -491,7 +491,7 @@ Visualization Manager:
           Color: 255; 255; 255
           Color Transformer: Intensity
           Decay Time: 0
-          Enabled: true
+          Enabled: false
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -506,7 +506,7 @@ Visualization Manager:
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
-          Value: true
+          Value: false
         - Class: rviz/MarkerArray
           Enabled: false
           Marker Topic: /exploration_planner_node/global_map/sub_grid_range
@@ -535,7 +535,7 @@ Visualization Manager:
           Color: 255; 255; 255
           Color Transformer: RGB8
           Decay Time: 0
-          Enabled: true
+          Enabled: false
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -550,7 +550,7 @@ Visualization Manager:
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
-          Value: true
+          Value: false
         - Alpha: 1
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
@@ -648,7 +648,7 @@ Visualization Manager:
           Marker Topic: /ego_planner/trajectory_vis
           Name: trajectory_vis
           Namespaces:
-            {}
+            ego_trajectory: true
           Queue Size: 100
           Value: true
       Enabled: true
@@ -684,34 +684,29 @@ Visualization Manager:
           Use rainbow: true
           Value: false
         - Class: rviz/MarkerArray
-          Enabled: true
+          Enabled: false
           Marker Topic: /exploration/frontier_clusters
           Name: FrontierClusters
           Namespaces:
-            cluster_centers: true
-            cluster_extent: true
-            cluster_labels: true
-            frontier_points: true
+            {}
           Queue Size: 100
-          Value: true
+          Value: false
         - Class: rviz/MarkerArray
-          Enabled: true
+          Enabled: false
           Marker Topic: /exploration/viewpoints
           Name: Viewpoints
           Namespaces:
-            view_directions: true
-            viewpoint_labels: true
-            viewpoints: true
+            {}
           Queue Size: 100
-          Value: true
+          Value: false
         - Class: rviz/MarkerArray
-          Enabled: true
+          Enabled: false
           Marker Topic: /exploration/frustums
           Name: Frustums
           Namespaces:
-            frustum_lines: true
+            {}
           Queue Size: 100
-          Value: true
+          Value: false
         - Class: rviz/MarkerArray
           Enabled: false
           Marker Topic: /exploration/info
@@ -721,37 +716,105 @@ Visualization Manager:
           Queue Size: 10
           Value: false
         - Class: rviz/Marker
-          Enabled: true
+          Enabled: false
           Marker Topic: /exploration/current_target
           Name: CurrentTarget
           Namespaces:
             {}
           Queue Size: 1
-          Value: true
+          Value: false
         - Class: rviz/MarkerArray
-          Enabled: true
+          Enabled: false
           Marker Topic: /exploration/region_route
           Name: region_route
           Namespaces:
-            history_nodes: true
-            node_subgrid_links: true
-            subgrid_centers: true
+            {}
+          Queue Size: 100
+          Value: false
+      Enabled: true
+      Name: Exploration
+    - Class: rviz/Group
+      Displays:
+        - Class: rviz/MarkerArray
+          Enabled: true
+          Marker Topic: /target_recon/viewpoints
+          Name: target_viewpoints
+          Namespaces:
+            "": true
+          Queue Size: 100
+          Value: true
+        - Alpha: 1
+          Autocompute Intensity Bounds: true
+          Autocompute Value Bounds:
+            Max Value: 10
+            Min Value: -10
+            Value: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz/PointCloud2
+          Color: 238; 238; 236
+          Color Transformer: FlatColor
+          Decay Time: 0
+          Enabled: true
+          Invert Rainbow: false
+          Max Color: 255; 255; 255
+          Min Color: 0; 0; 0
+          Name: target_point
+          Position Transformer: XYZ
+          Queue Size: 10
+          Selectable: true
+          Size (Pixels): 3
+          Size (m): 0.10000000149011612
+          Style: Boxes
+          Topic: /target_pointcloud
+          Unreliable: false
+          Use Fixed Frame: true
+          Use rainbow: true
+          Value: true
+        - Class: rviz/MarkerArray
+          Enabled: true
+          Marker Topic: /target_detection/confirmed_bboxes
+          Name: confirmed_bboxes
+          Namespaces:
+            box3D: true
+          Queue Size: 100
+          Value: true
+        - Class: rviz/Image
+          Enabled: true
+          Image Topic: /yolo/debug_visualization
+          Max Value: 1
+          Median window: 5
+          Min Value: 0
+          Name: Image
+          Normalize Range: true
+          Queue Size: 2
+          Transport Hint: raw
+          Unreliable: false
+          Value: true
+        - Alpha: 0.20000000298023224
+          BoundColor: 255; 0; 0
+          Class: decomp_rviz_plugins/PolyhedronArray
+          Enabled: true
+          MeshColor: 0; 170; 255
+          Name: target_corridor
+          Queue Size: 10
+          Scale: 0.10000000149011612
+          State: Mesh
+          Topic: /target_recon/corridor
+          Unreliable: false
+          Value: true
+          VsColor: 0; 255; 0
+          VsScale: 1
+        - Class: rviz/MarkerArray
+          Enabled: true
+          Marker Topic: /target_recon/optimized_path
+          Name: target_optimized_path
+          Namespaces:
+            path: true
           Queue Size: 100
           Value: true
       Enabled: true
-      Name: Exploration
-    - Class: rviz/Image
-      Enabled: true
-      Image Topic: /realsense/depth_camera/color/image_raw
-      Max Value: 1
-      Median window: 5
-      Min Value: 0
-      Name: Image
-      Normalize Range: true
-      Queue Size: 2
-      Transport Hint: raw
-      Unreliable: false
-      Value: true
+      Name: reconstructor
   Enabled: true
   Global Options:
     Background Color: 0; 0; 0
@@ -775,7 +838,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/XYOrbit
-      Distance: 38.700321197509766
+      Distance: 22.04033088684082
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -783,17 +846,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: -3.526455879211426
-        Y: 6.998259544372559
-        Z: -1.2149972462793812e-05
+        X: 1.2848466634750366
+        Y: -0.8696074485778809
+        Z: -8.812112355371937e-06
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.9947971105575562
+      Pitch: 0.72979736328125
       Target Frame: perfect_drone
-      Yaw: 1.9222667217254639
+      Yaw: 2.297269105911255
     Saved:
       - Class: rviz/ThirdPersonFollower
         Distance: 17.48538589477539
