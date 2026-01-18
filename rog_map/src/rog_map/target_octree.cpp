@@ -232,6 +232,55 @@ void TargetOctree::getVisualizationData(std::vector<Eigen::Vector3d>& occupied_c
     }
 }
 
+bool TargetOctree::isOccluded(const Eigen::Vector3d& viewpoint, const Eigen::Vector3d& target) const {
+    // 射线遮挡检测：从viewpoint到target，检查中途是否有其他占据节点
+    // 使用简化的DDA (Digital Differential Analyzer) 算法
+    
+    Eigen::Vector3d dir = target - viewpoint;
+    double total_dist = dir.norm();
+    if (total_dist < 1e-6) return false;
+    
+    Eigen::Vector3d step = dir.normalized() * min_size_;  // 步长为最小分辨率
+    int num_steps = static_cast<int>(total_dist / min_size_);
+    
+    // 沿射线逐步检测
+    for (int i = 1; i < num_steps; ++i) {  // 从1开始，跳过起点
+        Eigen::Vector3d sample_pt = viewpoint + step * i;
+        
+        // 检查该点是否接近终点（终点本身不算遮挡）
+        if ((sample_pt - target).norm() < min_size_ * 1.5) break;
+        
+        // 查找该点所在的八叉树节点
+        OctreeNode* node = root_;
+        while (node && !node->isLeaf()) {
+            // 找到包含sample_pt的子节点
+            bool found = false;
+            for (auto child : node->children) {
+                if (!child) continue;
+                double half = child->size / 2.0;
+                if (std::abs(sample_pt.x() - child->center.x()) <= half &&
+                    std::abs(sample_pt.y() - child->center.y()) <= half &&
+                    std::abs(sample_pt.z() - child->center.z()) <= half) {
+                    node = child;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) break;
+        }
+        
+        // 如果找到占据节点，且该节点不是目标点附近，则被遮挡
+        if (node && node->is_occupied && node->isLeaf()) {
+            // 确保不是目标点本身附近的节点
+            if ((node->center - target).norm() > min_size_ * 2.0) {
+                return true;  // 被遮挡
+            }
+        }
+    }
+    
+    return false;  // 可见
+}
+
 // 辅助函数
 int TargetOctree::getOctant(const Eigen::Vector3d& point, const Eigen::Vector3d& center) {
     int octant = 0;

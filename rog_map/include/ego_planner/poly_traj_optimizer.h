@@ -121,6 +121,7 @@ namespace ego_planner
     void setIfTouchGoal(const bool touch_goal);
     void setConstraintPoints(ConstraintPoints cps);
     void setDesiredHeight(double height);  // 设置期望高度（用于高度保持）
+    void setEnableHeightKeeping(bool enable);  // 启用/禁用高度保持
 
     /* helper functions */
     inline const ConstraintPoints &getControlPoints(void) { return cps_; }

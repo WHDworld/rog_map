@@ -452,7 +452,8 @@ namespace ego_planner
   bool EGOPlannerManager::planGlobalTrajWaypoints(
       const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
       const Eigen::Vector3d &start_acc, const std::vector<Eigen::Vector3d> &waypoints,
-      const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc)
+      const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc,
+      double start_yaw, double end_yaw)
   {
 
     poly_traj::MinJerkOpt globalMJO;
@@ -509,9 +510,36 @@ namespace ego_planner
 
     auto time_now = ros::Time::now();
     traj_.setGlobalTraj(globalMJO.getTraj(), time_now.toSec());
+    
+    // 同时设置为local_traj以便执行和yaw优化
+    traj_.local_traj.traj = globalMJO.getTraj();
+    traj_.local_traj.start_time = time_now.toSec();
+    traj_.local_traj.duration = globalMJO.getTraj().getTotalDuration();
+    
+    // [新增] Yaw轨迹优化 (适用于重建任务)
+    if (yaw_optimizer_ && end_yaw < 9999.0)
+    {
+        std::vector<double> yaw_cps;
+        bool yaw_success = yaw_optimizer_->optimize(traj_.local_traj.traj, 
+                                                    start_yaw, end_yaw, yaw_cps);
+        
+        if (yaw_success) {
+            traj_.local_traj.use_yaw_traj = true;
+            traj_.local_traj.yaw_ctrl_pts = yaw_cps;
+            traj_.local_traj.yaw_start_time = traj_.local_traj.start_time;
+            ROS_INFO("[EGOPlanner] Global trajectory Yaw optimized. Start=%.2f, End=%.2f", 
+                     start_yaw, end_yaw);
+        } else {
+            traj_.local_traj.use_yaw_traj = false;
+            ROS_WARN("[EGOPlanner] Global Yaw Optimization FAILED.");
+        }
+    } else {
+        traj_.local_traj.use_yaw_traj = false;
+    }
 
     return true;
   }
+
 
 } // namespace ego_planner
 

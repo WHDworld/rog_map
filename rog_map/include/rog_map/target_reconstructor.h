@@ -60,25 +60,51 @@ struct TargetInfo {
 };
 
 /**
+ * @brief 重建状态枚举
+ */
+enum class ReconstructionState {
+    IDLE = 0,               // 空闲,无重建任务
+    TARGET_DETECTED,        // 检测到新目标,待确认
+    VIEWPOINT_GENERATING,   // 正在生成视点
+    VIEWPOINT_READY,        // 视点已就绪,等待状态机提取
+    RECONSTRUCTING,         // 重建进行中
+    RECON_COMPLETE          // 当前目标重建完成
+};
+
+/**
  * @brief 跟踪目标结构体 (多目标ID管理)
  */
 struct TrackedTarget {
+    // ========== 基础信息 ==========
     int id;                        // 唯一ID
     TargetInfo info;               // 目标信息
     TargetOctree::Ptr octree;      // 专属八叉树地图
     
+    // ========== 跟踪状态 ==========
     int confirmation_count;        // 连续检测帧数
-    bool is_confirmed;             // 是否已确认
+    bool is_confirmed;             // 是否已确认为有效目标
     ros::Time last_seen;           // 最后检测时间
     
-    // 重建状态
-    std::vector<ReconViewpoint> viewpoints;
-    std::vector<int> tour;
-    bool recon_started;            // 是否已开始重建
-    double coverage_ratio;         // 当前覆盖率
+    // ========== 重建状态 ==========
+    ReconstructionState recon_state;  // 当前重建状态
     
-    TrackedTarget() : id(-1), confirmation_count(0), is_confirmed(false),
-                      recon_started(false), coverage_ratio(0.0) {}
+    // ========== 视点管理 ==========
+    std::vector<ReconViewpoint> viewpoints;  // 所有视点(初始生成)
+    std::vector<int> tour;                   // TSP优化后的视点序列
+    int current_viewpoint_idx;               // 当前正在执行的视点索引(-1表示未开始)
+    
+    // ========== 重建质量 ==========
+    double coverage_ratio;         // 当前覆盖率 [0.0, 1.0]
+    ros::Time last_update_time;    // 最后一次更新时间
+    
+    // ========== 动态优化标志 ==========
+    bool need_viewpoint_update;    // 标志:当前视点需要重新评估(例如安全性变化)
+    
+    TrackedTarget() 
+        : id(-1), confirmation_count(0), is_confirmed(false),
+          recon_state(ReconstructionState::IDLE), 
+          current_viewpoint_idx(-1), coverage_ratio(0.0), 
+          need_viewpoint_update(false) {}
 };
 
 /**
@@ -130,7 +156,90 @@ public:
      */
     void init(ros::NodeHandle& nh);
     
-    // ... (existing methods)
+    
+    // ==================== 状态查询接口 (供ExplorationFSMNew调用) ====================
+    
+    /**
+     * @brief 检查是否有待重建目标(对应用户需求的 target_updated_)
+     * @return true: 存在新确认目标或未完成重建的目标
+     */
+    bool hasReconstructionTask() const;
+    
+    /**
+     * @brief 获取当前活跃重建目标的状态
+     * @param target_id [输出] 目标ID
+     * @param recon_state [输出] 重建状态
+     * @return 是否有活跃目标
+     */
+    bool getActiveReconstructionStatus(int& target_id, ReconstructionState& recon_state) const;
+    
+    /**
+     * @brief 获取目标重建进度
+     * @param target_id 目标ID
+     * @return 覆盖率 [0.0, 1.0], -1.0表示目标不存在
+     */
+    double getReconstructionProgress(int target_id) const;
+    
+    // ==================== 重建流程控制接口 ====================
+    
+    /**
+     * @brief 启动目标重建(状态机调用)
+     * @param drone_pos 无人机当前位置(用于计算TSP最优切入点)
+     * @param target_id 目标ID(-1表示自动选择下一个)
+     * @return 是否成功启动
+     */
+    bool startReconstruction(const Eigen::Vector3d& drone_pos, int target_id = -1);
+    
+    /**
+     * @brief 获取当前应该前往的重建视点
+     * @param viewpoint [输出] 重建视点信息
+     * @return 是否成功获取
+     */
+    bool getCurrentReconViewpoint(ReconViewpoint& viewpoint);
+    
+    /**
+     * @brief 获取完整的重建路径(所有剩余视点按TSP顺序)
+     * @param path [输出] 视点序列
+     * @return 剩余视点数量
+     */
+    int getReconstructionPath(std::vector<ReconViewpoint>& path);
+    
+    /**
+     * @brief 标记当前视点完成,切换到下一个
+     * @return 是否还有下一个视点(false表示当前目标重建完成)
+     */
+    bool markCurrentViewpointComplete();
+    
+    /**
+     * @brief 暂停当前重建任务(切回探索时调用)
+     */
+    void pauseReconstruction();
+    
+    // ==================== 实时更新接口 ====================
+    
+    /**
+     * @brief 更新目标点云和重建质量(在RECONSTRUCTING状态下实时调用)
+     * @param target_cloud 新观测到的目标点云
+     * @param sensor_pose 传感器位置
+     */
+    void updateReconstructionData(const pcl::PointCloud<pcl::PointXYZ>& target_cloud, 
+                                   const Eigen::Vector3d& sensor_pose);
+    
+    /**
+     * @brief 优化当前及后续视点(基于最新重建状态)
+     * @details 检查视点安全性、调整yaw、位置等
+     * @return 是否触发了视点更新
+     */
+    bool optimizeRemainingViewpoints();
+    
+    // ==================== 兼容性接口 (废弃,保留向后兼容) ====================
+    
+    /**
+     * @brief 更新无人机位置
+     * @param pos 无人机当前位置
+     */
+    void updateDronePosition(const Eigen::Vector3d& pos);
+
 
 private:
     // ... (existing private methods)
@@ -193,12 +302,8 @@ private:
      */
     void updateObstacleCloud(const pcl::PointCloud<pcl::PointXYZ>& cloud);
     
-    /**
-     * @brief 更新无人机位置
-     * @param pos 无人机当前位置
-     */
-    void updateDronePosition(const Eigen::Vector3d& pos);
     
+
     /**
      * @brief 生成重建视点
      * @return 是否成功
@@ -354,7 +459,7 @@ private:
     // 状态
     bool initialized_ = false;
     bool target_updated_ = false;  // 标志位：目标信息已更新，需要生成视点
-    std::mutex data_mutex_;
+    mutable std::mutex data_mutex_;  // mutable允许在const函数中加锁
     
     // 数据
     TargetInfo current_target_;
@@ -413,6 +518,11 @@ private:
     // 采样策略 (字符串形式，兼容原版)
     std::string sampling_strategy_ = "spherical";
     
+    // 话题配置
+    std::string obstacle_cloud_topic_ = "/cloud_registered";
+    std::string target_cloud_topic_ = "/target_pointcloud";
+    std::string target_detection_topic_ = "/target_detection/confirmed_targets";
+    
     // 滤波参数
     double safety_margin_ = 0.3;
     bool enable_obstruction_check_ = true;
@@ -436,6 +546,21 @@ private:
     
     // TSP参数
     int max_2opt_iterations_ = 100;
+    
+    // Octree扩展参数
+    int octree_hit_threshold_ = 3;  // 法向量有效阈值
+    
+    // 重建完成判定
+    double coverage_complete_threshold_ = 0.85;
+    int max_viewpoints_ = 20;
+    int min_viewpoints_ = 6;
+    
+    // 到达判定
+    double position_tolerance_ = 0.3;
+    double yaw_tolerance_ = 0.15;
+    
+    // 更新频率
+    double update_rate_ = 2.0;
     
     // 相机参数
     CameraParams camera_params_;

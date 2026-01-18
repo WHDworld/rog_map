@@ -49,6 +49,9 @@ cleanup() {
     killall -9 gzserver gzclient px4 roslaunch rosmaster rviz 2>/dev/null
     pkill -9 -f "get_simulation_pose.py"
     
+    # 3. 清理 YOLO 推理进程（防止GPU内存泄漏）
+    pkill -9 -f "yolo_inference_node"
+    
     echo -e "${GREEN}[Script] Cleanup finished.${NC}"
     exit 0
 }
@@ -59,24 +62,29 @@ trap cleanup SIGINT SIGTERM EXIT
 echo -e "${GREEN}[Script] Starting Simulation Workflow...${NC}"
 
 # 1. 启动 PX4 Gazebo 仿真
-echo -e "${BLUE}[1/4] Launching PX4 Gazebo Simulation...${NC}"
+echo -e "${BLUE}[1/5] Launching PX4 Gazebo Simulation...${NC}"
 # 直接运行，利用之前 source 的环境变量
 roslaunch px4 outdoor3.launch &
 sleep 10  # 给 Gazebo 更多启动时间
 
 # 2. 启动 Simulation Pose Relay (Python)
-echo -e "${BLUE}[2/4] Starting Simulation Pose Relay...${NC}"
+echo -e "${BLUE}[2/5] Starting Simulation Pose Relay...${NC}"
 # 使用系统自带 python3 以确保能找到 rospkg
 (cd ~/experiment/fast-livo2/src/fast-livo2-target/simulation && /usr/bin/python3 get_simulation_pose.py) &
 sleep 2
 
 # 3. 启动 Fast-Livo Mapping (感知模块)
-echo -e "${BLUE}[3/4] Launching Fast-Livo Mapping...${NC}"
+echo -e "${BLUE}[3/5] Launching Fast-Livo Mapping...${NC}"
 (cd ~/experiment/fast-livo2 && source devel/setup.bash && roslaunch fast_livo mapping_mid360_simulation.launch) &
 sleep 5
 
-# 4. 启动 Offboard Controller
-echo -e "${BLUE}[4/4] Starting Offboard Control Node...${NC}"
+# 4. 启动 YOLO 目标检测推理
+echo -e "${BLUE}[4/5] Launching YOLO Inference...${NC}"
+(cd ~/experiment/yolo_inference && source devel/setup.bash && roslaunch yolo_segmentation yolo_inference.launch) &
+sleep 3
+
+# 5. 启动 Offboard Controller
+echo -e "${BLUE}[5/5] Starting Offboard Control Node...${NC}"
 (source ~/experiment/STAR-Searcher/devel/setup.bash && rosrun my_control_package offboard_node) &
 
 echo -e "${GREEN}[Script] All modules started. Press Ctrl+C to stop.${NC}"

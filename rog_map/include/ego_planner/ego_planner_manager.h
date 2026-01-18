@@ -45,7 +45,8 @@ namespace ego_planner
     bool planGlobalTrajWaypoints(
         const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
         const Eigen::Vector3d &start_acc, const std::vector<Eigen::Vector3d> &waypoints,
-        const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc);
+        const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc,
+        double start_yaw = 0.0, double end_yaw = 10000.0);
     
     void getLocalTarget(
         const double planning_horizen,
@@ -62,6 +63,9 @@ namespace ego_planner
     
     // 设置期望高度（用于高度保持功能）
     inline void setDesiredHeight(double height) { ploy_traj_opt_->setDesiredHeight(height); }
+    
+    // 启用/禁用高度保持 (重建时应禁用)
+    inline void setEnableHeightKeeping(bool enable) { ploy_traj_opt_->setEnableHeightKeeping(enable); }
     
     // FALCON风格：设置重规划时间偏移（用于轨迹连续性）
     inline void setReplanTimeOffset(double offset) { replan_time_offset_ = offset; }

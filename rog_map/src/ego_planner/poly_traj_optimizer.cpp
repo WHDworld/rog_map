@@ -1128,5 +1128,12 @@ namespace ego_planner
     desired_height_ = height; 
   }
 
+  void PolyTrajOptimizer::setEnableHeightKeeping(bool enable) 
+  { 
+    enable_height_keeping_ = enable;
+    ROS_DEBUG("[PolyTrajOptimizer] Height keeping: %s", enable ? "enabled" : "disabled");
+  }
+
 } // namespace ego_planner
+
 

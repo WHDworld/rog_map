@@ -11,6 +11,7 @@ Panels:
         - /Global_map1
         - /planner1
         - /Exploration1
+        - /Image1
       Splitter Ratio: 0.4043392539024353
     Tree Height: 1158
   - Class: rviz/Selection
@@ -647,7 +648,7 @@ Visualization Manager:
           Marker Topic: /ego_planner/trajectory_vis
           Name: trajectory_vis
           Namespaces:
-            ego_trajectory: true
+            {}
           Queue Size: 100
           Value: true
       Enabled: true
@@ -732,7 +733,6 @@ Visualization Manager:
           Marker Topic: /exploration/region_route
           Name: region_route
           Namespaces:
-            history_edges: true
             history_nodes: true
             node_subgrid_links: true
             subgrid_centers: true
@@ -742,7 +742,7 @@ Visualization Manager:
       Name: Exploration
     - Class: rviz/Image
       Enabled: true
-      Image Topic: /uav_simulator/depth_image
+      Image Topic: /realsense/depth_camera/color/image_raw
       Max Value: 1
       Median window: 5
       Min Value: 0
@@ -783,8 +783,8 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: -5.868496894836426
-        Y: 8.588133811950684
+        X: -3.526455879211426
+        Y: 6.998259544372559
         Z: -1.2149972462793812e-05
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806

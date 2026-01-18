@@ -17,8 +17,7 @@
     <arg name="auto_start" default="false"/>
     
     <!-- ========== 新架构探索规划节点 ========== -->
-    <node pkg="rog_map" type="exploration_planner_node_new" name="exploration_planner_node" output="screen"
-          launch-prefix="gdb -ex run -ex bt -ex quit --args">
+    <node pkg="rog_map" type="exploration_planner_node_new" name="exploration_planner_node" output="screen">
         <!-- 加载参数文件到节点的私有命名空间 -->
         <rosparam file="$(find rog_map)/config/exploration_new.yaml" command="load"/>
         

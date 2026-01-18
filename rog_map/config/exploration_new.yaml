@@ -63,10 +63,10 @@ rog_map:
   global_map:
     map_size: [50, 50, 2.0]
     map_model: 0
-    ground_height: 0.40
+    ground_height: -0.1
     sub_grid_xy: 0.05
-    frontier_height_min: 0.8
-    frontier_height_max: 2.1
+    frontier_height_min: 0.3
+    frontier_height_max: 1.6
   
   # ---------- 膨胀地图 ----------
   inflation:
@@ -91,7 +91,7 @@ viewpoint_manager:
   sensor_fov_v: 1.15                # 垂直FOV [rad] (~66°)
   
   # ---------- 视点采样 ----------
-  viewpoint_height: 1.5             # 视点基准高度 [m]
+  viewpoint_height: 1.0             # 视点基准高度 [m]
   viewpoint_height_min: 1.0         # 视点最小采样高度 [m]
   viewpoint_height_max: 2.0         # 视点最大采样高度 [m]
   viewpoint_height_num: 1           # 高度采样数量
@@ -211,3 +211,82 @@ optimization:
 # ========== 轨迹服务器 ==========
 traj_server:
   time_forward: 1.0                 # Yaw规划前向时间 [s]
+
+# ========== 目标重建模块 (TargetReconstructor) ==========
+target_recon:
+  # ---------- 话题配置 ----------
+  # 共用话题 (直接从rog_map读取，无需重复配置):
+  #   - obstacle_cloud: 使用 rog_map/lidar_topic
+  #   - odom: 使用 rog_map/odom_topic
+  # 专用话题:
+  target_cloud_topic: "/target_pointcloud"             # 目标点云话题
+  target_detection_topic: "/target_detection/confirmed_targets"  # 目标检测话题
+  
+  # ---------- 采样策略 ----------
+  sampling_mode: 0                    # 0=spherical, 1=cylindrical, 2=hemisphere
+  sampling_strategy: "spherical"
+  
+  # ---------- 走廊参数 ----------
+  corridor_radius: 2.0                # 走廊半径 [m]
+  local_bbox_x: 5.0                   # 局部区域X半尺寸 [m]
+  local_bbox_y: 5.0                   # 局部区域Y半尺寸 [m]
+  local_bbox_z: 3.0                   # 局部区域Z半尺寸 [m]
+  obstacle_search_radius: 10.0        # 障碍物搜索半径 [m]
+  min_ground_height: 0.3              # 最小飞行高度 [m]
+  
+  # ---------- 球面采样参数 ----------
+  spherical:
+    min_distance: 1.5                 # 最小采样距离 [m]
+    max_distance: 3.0                 # 最大采样距离 [m]
+    num_layers: 3                     # 采样层数
+    min_elevation: 15.0               # 最小仰角 [deg]
+    max_elevation: 60.0               # 最大仰角 [deg]
+    points_per_layer: 12              # 每层采样点数
+  
+  # ---------- 圆柱采样参数 ----------
+  cylindrical:
+    radius: 2.5                       # 圆柱半径 [m]
+    min_height: 0.5                   # 最小高度 [m]
+    max_height: 3.0                   # 最大高度 [m]
+    num_height_layers: 4              # 高度层数
+    points_per_circle: 12             # 每圈采样点数
+  
+  # ---------- 半球采样参数 ----------
+  hemisphere:
+    min_distance: 1.5                 # 最小采样距离 [m]
+    max_distance: 3.0                 # 最大采样距离 [m]
+    num_layers: 2                     # 采样层数
+    min_elevation: 20.0               # 最小仰角 [deg]
+    max_elevation: 75.0               # 最大仰角 [deg]
+    points_per_layer: 12              # 每层采样点数
+  
+  # ---------- 滤波参数 ----------
+  safety_margin: 0.3                  # 安全边距 [m]
+  min_visibility_ratio: 0.1           # 最小可见性比例
+  
+  # ---------- 评分权重 ----------
+  coverage_weight: 0.40               # 覆盖率权重
+  angle_weight: 0.25                  # 角度权重
+  distance_weight: 0.20               # 距离权重
+  safety_weight: 0.15                 # 安全权重
+  normal_weight: 0.30                 # 法向量权重
+  optimal_distance: 2.0               # 最优观测距离 [m]
+  
+  # ---------- Octree参数 ----------
+  octree_resolution: 0.1              # Octree分辨率 [m]
+  octree_hit_threshold: 3             # 法向量有效阈值
+  
+  # ---------- TSP优化 ----------
+  max_2opt_iterations: 100            # 2-opt最大迭代次数
+  
+  # ---------- 重建完成判定 ----------
+  coverage_complete_threshold: 0.85   # 覆盖率完成阈值
+  max_viewpoints: 20                  # 最大视点数
+  min_viewpoints: 6                   # 最小视点数
+  
+  # ---------- 到达判定 ----------
+  position_tolerance: 0.3             # 位置容差 [m]
+  yaw_tolerance: 0.15                 # Yaw容差 [rad]
+  
+  # ---------- 更新频率 ----------
+  update_rate: 2.0                    # 视点优化更新频率 [Hz]

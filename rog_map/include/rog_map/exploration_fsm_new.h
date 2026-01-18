@@ -45,6 +45,9 @@
 // 规划器
 #include "ego_planner/ego_planner_manager.h"
 
+// 目标重建
+#include "rog_map/target_reconstructor.h"
+
 namespace rog_map {
 
 using MapManager = star_mvf::MapManager;
@@ -66,7 +69,11 @@ enum class ExplorationState {
     TAKEOFF,            // 起飞中
     WAIT_TRIGGER,       // 等待触发
     LOCALPLAN,          // 本地规划（选择视点、生成轨迹）
-    EXEC_EXPLORATION    // 执行探索（监控轨迹执行）
+    EXEC_EXPLORATION,   // 执行探索（监控轨迹执行）
+
+    RECON_PLAN,         // 规划前往重建视点的路径
+    EXEC_RECON,         // 执行重建任务(在该状态下会逐个访问视点)
+    FINISH              // 完成
 };
 
 // ==================== 航点信息 ====================
@@ -356,6 +363,32 @@ private:
     HistoryGraph::Ptr history_graph_;
     ViewpointManager::Ptr viewpoint_manager_;
     ego_planner::EGOPlannerManager::Ptr planner_manager_;
+
+    // ========== 重建任务相关 ==========
+    TargetReconstructor::Ptr target_reconstructor_;
+    ReconViewpoint current_recon_viewpoint_;
+    ros::Time last_recon_check_time_;
+    ros::Time last_recon_update_time_;
+    void processReconPlan(const ros::TimerEvent& e);
+    void processExecRecon(const ros::TimerEvent& e);
+    
+    // 重建轨迹滑动窗口规划相关
+    std::vector<ReconViewpoint> recon_path_;      // 完整重建路径
+    int recon_path_idx_;                          // 当前执行到的路径索引(全局)
+    int recon_window_start_;                      // 当前窗口起始索引
+    bool has_recon_trajectory_;                   // 是否有批量规划的重建轨迹
+    static constexpr int RECON_WINDOW_SIZE = 3;   // 滑动窗口大小
+    
+    /**
+     * @brief 滑动窗口规划重建轨迹
+     * @param viewpoints 完整视点序列
+     * @param from_idx 窗口起始索引
+     * @param window_size 窗口大小(默认3)
+     * @return 是否规划成功
+     */
+    bool planReconstructionTrajectory(const std::vector<ReconViewpoint>& viewpoints, 
+                                       int from_idx = 0, 
+                                       int window_size = RECON_WINDOW_SIZE);
     
     // 配置
     ExplorationFSMConfig config_;

@@ -98,6 +98,14 @@ public:
                             std::vector<Eigen::Vector3d>& observed_centers,
                             std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>& normals);
 
+    /**
+     * @brief 检测从视点到目标点是否被遮挡
+     * @param viewpoint 视点位置
+     * @param target 目标点位置
+     * @return true=被遮挡, false=可见
+     */
+    bool isOccluded(const Eigen::Vector3d& viewpoint, const Eigen::Vector3d& target) const;
+
     // Bounding Box 信息
     Eigen::Vector3d bbox_min_;
     Eigen::Vector3d bbox_max_;
