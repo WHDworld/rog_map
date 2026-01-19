@@ -15,8 +15,9 @@ namespace ego_planner
     /* 从统一的 dynamics 部分读取参数，若无则从 manager 部分读取（向后兼容） */
     nh.param("manager/max_vel", pp_.max_vel_, 2.0);
     nh.param("manager/max_acc", pp_.max_acc_, 2.0);
-    // nh.param("manager/max_yaw_rate", pp_.max_yaw_rate_, 1.0);
-    // nh.param("manager/max_yaw_acc", pp_.max_yaw_acc_, 1.0);
+    base_max_vel_ = pp_.max_vel_;  // [新增] 保存原始最大速度值，用于速度缩放
+    nh.param("manager/max_yaw_rate", pp_.max_yaw_rate_, 1.0);  // [启用] 用于Yaw优化
+    nh.param("manager/max_yaw_acc", pp_.max_yaw_acc_, 1.0);   // [启用] 用于Yaw优化
     nh.param("manager/feasibility_tolerance", pp_.feasibility_tolerance_, 0.05);
     nh.param("manager/polyTraj_piece_length", pp_.polyTraj_piece_length, 1.5);
     nh.param("manager/planning_horizon", pp_.planning_horizen_, 7.5);
@@ -225,8 +226,8 @@ namespace ego_planner
         // 使用精确的开始时间（与预测状态完全匹配）
         start_time = replan_start_time_;
         use_precise_start_time_ = false;  // 重置标志
-        double offset = start_time - ros::Time::now().toSec();
-        ROS_INFO("[PlannerMgr] Using precise start_time (offset=%.3f s)", offset);
+        // double offset = start_time - ros::Time::now().toSec();
+        // ROS_INFO("[PlannerMgr] Using precise start_time (offset=%.3f s)", offset);
       }
       else
       {
@@ -542,6 +543,140 @@ namespace ego_planner
         }
     } else {
         traj_.local_traj.use_yaw_traj = false;
+    }
+
+    return true;
+  }
+
+  // ============ [新增] 带中间航点yaw约束的重载版本 ============
+  bool EGOPlannerManager::planGlobalTrajWaypoints(
+      const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
+      const Eigen::Vector3d &start_acc, const std::vector<Eigen::Vector3d> &waypoints,
+      const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc,
+      double start_yaw, double end_yaw,
+      const std::vector<double>& waypoint_yaws)
+  {
+    // 2. [FIX] 使用分段生成策略 (Piecewise Generation) 替代全局平滑
+    // 原因: 原全局MJO会将中间航点作为优化变量，导致大幅度"切角" (0.7m deviation)
+    // 修复: 强制生成经过每个航点的分段轨迹并拼接
+    
+    poly_traj::Trajectory global_traj;
+    
+    // 构建完整的航点序列: Start -> W0 -> W1 -> ... -> End
+    std::vector<Eigen::Vector3d> all_pts;
+    all_pts.push_back(start_pos);
+    for (const auto& p : waypoints) all_pts.push_back(p);
+    // End点在waypoints.back()?? No, waypoints is intermediate only? 
+    // Check call: waypoints contains UP TO end. TailState is passed separately.
+    // In call: tailState << waypoints.back(), end_vel, end_acc; implies waypoints INCLUDES end target.
+    // If waypoints includes end, then all_pts already has end.
+    
+    double max_v = pp_.max_vel_;
+    
+    // [Important] Do NOT skip short waypoints to consistent indexing with waypoint_yaws
+    
+    for (size_t i = 0; i < all_pts.size() - 1; ++i) {
+        Eigen::Vector3d p_start = all_pts[i];
+        Eigen::Vector3d p_end = all_pts[i+1];
+        
+        // Determine Boundary Conditions
+        Eigen::Vector3d v_start, a_start, v_end, a_end;
+        
+        // Start State
+        if (i == 0) {
+            v_start = start_vel;
+            a_start = start_acc;
+        } else {
+            // Continuity: Match previous segment end
+            v_start = global_traj.getVel(global_traj.getTotalDuration());
+            a_start = global_traj.getAcc(global_traj.getTotalDuration());
+        }
+        
+        // End State
+        if (i == all_pts.size() - 2) {
+            // Final Segment
+            v_end = end_vel;
+            a_end = end_acc;
+        } else {
+            // Intermediate: Heuristic Velocity (Catmull-Rom like)
+            // v_i = (P_{i+1} - P_start) normalized * max_vel?
+            // Better: Average of incoming and outgoing vectors?
+            // Or just P_next - P_start direction.
+            // Let's use direction to NEXT point to keep momentum.
+            // But we need to stop/slow down if corner is sharp?
+            // Simple heuristic: Direction P_next - P_start.
+            // v_end for segment i is v_start for segment i+1.
+            // Let's compute v_at_point[i+1]
+            Eigen::Vector3d dir_in = (p_end - p_start).normalized();
+            Eigen::Vector3d dir_out = (all_pts[i+2] - p_end).normalized();
+            Eigen::Vector3d dir_avg = (dir_in + dir_out).normalized();
+            
+            // Adjust speed based on corner angle
+            double angle = acos(std::min(1.0, std::max(-1.0, dir_in.dot(dir_out))));
+            double corner_vel = max_v * std::max(0.2, 1.0 - angle / M_PI); 
+            v_end = dir_avg * corner_vel;
+            a_end = Eigen::Vector3d::Zero(); // Zero accel at waypoints for simplicity
+        }
+        
+        // Generate Piece
+        double dist = (p_end - p_start).norm();
+        double avg_v = (v_start.norm() + v_end.norm()) / 2.0;
+        double T = std::max(dist / std::max(avg_v, 0.1), 0.1); 
+        // Refine T based on Max Vel/Acc constraints?
+        
+        poly_traj::MinJerkOpt pieceMJO;
+        Eigen::Matrix<double, 3, 3> hS, tS;
+        hS << p_start, v_start, a_start;
+        tS << p_end, v_end, a_end;
+        pieceMJO.reset(hS, tS, 1); // 1 piece
+        pieceMJO.generate(Eigen::MatrixXd(), Eigen::VectorXd::Constant(1, T));
+        
+        global_traj.append(pieceMJO.getTraj());
+    }
+
+    auto time_now = ros::Time::now();
+    poly_traj::Trajectory traj = global_traj; // Use stitched traj
+    double duration = traj.getTotalDuration();
+    
+    traj_.local_traj.traj = traj;
+    traj_.local_traj.start_time = time_now.toSec();
+    traj_.local_traj.duration = duration;
+    traj_.local_traj.start_pos = traj.getPos(0);
+    ++traj_.local_traj.traj_id;
+    traj_.global_traj.duration = duration;
+
+    // 3. [关键] 使用带航点约束的Yaw优化
+    if (yaw_optimizer_ && !waypoint_yaws.empty()) {
+      // 生成 (time, yaw) pairs
+      std::vector<std::pair<double, double>> wp_yaw_pairs;
+      double accumulated_time = 0.0;
+      // Note: Pieces correspond to Start->W0, W0->W1, etc.
+      // global_traj[i] is segment ending at waypoints[i] (assuming index alignment)
+      for (size_t i = 0; i < waypoint_yaws.size() && i < waypoints.size() && i < (size_t)global_traj.getPieceNum(); ++i) {
+        accumulated_time += global_traj[i].getDuration();
+        wp_yaw_pairs.push_back({accumulated_time, waypoint_yaws[i]});
+        // ROS_INFO("[EGOPlanner] WP[%lu] time=%.3f yaw=%.2f deg", 
+        //          i, accumulated_time, waypoint_yaws[i] * 180.0 / M_PI);
+      }
+      // ROS_INFO("[EGOPlanner] Total trajectory duration=%.3f", duration);
+      
+      std::vector<double> yaw_cps;
+      bool yaw_success = yaw_optimizer_->optimizeWithWaypoints(
+          traj_.local_traj.traj, start_yaw, end_yaw, 
+          wp_yaw_pairs, yaw_cps, pp_.max_yaw_rate_);
+      
+      if (yaw_success) {
+        traj_.local_traj.use_yaw_traj = true;
+        traj_.local_traj.yaw_ctrl_pts = yaw_cps;
+        traj_.local_traj.yaw_start_time = traj_.local_traj.start_time;
+        ROS_INFO("[EGOPlanner] Recon Yaw optimized with %lu waypoint constraints", 
+                 waypoint_yaws.size());
+      } else {
+        traj_.local_traj.use_yaw_traj = false;
+        ROS_WARN("[EGOPlanner] Recon Yaw Optimization FAILED.");
+      }
+    } else {
+      traj_.local_traj.use_yaw_traj = false;
     }
 
     return true;

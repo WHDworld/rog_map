@@ -22,7 +22,8 @@
 #include <memory>
 #include <mutex>
 
-#include "rog_map/target_octree.h"
+#include "rog_map/target_voxel_grid.h"
+#include "star_mvf/map/global_map.h"
 
 namespace rog_map {
 
@@ -78,7 +79,7 @@ struct TrackedTarget {
     // ========== 基础信息 ==========
     int id;                        // 唯一ID
     TargetInfo info;               // 目标信息
-    TargetOctree::Ptr octree;      // 专属八叉树地图
+    TargetVoxelGrid::Ptr voxel_grid;  // 专属体素网格地图
     
     // ========== 跟踪状态 ==========
     int confirmation_count;        // 连续检测帧数
@@ -100,11 +101,15 @@ struct TrackedTarget {
     // ========== 动态优化标志 ==========
     bool need_viewpoint_update;    // 标志:当前视点需要重新评估(例如安全性变化)
     
+    // ========== [新增] 累积重建点云 ==========
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr accumulated_cloud;  // 累积的原始点云（保留RGB颜色）
+    
     TrackedTarget() 
         : id(-1), confirmation_count(0), is_confirmed(false),
           recon_state(ReconstructionState::IDLE), 
           current_viewpoint_idx(-1), coverage_ratio(0.0), 
-          need_viewpoint_update(false) {}
+          need_viewpoint_update(false),
+          accumulated_cloud(new pcl::PointCloud<pcl::PointXYZRGB>()) {}
 };
 
 /**
@@ -153,8 +158,9 @@ public:
     /**
      * @brief 初始化
      * @param nh ROS节点句柄
+     * @param global_map 全局地图指针（用于遮挡检测）
      */
-    void init(ros::NodeHandle& nh);
+    void init(ros::NodeHandle& nh, star_mvf::GlobalMap::Ptr global_map = nullptr);
     
     
     // ==================== 状态查询接口 (供ExplorationFSMNew调用) ====================
@@ -179,6 +185,13 @@ public:
      * @return 覆盖率 [0.0, 1.0], -1.0表示目标不存在
      */
     double getReconstructionProgress(int target_id) const;
+    
+    /**
+     * @brief 获取当前活跃目标的中心位置
+     * @param center [输出] 目标中心坐标
+     * @return 是否成功获取（false表示无活跃目标）
+     */
+    bool getActiveTargetCenter(Eigen::Vector3d& center) const;
     
     // ==================== 重建流程控制接口 ====================
     
@@ -215,16 +228,22 @@ public:
      */
     void pauseReconstruction();
     
-    // ==================== 实时更新接口 ====================
+    /**
+     * @brief [新增] 保存目标重建点云到文件
+     * @param target_id 目标ID
+     * @param filepath 保存路径（.pcd 格式）
+     * @return 是否保存成功
+     */
+    bool saveTargetCloud(int target_id, const std::string& filepath);
     
     /**
-     * @brief 更新目标点云和重建质量(在RECONSTRUCTING状态下实时调用)
-     * @param target_cloud 新观测到的目标点云
-     * @param sensor_pose 传感器位置
+     * @brief [新增] 获取目标累积点云（用于外部处理）
+     * @param target_id 目标ID
+     * @return 点云指针，若不存在返回 nullptr
      */
-    void updateReconstructionData(const pcl::PointCloud<pcl::PointXYZ>& target_cloud, 
-                                   const Eigen::Vector3d& sensor_pose);
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr getAccumulatedCloud(int target_id);
     
+    // ==================== 实时更新接口 ====================
     /**
      * @brief 优化当前及后续视点(基于最新重建状态)
      * @details 检查视点安全性、调整yaw、位置等
@@ -287,8 +306,11 @@ private:
     ros::Subscriber obstacle_cloud_sub_;
     ros::Subscriber target_cloud_sub_;
     
+    // [新增] 全局地图引用（用于遮挡检测）
+    star_mvf::GlobalMap::Ptr global_map_;
+    
     // Parameters
-    int sampling_mode_ = 0; // 0: Spherical, 1: Cylindrical, 2: Hemisphere
+    int sampling_mode_ = 3; // 0: Spherical, 1: Cylindrical, 2: Hemisphere, 3: Helix [默认使用Helix]
 
     
     /**
@@ -358,6 +380,12 @@ private:
      * @brief 球面采样视点
      */
     std::vector<ReconViewpoint> sampleSphericalViewpoints();
+    
+    /**
+     * @brief [新增] 螺旋采样视点（Multi-Layer Helix Sampling）
+     * @details 适配固定 Pitch 相机，从不同高度和距离采样环绕目标
+     */
+    std::vector<ReconViewpoint> sampleHelixViewpoints();
     
     /**
      * @brief 滤波视点（走廊约束 + 遮挡检测）
@@ -470,8 +498,8 @@ private:
     pcl::PointCloud<pcl::PointXYZ> processed_cloud_;  // 移除目标后的点云
     Eigen::Vector3d drone_position_;
     
-    // Octree Map (IROS Innovation)
-    TargetOctree::Ptr octree_;
+    // Voxel Grid Map (替代八叉树，O(1)索引)
+    TargetVoxelGrid::Ptr voxel_grid_;
     bool replan_triggered_ = false;
     
     // 多目标跟踪管理
@@ -509,6 +537,14 @@ private:
     int cyl_num_layers_ = 4;
     int cyl_points_per_circle_ = 12;
     
+    // [新增] 螺旋采样参数（Multi-Layer Helix Sampling）
+    double helix_min_dist_ = 1.5;         // 最近距离 [m]
+    double helix_max_dist_ = 3.0;         // 最远距离 [m]
+    double helix_z_min_ = -0.5;           // 目标中心下方偏移 [m]
+    double helix_z_max_ = 0.5;            // 目标中心上方偏移 [m]
+    int helix_num_revolutions_ = 3;       // 螺旋圈数
+    int helix_points_per_rev_ = 8;        // 每圈点数
+    
     // 半球采样参数
     double hemi_min_dist_ = 2.0;
     double hemi_max_dist_ = 4.5;
@@ -527,7 +563,7 @@ private:
     
     // 滤波参数
     double safety_margin_ = 0.3;
-    bool enable_obstruction_check_ = true;
+    bool enable_obstruction_check_ = false;
     
     // Octree 参数
     double octree_resolution_ = 0.2;

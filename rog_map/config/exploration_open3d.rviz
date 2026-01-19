@@ -435,7 +435,7 @@ Visualization Manager:
           Color: 239; 41; 41
           Color Transformer: RGB8
           Decay Time: 0
-          Enabled: false
+          Enabled: true
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -450,7 +450,7 @@ Visualization Manager:
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
-          Value: false
+          Value: true
         - Alpha: 1
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
@@ -648,7 +648,7 @@ Visualization Manager:
           Marker Topic: /ego_planner/trajectory_vis
           Name: trajectory_vis
           Namespaces:
-            ego_trajectory: true
+            {}
           Queue Size: 100
           Value: true
       Enabled: true
@@ -692,21 +692,23 @@ Visualization Manager:
           Queue Size: 100
           Value: false
         - Class: rviz/MarkerArray
-          Enabled: false
+          Enabled: true
           Marker Topic: /exploration/viewpoints
           Name: Viewpoints
           Namespaces:
-            {}
+            view_directions: true
+            viewpoint_labels: true
+            viewpoints: true
           Queue Size: 100
-          Value: false
+          Value: true
         - Class: rviz/MarkerArray
-          Enabled: false
+          Enabled: true
           Marker Topic: /exploration/frustums
           Name: Frustums
           Namespaces:
-            {}
+            frustum_lines: true
           Queue Size: 100
-          Value: false
+          Value: true
         - Class: rviz/MarkerArray
           Enabled: false
           Marker Topic: /exploration/info
@@ -724,13 +726,15 @@ Visualization Manager:
           Queue Size: 1
           Value: false
         - Class: rviz/MarkerArray
-          Enabled: false
+          Enabled: true
           Marker Topic: /exploration/region_route
           Name: region_route
           Namespaces:
-            {}
+            history_nodes: true
+            node_subgrid_links: true
+            subgrid_centers: true
           Queue Size: 100
-          Value: false
+          Value: true
       Enabled: true
       Name: Exploration
     - Class: rviz/Group
@@ -740,7 +744,7 @@ Visualization Manager:
           Marker Topic: /target_recon/viewpoints
           Name: target_viewpoints
           Namespaces:
-            "": true
+            {}
           Queue Size: 100
           Value: true
         - Alpha: 1
@@ -810,7 +814,7 @@ Visualization Manager:
           Marker Topic: /target_recon/optimized_path
           Name: target_optimized_path
           Namespaces:
-            path: true
+            {}
           Queue Size: 100
           Value: true
       Enabled: true
@@ -838,7 +842,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/XYOrbit
-      Distance: 22.04033088684082
+      Distance: 32.637481689453125
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1

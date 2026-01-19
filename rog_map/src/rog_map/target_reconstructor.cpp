@@ -1,10 +1,13 @@
 #include "rog_map/target_reconstructor.h"
 #include <random>
+#include <pcl/filters/voxel_grid.h>
+#include <pcl/io/pcd_io.h>
 
 namespace rog_map {
 
-void TargetReconstructor::init(ros::NodeHandle& nh) {
+void TargetReconstructor::init(ros::NodeHandle& nh, star_mvf::GlobalMap::Ptr global_map) {
     nh_ = nh;
+    global_map_ = global_map;  // [新增] 存储全局地图引用
     
     // 先加载参数（包括话题名）
     loadParameters();
@@ -72,6 +75,14 @@ void TargetReconstructor::loadParameters() {
     nh_param.param("target_recon/cylindrical/max_height", cyl_max_height_, 3.0);
     nh_param.param("target_recon/cylindrical/num_height_layers", cyl_num_layers_, 4);
     nh_param.param("target_recon/cylindrical/points_per_circle", cyl_points_per_circle_, 12);
+    
+    // [新增] 螺旋采样参数
+    nh_param.param("target_recon/helix/min_distance", helix_min_dist_, 1.5);
+    nh_param.param("target_recon/helix/max_distance", helix_max_dist_, 3.0);
+    nh_param.param("target_recon/helix/z_min", helix_z_min_, -0.5);
+    nh_param.param("target_recon/helix/z_max", helix_z_max_, 0.5);
+    nh_param.param("target_recon/helix/num_revolutions", helix_num_revolutions_, 3);
+    nh_param.param("target_recon/helix/points_per_rev", helix_points_per_rev_, 8);
     
     // 半球采样参数
     nh_param.param("target_recon/hemisphere/min_distance", hemi_min_dist_, 1.5);
@@ -148,8 +159,8 @@ bool TargetReconstructor::setTarget(const TargetInfo& target) {
         processed_cloud_ = removeTargetFromCloud(obstacle_cloud_);
     }
     
-    // 初始化 Octree
-    octree_.reset(new TargetOctree(current_target_.center, current_target_.size, octree_resolution_));
+    // 初始化 VoxelGrid
+    voxel_grid_.reset(new TargetVoxelGrid(current_target_.center, current_target_.size, octree_resolution_));
     replan_triggered_ = false;
     
     return true;
@@ -184,8 +195,8 @@ int TargetReconstructor::matchOrCreateTarget(const TargetInfo& detection) {
                 // 检查是否达到确认阈值
                 if (!target.is_confirmed && target.confirmation_count >= confirmation_frames_) {
                     target.is_confirmed = true;
-                    // 初始化该目标的 Octree
-                    target.octree.reset(new TargetOctree(target.info.center, target.info.size, octree_resolution_));
+                    // 初始化该目标的 VoxelGrid
+                    target.voxel_grid.reset(new TargetVoxelGrid(target.info.center, target.info.size, octree_resolution_));
                     ROS_INFO("[TargetReconstructor] Target %d confirmed at (%.2f, %.2f, %.2f)", 
                              target.id, target.info.center.x(), target.info.center.y(), target.info.center.z());
                 }
@@ -251,7 +262,7 @@ bool TargetReconstructor::selectNextTarget() {
             
             // 设置为当前目标
             current_target_ = target.info;
-            octree_ = target.octree;
+            voxel_grid_ = target.voxel_grid;
             
             ROS_INFO("[TargetReconstructor] Selected target %d for reconstruction", target.id);
             return true;
@@ -280,7 +291,7 @@ bool TargetReconstructor::selectNextTarget() {
         for (auto& target : tracked_targets_) {
             if (target.id == best_id) {
                 current_target_ = target.info;
-                octree_ = target.octree;
+                voxel_grid_ = target.voxel_grid;
                 break;
             }
         }
@@ -360,6 +371,29 @@ double TargetReconstructor::getReconstructionProgress(int target_id) const {
     return -1.0;
 }
 
+bool TargetReconstructor::getActiveTargetCenter(Eigen::Vector3d& center) const {
+    
+    // 优先返回活跃目标（正在重建的目标）
+    for (const auto& target : tracked_targets_) {
+        if (target.id == active_target_id_ && target.is_confirmed) {
+            center = target.info.center;
+            return true;
+        }
+    }
+    
+    // 如果没有活跃目标，尝试返回第一个待重建的已确认目标
+    for (const auto& target : tracked_targets_) {
+        if (target.is_confirmed && 
+            (target.recon_state == ReconstructionState::IDLE ||
+             target.recon_state == ReconstructionState::VIEWPOINT_READY)) {
+            center = target.info.center;
+            return true;
+        }
+    }
+    
+    return false;
+}
+
 // ==================== 新增重建流程控制接口实现 ====================
 bool TargetReconstructor::startReconstruction(const Eigen::Vector3d& drone_pos, int target_id) {
     
@@ -392,7 +426,7 @@ bool TargetReconstructor::startReconstruction(const Eigen::Vector3d& drone_pos, 
         
         // 同步设置current_target_(用于generateViewpoints)
         current_target_ = target->info;
-        octree_ = target->octree;
+        voxel_grid_ = target->voxel_grid;
         
         // 暂时解锁以调用generateViewpoints (避免死锁)
         bool success = generateViewpoints();
@@ -513,24 +547,40 @@ void TargetReconstructor::pauseReconstruction() {
     active_target_id_ = -1;
 }
 
-// ==================== 新增实时更新接口实现 ====================
-void TargetReconstructor::updateReconstructionData(const pcl::PointCloud<pcl::PointXYZ>& target_cloud, 
-                                                     const Eigen::Vector3d& sensor_pose) {
+// ==================== [新增] 点云保存接口实现 ====================
+bool TargetReconstructor::saveTargetCloud(int target_id, const std::string& filepath) {
+    TrackedTarget* target = getTargetByIdNoLock(target_id);
+    if (!target || !target->accumulated_cloud || target->accumulated_cloud->empty()) {
+        ROS_WARN("[TargetReconstructor] No cloud to save for target %d", target_id);
+        return false;
+    }
     
-    TrackedTarget* target = getActiveTargetNoLock();
-    if (!target || !target->octree) return;
+    // 设置点云属性
+    target->accumulated_cloud->width = target->accumulated_cloud->size();
+    target->accumulated_cloud->height = 1;
+    target->accumulated_cloud->is_dense = true;
     
-    // 更新octree
-    target->octree->update(target_cloud, sensor_pose);
-    
-    // 更新覆盖率
-    target->coverage_ratio = target->octree->getCoverageRatio();
-    target->last_update_time = ros::Time::now();
-    
-    ROS_DEBUG("[TargetReconstructor] Updated target %d: coverage %.1f%%", 
-              target->id, target->coverage_ratio * 100.0);
+    // 直接保存原始点云（不做降重，保留最多的点用于重建）
+    int result = pcl::io::savePCDFileBinary(filepath, *target->accumulated_cloud);
+    if (result == 0) {
+        ROS_INFO("[TargetReconstructor] Saved target %d cloud to %s (%lu pts)", 
+                 target_id, filepath.c_str(), target->accumulated_cloud->size());
+        return true;
+    } else {
+        ROS_ERROR("[TargetReconstructor] Failed to save cloud to %s", filepath.c_str());
+        return false;
+    }
 }
 
+pcl::PointCloud<pcl::PointXYZRGB>::Ptr TargetReconstructor::getAccumulatedCloud(int target_id) {
+    TrackedTarget* target = getTargetByIdNoLock(target_id);
+    if (!target) {
+        return nullptr;
+    }
+    return target->accumulated_cloud;
+}
+
+// ==================== 新增实时更新接口实现 ====================
 bool TargetReconstructor::optimizeRemainingViewpoints() {
     // [修复] 使用 unique_lock 代替 lock_guard，以支持手动 unlock/lock
     ros::Time t0 = ros::Time::now();
@@ -562,17 +612,17 @@ bool TargetReconstructor::optimizeRemainingViewpoints() {
             continue;
         }
         
-        // ========== 优化2: Yaw调整(基于最新octree) ==========
-        if (target->octree) {
-            // 获取当前视点视野内的未观测法向量质心
-            auto frontiers = target->octree->getUnobservedFrontiers();
-            if (!frontiers.empty()) {
-                // 简化版:计算前沿点的质心方向
+        // ========== 优化2: Yaw调整(基于最新voxel_grid) ==========
+        if (target->voxel_grid) {
+            // 获取未观测体素的质心方向
+            auto unobserved = target->voxel_grid->getUnobservedVoxelIndices();
+            if (!unobserved.empty()) {
+                // 计算未观测体素质心
                 Eigen::Vector3d centroid(0, 0, 0);
-                for (const auto& f : frontiers) {
-                    centroid += f->center;
+                for (int idx : unobserved) {
+                    centroid += target->voxel_grid->getVoxelCenter(idx);
                 }
-                centroid /= frontiers.size();
+                centroid /= unobserved.size();
                 
                 Eigen::Vector3d guide_direction = centroid - vp.position;
                 if (guide_direction.norm() > 0.1) {
@@ -648,11 +698,11 @@ void TargetReconstructor::obstacleCloudCallback(const sensor_msgs::PointCloud2Co
 }
 
 void TargetReconstructor::targetCloudCallback(const sensor_msgs::PointCloud2ConstPtr& msg) {
-    pcl::PointCloud<pcl::PointXYZ> target_cloud;
-    pcl::fromROSMsg(*msg, target_cloud);
+    // [修改] 接收 PointXYZRGB 格式的彩色点云
+    pcl::PointCloud<pcl::PointXYZRGB> target_cloud_rgb;
+    pcl::fromROSMsg(*msg, target_cloud_rgb);
     
-    if (target_cloud.empty()) return;
-    
+    if (target_cloud_rgb.empty()) return;
     
     // 1. 检查是否有活跃的重建目标
     if (active_target_id_ < 0) {
@@ -669,22 +719,31 @@ void TargetReconstructor::targetCloudCallback(const sensor_msgs::PointCloud2Cons
         }
     }
     
-    if (!active_target || !active_target->octree) {
-        ROS_WARN_THROTTLE(2.0, "[TargetReconstructor] Active target %d not found or octree not initialized", 
+    if (!active_target || !active_target->voxel_grid) {
+        ROS_WARN_THROTTLE(2.0, "[TargetReconstructor] Active target %d not found or voxel_grid not initialized", 
                           active_target_id_);
         return;
     }
     
-    // 3. 更新活跃目标的 Octree（而非全局 octree_）
-    Eigen::Vector3d sensor_pose = drone_position_;
-    active_target->octree->update(target_cloud, sensor_pose);
+    // 3. [新增] 累积彩色点云（保留原始 RGB）
+    *active_target->accumulated_cloud += target_cloud_rgb;
     
-    // 4. 同步更新覆盖率
-    active_target->coverage_ratio = active_target->octree->getCoverageRatio();
+    // 4. 提取 XYZ 用于 VoxelGrid 更新
+    pcl::PointCloud<pcl::PointXYZ> target_cloud_xyz;
+    pcl::copyPointCloud(target_cloud_rgb, target_cloud_xyz);
+    
+    // 5. 更新活跃目标的 VoxelGrid
+    Eigen::Vector3d sensor_pose = drone_position_;
+    active_target->voxel_grid->update(target_cloud_xyz, sensor_pose);
+    
+    // 6. 同步更新覆盖率
+    active_target->coverage_ratio = active_target->voxel_grid->getCoverageRatio();
     active_target->last_update_time = ros::Time::now();
     
-    ROS_DEBUG("[TargetReconstructor] Updated target %d octree: %lu points, coverage %.1f%%", 
-              active_target_id_, target_cloud.size(), active_target->coverage_ratio * 100.0);
+    ROS_DEBUG("[TargetReconstructor] Updated target %d: +%lu pts (total %lu), coverage %.1f%%", 
+              active_target_id_, target_cloud_rgb.size(), 
+              active_target->accumulated_cloud->size(),
+              active_target->coverage_ratio * 100.0);
 }
 
 bool TargetReconstructor::generateViewpoints() {
@@ -711,9 +770,12 @@ bool TargetReconstructor::generateViewpoints() {
         case HEMISPHERE:
             raw_vps = sampleHemisphereViewpoints();
             break;
+        case 3:  // HELIX
+            raw_vps = sampleHelixViewpoints();
+            break;
         default:
-            ROS_WARN("[TargetReconstructor] Unknown sampling mode %d, using Spherical", sampling_mode_);
-            raw_vps = sampleSphericalViewpoints();
+            ROS_WARN("[TargetReconstructor] Unknown sampling mode %d, using Helix", sampling_mode_);
+            raw_vps = sampleHelixViewpoints();
             break;
     }
     double sample_viewpoints_time = (ros::Time::now() - t1).toSec() * 1000;
@@ -772,8 +834,8 @@ void TargetReconstructor::triggerCallback(const vision_msgs::Detection3DArrayCon
     updateTargetTracking(detections);
     
     // 3. 日志输出（调试用）
-    ROS_INFO_THROTTLE(5.0, "[TargetReconstructor] Processed %lu detections, tracked %lu targets", 
-                      detections.size(), tracked_targets_.size());
+    // ROS_INFO_THROTTLE(5.0, "[TargetReconstructor] Processed %lu detections, tracked %lu targets", 
+    //                   detections.size(), tracked_targets_.size());
 }
 
 void TargetReconstructor::executionTimerCallback(const ros::TimerEvent& e) {
@@ -920,42 +982,91 @@ std::vector<ReconViewpoint> TargetReconstructor::sampleCylindricalViewpoints() {
     return vps;
 }
 
-// ========== IROS Innovation Methods ==========
+// [新增] 螺旋采样：Multi-Layer Helix Sampling
+std::vector<ReconViewpoint> TargetReconstructor::sampleHelixViewpoints() {
+    std::vector<ReconViewpoint> vps;
+    int id = 0;
+    
+    // 参数
+    double r_min = helix_min_dist_;
+    double r_max = helix_max_dist_;
+    double z_min = helix_z_min_;
+    double z_max = helix_z_max_;
+    int points_per_rev = helix_points_per_rev_;
+    int total_points = helix_num_revolutions_ * points_per_rev;  // 总点数 = 圈数 × 每圈点数
+    
+    for (int i = 0; i < total_points; ++i) {
+        double t = static_cast<double>(i) / std::max(1, total_points - 1);  // 归一化进度 [0, 1]
+        
+        // 方位角：螺旋旋转
+        double theta = 2.0 * M_PI * i / points_per_rev;
+        
+        // 高度：线性上升
+        double z_offset = z_min + (z_max - z_min) * t;
+        
+        // 半径：正弦变化（中间远，两端近）
+        double r = r_min + (r_max - r_min) * sin(M_PI * t);
+        
+        ReconViewpoint vp;
+        vp.position.x() = current_target_.center.x() + r * cos(theta);
+        vp.position.y() = current_target_.center.y() + r * sin(theta);
+        vp.position.z() = current_target_.center.z() + z_offset;
+        
+        // Yaw 朝向目标
+        double dx = current_target_.center.x() - vp.position.x();
+        double dy = current_target_.center.y() - vp.position.y();
+        vp.yaw = atan2(dy, dx);
+        
+        vp.pitch = camera_fixed_pitch_;  // 固定 Pitch
+        vp.id = id++;
+        
+        vps.push_back(vp);
+    }
+    
+    ROS_INFO("[TargetReconstructor] Helix sampling: %lu viewpoints, r=[%.1f,%.1f], z=[%.1f,%.1f]",
+             vps.size(), r_min, r_max, 
+             current_target_.center.z() + z_min, current_target_.center.z() + z_max);
+    
+    return vps;
+}
+
+// ========== Voxel Grid Methods (替代原IROS Innovation Methods) ==========
 
 void TargetReconstructor::updateOctree(const pcl::PointCloud<pcl::PointXYZ>& cloud, 
                                      const Eigen::Vector3d& sensor_pose) 
 {
-    if (!octree_) return;
-    octree_->update(cloud, sensor_pose);
+    // [重命名为updateVoxelGrid更合适，但保持接口兼容]
+    if (!voxel_grid_) return;
+    voxel_grid_->update(cloud, sensor_pose);
 }
 
 double TargetReconstructor::getCoverageRatio() const {
-    if (!octree_) return 0.0;
-    return octree_->getCoverageRatio();
+    if (!voxel_grid_) return 0.0;
+    return voxel_grid_->getCoverageRatio();
 }
 
 bool TargetReconstructor::triggerDynamicReplanning() {
-    if (!octree_) return false;
+    if (!voxel_grid_) return false;
     if (replan_triggered_) return false; // 避免重复触发
     
-    // 1. 获取未观测法向量前沿
-    auto frontiers = octree_->getUnobservedFrontiers();
-    if (frontiers.empty()) return false;
+    // 1. 获取未观测体素
+    auto unobserved = voxel_grid_->getUnobservedVoxelIndices();
+    if (unobserved.empty()) return false;
     
-    ROS_INFO("[TargetReconstructor] Triggering dynamic replanning with %lu frontiers", frontiers.size());
+    ROS_INFO("[TargetReconstructor] Triggering dynamic replanning with %lu unobserved voxels", unobserved.size());
     
-    // 2. 针对主要簇进行锥形采样
-    std::vector<ReconViewpoint> candidates;
-    // 简单的聚类或直接采样，这里直接对所有前沿采样
-    // 为了效率，最多取 5 个最大的前沿
-    int count = 0;
-    for (auto& f : frontiers) {
-        if (count++ > 5) break; 
-        
-        Eigen::Vector3d guide_normal = octree_->getGuideNormal(f);
-        auto cone_samples = sampleConeViewpoints(f->center, guide_normal);
-        candidates.insert(candidates.end(), cone_samples.begin(), cone_samples.end());
+    // 2. 获取未观测区域的质心
+    Eigen::Vector3d centroid(0, 0, 0);
+    for (int idx : unobserved) {
+        centroid += voxel_grid_->getVoxelCenter(idx);
     }
+    centroid /= unobserved.size();
+    
+    // 3. 基于质心方向采样视点
+    std::vector<ReconViewpoint> candidates;
+    Eigen::Vector3d guide_normal = (centroid - current_target_.center).normalized();
+    auto cone_samples = sampleConeViewpoints(centroid, guide_normal);
+    candidates.insert(candidates.end(), cone_samples.begin(), cone_samples.end());
     
     if (candidates.empty()) return false;
     
@@ -1078,40 +1189,71 @@ bool TargetReconstructor::isInsideCorridor(const Eigen::Vector3d& p) const {
 bool TargetReconstructor::isViewUnobstructed(const Eigen::Vector3d& from, 
                                             const Eigen::Vector3d& to) 
 {
-    if (obstacle_cloud_.empty()) return true;
+    // [优化] 使用全局地图的 isLineFree 检查遮挡
+    // 只检查从视点到目标 BBox 边界的路径
     
-    Eigen::Vector3d dir = to - from;
-    double dist = dir.norm();
-    dir.normalize();
-    
-    // 目标BBox范围(用于跳过目标本身的点云)
-    Eigen::Vector3d bbox_min = current_target_.center - current_target_.size / 2.0 - Eigen::Vector3d(0.3, 0.3, 0.3);
-    Eigen::Vector3d bbox_max = current_target_.center + current_target_.size / 2.0 + Eigen::Vector3d(0.3, 0.3, 0.3);
-    
-    // 简单射线检测: 在视线中段采样几点(避开端点附近)
-    std::vector<double> ratios = {0.25, 0.5, 0.75};
-    double obstruction_threshold = 0.35; // 放宽阈值到35cm
-    
-    for (double r : ratios) {
-        Eigen::Vector3d pt = from + dir * dist * r;
+    // 如果没有设置全局地图，回退到原逻辑
+    if (!global_map_) {
+        // 原逻辑：遍历障碍物点云
+        if (obstacle_cloud_.empty()) return true;
         
-        // 检查附近是否有障碍点
-        for (const auto& obs_pt : obstacle_cloud_.points) {
-            Eigen::Vector3d p(obs_pt.x, obs_pt.y, obs_pt.z);
-            
-            // 跳过目标BBox内的点(避免目标本身影响遮挡判断)
-            if (p.x() > bbox_min.x() && p.x() < bbox_max.x() &&
-                p.y() > bbox_min.y() && p.y() < bbox_max.y() &&
-                p.z() > bbox_min.z() && p.z() < bbox_max.z()) {
-                continue;
-            }
-            
-            if ((p - pt).squaredNorm() < obstruction_threshold * obstruction_threshold) {
-                return false;
+        Eigen::Vector3d dir = to - from;
+        double dist = dir.norm();
+        dir.normalize();
+        
+        Eigen::Vector3d bbox_min = current_target_.center - current_target_.size / 2.0 - Eigen::Vector3d(0.3, 0.3, 0.3);
+        Eigen::Vector3d bbox_max = current_target_.center + current_target_.size / 2.0 + Eigen::Vector3d(0.3, 0.3, 0.3);
+        
+        std::vector<double> ratios = {0.25, 0.5, 0.75};
+        double obstruction_threshold = 0.35;
+        
+        for (double r : ratios) {
+            Eigen::Vector3d pt = from + dir * dist * r;
+            for (const auto& obs_pt : obstacle_cloud_.points) {
+                Eigen::Vector3d p(obs_pt.x, obs_pt.y, obs_pt.z);
+                if (p.x() > bbox_min.x() && p.x() < bbox_max.x() &&
+                    p.y() > bbox_min.y() && p.y() < bbox_max.y() &&
+                    p.z() > bbox_min.z() && p.z() < bbox_max.z()) {
+                    continue;
+                }
+                if ((p - pt).squaredNorm() < obstruction_threshold * obstruction_threshold) {
+                    return false;
+                }
             }
         }
+        return true;
     }
-    return true;
+    
+    // [新逻辑] 使用全局地图的 isLineFree
+    // 1. 计算射线与目标 BBox 的交点
+    Eigen::Vector3d bbox_min = current_target_.center - current_target_.size / 2.0;
+    Eigen::Vector3d bbox_max = current_target_.center + current_target_.size / 2.0;
+    
+    Eigen::Vector3d dir = (to - from).normalized();
+    
+    // Ray-AABB intersection (slab method)
+    double t_min = 0.0;
+    double t_max = (to - from).norm();  // 初始为射线终点
+    
+    for (int i = 0; i < 3; ++i) {
+        if (std::abs(dir[i]) > 1e-6) {
+            double t1 = (bbox_min[i] - from[i]) / dir[i];
+            double t2 = (bbox_max[i] - from[i]) / dir[i];
+            if (t1 > t2) std::swap(t1, t2);
+            t_min = std::max(t_min, t1);
+            t_max = std::min(t_max, t2);
+        }
+    }
+    
+    // 如果没有有效交点，检查整条射线
+    double check_distance = (t_min > 0 && t_min < t_max) ? t_min : (to - from).norm();
+    Eigen::Vector3d check_point = from + dir * check_distance;
+    
+    // 2. 使用全局地图检查从 from 到 check_point 是否自由
+    star_mvf::Position start_pos(from.x(), from.y(), from.z());
+    star_mvf::Position end_pos(check_point.x(), check_point.y(), check_point.z());
+    
+    return global_map_->isLineFree(start_pos, end_pos);
 }
 
 void TargetReconstructor::scoreViewpoints(std::vector<ReconViewpoint>& vps) {
@@ -1138,43 +1280,21 @@ void TargetReconstructor::scoreViewpoints(std::vector<ReconViewpoint>& vps) {
         });
 }
 
-// 评分实现细节 (Raycasting版)
+// 评分实现细节 (VoxelGrid版)
 double TargetReconstructor::computeCoverageScore(const ReconViewpoint& vp) {
-    if (!octree_) return 0.0;
+    if (!voxel_grid_) return 0.5;  // 无体素网格时返回中间值
     
-    // 获取目标表面节点
-    std::vector<OctreeNode*> surface_nodes = octree_->getSurfaceNodes();
-    if (surface_nodes.empty()) return 0.5;
+    // 使用体素网格的覆盖计算
+    std::unordered_set<int> empty_set;
+    auto coverage = voxel_grid_->computeNewCoverage(
+        vp.position, vp.yaw, vp.pitch,
+        camera_params_.hfov, camera_params_.vfov,
+        camera_params_.max_range, empty_set);
     
-    // 视线方向
-    Eigen::Vector3d view_dir(cos(vp.yaw) * cos(vp.pitch), 
-                              sin(vp.yaw) * cos(vp.pitch), 
-                              sin(vp.pitch));
+    int total_surface = voxel_grid_->getSurfaceVoxelCount();
+    if (total_surface == 0) return 0.5;
     
-    int visible_count = 0;
-    int total_in_fov = 0;
-    
-    for (auto node : surface_nodes) {
-        Eigen::Vector3d dir_to_node = node->center - vp.position;
-        double dist = dir_to_node.norm();
-        
-        // 距离筛选
-        if (dist > camera_params_.max_range || dist < 0.5) continue;
-        
-        // 视场筛选
-        Eigen::Vector3d dir_norm = dir_to_node.normalized();
-        if (view_dir.dot(dir_norm) < cos(camera_params_.hfov / 2.0)) continue;
-        
-        total_in_fov++;
-        
-        // 遮挡检测：使用Octree的isOccluded方法
-        if (!octree_->isOccluded(vp.position, node->center)) {
-            visible_count++;
-        }
-    }
-    
-    if (total_in_fov == 0) return 0.0;
-    return static_cast<double>(visible_count) / total_in_fov;
+    return static_cast<double>(coverage.size()) / total_surface;
 }
 
 double TargetReconstructor::computeAngleScore(const ReconViewpoint& vp) {
@@ -1205,49 +1325,20 @@ double TargetReconstructor::computeSafetyScore(const ReconViewpoint& vp) {
 }
 
 double TargetReconstructor::computeNormalScore(const ReconViewpoint& vp) {
-    if (!octree_) return 0.5; // 无 octree 时返回中庸分，或基于 BBox 计算
+    // 简化版：不再使用法向量信息
+    // 改为基于视点指向目标中心的对齐度
+    Eigen::Vector3d vp_to_target = (current_target_.center - vp.position).normalized();
     
-    // IROS Innovation: Normal-Guided Scoring with Occlusion Culling
-    // 遍历视锥内的 Octree 表面节点，计算视线与法向量的对齐度
+    // 视点朝向
+    Eigen::Vector3d view_dir(cos(vp.yaw) * cos(vp.pitch), 
+                              sin(vp.yaw) * cos(vp.pitch), 
+                              sin(vp.pitch));
     
-    std::vector<OctreeNode*> surface_nodes = octree_->getSurfaceNodes();
-    if (surface_nodes.empty()) return 0.5;
+    // 对齐度：视点朝向与到目标方向的点积
+    double alignment = view_dir.dot(vp_to_target);
     
-    double total_score = 0;
-    int visible_count = 0;
-    
-    // 视锥方向
-    Eigen::Vector3d view_dir(cos(vp.yaw)*cos(vp.pitch), sin(vp.yaw)*cos(vp.pitch), sin(vp.pitch));
-    
-    for (auto node : surface_nodes) {
-        Eigen::Vector3d dir_to_node = node->center - vp.position;
-        double dist = dir_to_node.norm();
-        
-        // 距离筛选
-        if (dist > camera_params_.max_range || dist < 0.5) continue;
-        
-        // 视场筛选 (点乘 > cos(hfov/2))
-        Eigen::Vector3d dir_norm = dir_to_node.normalized();
-        if (view_dir.dot(dir_norm) < cos(camera_params_.hfov / 2.0)) continue; 
-        
-        // [关键修复] 遮挡检查
-        if (octree_->isOccluded(vp.position, node->center)) {
-            continue;  // 被遮挡的节点不参与评分
-        }
-        
-        // 法向量对齐度计算
-        // 理想情况：视线方向 (dir_norm) 应该与表面法向量 (node->normal) 相反
-        // alignment = -dir_norm . normal
-        Eigen::Vector3d guide_normal = octree_->getGuideNormal(node);
-        double alignment = -dir_norm.dot(guide_normal);
-        
-        if (alignment > 0) {
-            total_score += alignment;
-            visible_count++;
-        }
-    }
-    
-    return visible_count > 0 ? (total_score / visible_count) : 0.0;
+    // 归一化到 [0, 1]
+    return std::max(0.0, alignment);
 }
 
 

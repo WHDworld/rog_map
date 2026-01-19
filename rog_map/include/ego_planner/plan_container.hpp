@@ -69,6 +69,8 @@ namespace ego_planner
     double max_vel_ = 2.0;
     double max_acc_ = 2.0;
     double max_jerk_ = 4.0;
+    double max_yaw_rate_ = 1.0;   // [新增] 最大偏航角速度 [rad/s]
+    double max_yaw_acc_ = 1.0;    // [新增] 最大偏航角加速度 [rad/s²]
     double feasibility_tolerance_ = 0.05;
     double polyTraj_piece_length = 1.5;
     double planning_horizen_ = 7.5;

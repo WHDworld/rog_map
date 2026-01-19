@@ -135,7 +135,7 @@ viewpoint_manager:
 # ========== HistoryGraph (2Hz) ==========
 history_graph:
   update_rate: 2.0                  # Hz
-  node_spacing: 3.0                 # 节点间距 [m]
+  node_spacing: 4.0                 # 节点间距 [m]
   max_assoc_dist: 10.0              # 最大关联距离 [m]
 
 # ========== 探索状态机 (100Hz) ==========
@@ -176,8 +176,8 @@ fsm:
 # ========== 规划管理器 ==========
 manager:
   # 动力学约束
-  max_vel: 0.5                      # 最大速度 [m/s]
-  max_acc: 0.5                      # 最大加速度 [m/s²]
+  max_vel: 1.0                      # 最大速度 [m/s]
+  max_acc: 0.8                      # 最大加速度 [m/s²]
   max_yaw_rate: 0.25                # 最大偏航角速度 [rad/s]
   max_yaw_acc: 0.25                 # 最大偏航角加速度 [rad/s²]
   
@@ -223,22 +223,22 @@ target_recon:
   target_detection_topic: "/target_detection/confirmed_targets"  # 目标检测话题
   
   # ---------- 采样策略 ----------
-  sampling_mode: 0                    # 0=spherical, 1=cylindrical, 2=hemisphere
+  sampling_mode: 3                    # 0=spherical, 1=cylindrical, 2=hemisphere
   sampling_strategy: "spherical"
   
-  # ---------- 走廊参数 ----------
+  # ---------- 安全走廊参数 ----------
   corridor_radius: 2.0                # 走廊半径 [m]
-  local_bbox_x: 5.0                   # 局部区域X半尺寸 [m]
-  local_bbox_y: 5.0                   # 局部区域Y半尺寸 [m]
-  local_bbox_z: 3.0                   # 局部区域Z半尺寸 [m]
-  obstacle_search_radius: 10.0        # 障碍物搜索半径 [m]
-  min_ground_height: 0.3              # 最小飞行高度 [m]
+  local_bbox_x: 3.0                   # 以目标中心为中心的搜索区域半尺寸 [m]
+  local_bbox_y: 3.0                   # 以目标中心为中心的搜索区域半尺寸 [m]
+  local_bbox_z: 2.0                   # 以目标中心为中心的搜索区域半尺寸 [m]
+  obstacle_search_radius: 5.0        # 障碍物搜索半径 [m]
+  min_ground_height: 0.2              # 最小飞行高度 [m]
   
   # ---------- 球面采样参数 ----------
   spherical:
-    min_distance: 1.50                 # 最小采样距离 [m]
-    max_distance: 3.0                 # 最大采样距离 [m]
-    num_layers: 4                     # 采样层数
+    min_distance: 2.0                 # 最小采样距离 [m]
+    max_distance: 4.0                 # 最大采样距离 [m]
+    num_layers: 5                     # 采样层数
     min_elevation: 15.0               # 最小仰角 [deg]
     max_elevation: 60.0               # 最大仰角 [deg]
     points_per_layer: 8              # 每层采样点数
@@ -260,6 +260,15 @@ target_recon:
     max_elevation: 75.0               # 最大仰角 [deg]
     points_per_layer: 12              # 每层采样点数
   
+  # ---------- [新增] 螺旋采样参数 (Multi-Layer Helix) ----------
+  helix:
+    min_distance: 1.0                 # 最近距离 [m]
+    max_distance: 3.0                 # 最远距离 [m]
+    z_min: -0.5                       # 目标中心下方偏移 [m]
+    z_max: 0.5                        # 目标中心上方偏移 [m]
+    num_revolutions: 3                # 螺旋圈数（绕几圈）
+    points_per_rev: 8                 # 每圈点数
+  
   # ---------- 滤波参数 ----------
   safety_margin: 0.3                  # 安全边距 [m]
   min_visibility_ratio: 0.1           # 最小可见性比例
@@ -270,7 +279,7 @@ target_recon:
   distance_weight: 0.20               # 距离权重
   safety_weight: 0.15                 # 安全权重
   normal_weight: 0.30                 # 法向量权重
-  optimal_distance: 2.0               # 最优观测距离 [m]
+  optimal_distance: 2.5               # 最优观测距离 [m]
   
   # ---------- Octree参数 ----------
   octree_resolution: 0.1              # Octree分辨率 [m]
@@ -281,7 +290,7 @@ target_recon:
   
   # ---------- 重建完成判定 ----------
   coverage_complete_threshold: 0.85   # 覆盖率完成阈值
-  max_viewpoints: 20                  # 最大视点数
+  max_viewpoints: 10                  # 最大视点数
   min_viewpoints: 6                   # 最小视点数
   
   # ---------- 到达判定 ----------

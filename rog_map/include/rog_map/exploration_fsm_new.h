@@ -96,6 +96,21 @@ struct WaypointInfo {
         : position(pos), yaw(y), is_viewpoint(is_vp), id(i) {}
 };
 
+// ==================== 重建轨迹分段信息 ====================
+
+struct ReconSegmentInfo {
+    double start_time;   // 本段起始时间（相对traj_start_time_）
+    double end_time;     // 本段结束时间
+    double start_yaw;    // 起始yaw
+    double end_yaw;      // 终止yaw
+    
+    ReconSegmentInfo()
+        : start_time(0.0), end_time(0.0), start_yaw(0.0), end_yaw(0.0) {}
+    
+    ReconSegmentInfo(double st, double et, double sy, double ey)
+        : start_time(st), end_time(et), start_yaw(sy), end_yaw(ey) {}
+};
+
 // ==================== 配置参数 ====================
 
 struct ExplorationFSMConfig {
@@ -136,6 +151,11 @@ struct ExplorationFSMConfig {
     
     // 可视化
     bool enable_visualization = true;
+
+    // 重建接近参数
+    double recon_approach_threshold = 4.0;   // 接近目标阈值 [m]，距离超过此值时先接近
+    double recon_approach_distance = 3.0;    // 接近停止距离 [m]，飞到距目标此距离处
+    double recon_yaw_threshold = 0.5;        // Yaw对准阈值 [rad]，约30度
 
     std::string odom_topic;
     std::string lidar_topic;
@@ -240,12 +260,6 @@ private:
      */
     bool checkTimeout();
     
-    /**
-     * @brief 检查是否接近当前航点（需要准备下一个）
-     * @return true 如果接近
-     */
-    bool checkApproachingWaypoint();
-    
     // ==================== 辅助函数 ====================
     
     /**
@@ -257,12 +271,7 @@ private:
      * @brief 发布悬停命令
      */
     void publishHoverCmd();
-    
-    /**
-     * @brief 从轨迹采样并发布位置命令
-     */
-    void publishTrajectoryCmd();
-    
+        
     /**
      * @brief 计算两个yaw角的差
      */
@@ -288,7 +297,6 @@ private:
         const std::array<float, 4>& color,
         visualization_msgs::MarkerArray& markers);
     
-    void polyTraj2ROSMsg(rog_map::PolyTraj &poly_msg);
     bool planTrajectory(const Eigen::Vector3d& target, double target_yaw, 
         const Eigen::Vector3d& target_vel);
 private:
@@ -378,6 +386,10 @@ private:
     int recon_window_start_;                      // 当前窗口起始索引
     static constexpr int RECON_WINDOW_SIZE = 3;   // 滑动窗口大小
     
+    // 重建接近阶段状态
+    bool recon_approaching_ = false;              // 是否正在接近目标阶段
+    Eigen::Vector3d recon_target_center_;         // 当前重建目标中心缓存
+    
     /**
      * @brief 滑动窗口规划重建轨迹
      * @param viewpoints 完整视点序列
@@ -388,6 +400,17 @@ private:
     bool planReconstructionTrajectory(const std::vector<ReconViewpoint>& viewpoints, 
                                        int from_idx = 0, 
                                        int window_size = RECON_WINDOW_SIZE);
+    
+    // 重建轨迹分段yaw信息（用于视点间平滑过渡）
+    std::vector<ReconSegmentInfo> recon_segments_;
+    
+    /**
+     * @brief 计算重建模式下的yaw（视点间平滑插值）
+     * @param t_cur 当前轨迹时间
+     * @param dt 时间步长
+     * @return {yaw, yaw_dot}
+     */
+    std::pair<double, double> calculateReconSegmentYaw(double t_cur, double dt);
     
     // 配置
     ExplorationFSMConfig config_;

@@ -48,6 +48,15 @@ namespace ego_planner
         const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc,
         double start_yaw = 0.0, double end_yaw = 10000.0);
     
+    // [新增] 带中间航点yaw约束的版本（用于重建任务）
+    bool planGlobalTrajWaypoints(
+        const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
+        const Eigen::Vector3d &start_acc, const std::vector<Eigen::Vector3d> &waypoints,
+        const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc,
+        double start_yaw, double end_yaw,
+        const std::vector<double>& waypoint_yaws);  // 每个航点的期望yaw
+    
+    
     void getLocalTarget(
         const double planning_horizen,
         const Eigen::Vector3d &start_pt, const Eigen::Vector3d &global_end_pt,
@@ -72,6 +81,18 @@ namespace ego_planner
     
     // 设置精确的重规划开始时间（用于确保 start_time 与预测状态匹配）
     inline void setReplanStartTime(double time) { replan_start_time_ = time; use_precise_start_time_ = true; }
+    
+    // [新增] 设置速度缩放比例（用于重建任务时降低速度）
+    // scale: 1.0 = 使用原始 max_vel，0.5 = 使用 0.5 * max_vel
+    inline void setVelocityScale(double scale) {
+        velocity_scale_ = std::max(0.1, std::min(1.0, scale));  // 限制在 [0.1, 1.0]
+        pp_.max_vel_ = base_max_vel_ * velocity_scale_;
+        ROS_INFO("[EGOPlannerManager] Velocity scale set to %.2f, effective max_vel=%.2f", 
+                 velocity_scale_, pp_.max_vel_);
+    }
+    
+    // 获取当前速度缩放比例
+    inline double getVelocityScale() const { return velocity_scale_; }
 
     PlanParameters pp_;
     star_mvf::MapManager::Ptr map_manager_;
@@ -84,6 +105,10 @@ namespace ego_planner
     double replan_time_offset_{0.0};  // 重规划时间偏移，用于延迟新轨迹生效
     double replan_start_time_{0.0};   // 精确的重规划开始时间
     bool use_precise_start_time_{false};  // 是否使用精确的开始时间
+    
+    // [新增] 速度缩放相关
+    double base_max_vel_{2.0};    // 原始最大速度（从参数文件读取）
+    double velocity_scale_{1.0};  // 当前速度缩放比例
 
     std::unique_ptr<YawOptimizer> yaw_optimizer_;
 

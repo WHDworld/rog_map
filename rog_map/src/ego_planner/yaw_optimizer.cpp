@@ -1,5 +1,6 @@
 #include "ego_planner/yaw_optimizer.h"
 #include <ros/ros.h>
+#include <algorithm>  // for std::sort
 
 namespace ego_planner
 {
@@ -325,6 +326,222 @@ bool YawOptimizer::optimize(const poly_traj::Trajectory& xyz_traj,
     // ROS_INFO("[YawOpt] Result: yaw(0)=%.2f, yaw(T)=%.2f, error=%.2f deg", 
     //          yaw_at_start, yaw_at_end, (end_yaw - yaw_at_end) * 180.0 / M_PI);
     
+    return true;
+  }
+  
+  return false;
+}
+
+// ============ [新增] 带中间航点约束的Yaw优化 ============
+bool YawOptimizer::optimizeWithWaypoints(
+    const poly_traj::Trajectory& xyz_traj, 
+    double start_yaw, 
+    double end_yaw, 
+    const std::vector<std::pair<double, double>>& waypoint_yaws,
+    std::vector<double>& yaw_ctrl_pts,
+    double max_yaw_rate,
+    double dt)
+{
+  double total_duration = xyz_traj.getTotalDuration();
+  if (total_duration < 0.1) return false;
+
+  // 1. Setup B-spline structure
+  int M = std::ceil(total_duration / dt);
+  if (M < 3) M = 3;
+  dt = total_duration / M;
+  int N = M + 3;
+  
+  // 2. Prepare QP matrices
+  Eigen::MatrixXd H = Eigen::MatrixXd::Zero(N, N);
+  Eigen::VectorXd f = Eigen::VectorXd::Zero(N);
+
+  double T_align = 2.0;
+  double last_valid_yaw = start_yaw;
+  int samples_per_span = 3;
+  double d_sample = dt / samples_per_span;
+
+  // 速度对齐和目标对齐（复用原逻辑）
+  for (int i = 0; i < M; ++i) {
+    for (int j = 0; j < samples_per_span; ++j) {
+      double u = (double)j / samples_per_span;
+      double t = (i + u) * dt;
+      if (t > total_duration) t = total_duration;
+
+      Eigen::Vector4d basis_val, basis_grad;
+      getBasisValues(u, basis_val, basis_grad);
+      
+      // 速度方向Yaw
+      Eigen::Vector3d vel = xyz_traj.getVel(t);
+      double vel_yaw = last_valid_yaw;
+      if (vel.head(2).norm() > 0.1) {
+        vel_yaw = std::atan2(vel.y(), vel.x());
+      }
+      double diff = vel_yaw - last_valid_yaw;
+      while (diff > M_PI) diff -= 2*M_PI;
+      while (diff < -M_PI) diff += 2*M_PI;
+      vel_yaw = last_valid_yaw + diff;
+      last_valid_yaw = vel_yaw;
+
+      // 目标Yaw展开
+      double req_yaw = end_yaw;
+      diff = req_yaw - vel_yaw;
+      while (diff > M_PI) diff -= 2*M_PI;
+      while (diff < -M_PI) diff += 2*M_PI;
+      req_yaw = vel_yaw + diff;
+
+      // 权重混合
+      double time_to_go = total_duration - t;
+      double w_v = 0.0, w_t = 0.0;
+      if (time_to_go > T_align) {
+        w_v = w_vel_;
+      } else {
+        double ratio = (T_align - time_to_go) / T_align;
+        ratio = std::max(0.0, std::min(1.0, ratio));
+        w_v = w_vel_ * (1.0 - ratio);
+        w_t = w_target_ * ratio;
+      }
+
+      for (int r = 0; r < 4; ++r) {
+        int idx_r = i + r;
+        if (idx_r >= N) continue;
+        for (int c = 0; c < 4; ++c) {
+          int idx_c = i + c;
+          if (idx_c >= N) continue;
+          H(idx_r, idx_c) += d_sample * (w_v + w_t) * basis_val(r) * basis_val(c);
+        }
+        double weighted_ref = w_v * vel_yaw + w_t * req_yaw;
+        f(idx_r) += -2.0 * d_sample * weighted_ref * basis_val(r);
+      }
+    }
+  }
+
+  // 3. 平滑性代价
+  for (int k = 0; k < N - 2; ++k) {
+    double w = w_smooth_;
+    H(k, k) += w; 
+    H(k+1, k+1) += 4*w;
+    H(k+2, k+2) += w;
+    H(k, k+1) -= 2*w; H(k+1, k) -= 2*w;
+    H(k, k+2) += w;   H(k+2, k) += w;
+    H(k+1, k+2) -= 2*w; H(k+2, k+1) -= 2*w;
+  }
+
+  // 4. [新增] 中间航点Yaw约束
+  // [关键修复] 使用累积展开，而非相对start_yaw独立展开
+  // 这样可以保证相邻航点之间走最短路径，正确处理±π边界
+  double w_waypoint = 500000.0;  // 与起止点约束同量级
+  
+  // 按时间排序航点（假设输入已排序，但做防御性处理）
+  std::vector<std::pair<double, double>> sorted_wps = waypoint_yaws;
+  std::sort(sorted_wps.begin(), sorted_wps.end(), 
+            [](const auto& a, const auto& b) { return a.first < b.first; });
+  
+  // 累积展开：每个航点相对前一个展开，确保连续性
+  double prev_unwrapped = start_yaw;  // 起点yaw作为第一个参考
+  
+  for (size_t wp_idx = 0; wp_idx < sorted_wps.size(); ++wp_idx) {
+    double t_wp = sorted_wps[wp_idx].first;
+    double yaw_target = sorted_wps[wp_idx].second;
+    
+    // [FIX] 允许t_wp等于或接近total_duration的航点约束生效
+    // 原逻辑 t_wp >= total_duration 会跳过最后一个航点，导致Yaw约束丢失
+    if (t_wp < 0.01 || t_wp > total_duration + 0.01) {
+        ROS_DEBUG("[YawOpt] Skipping WP[%lu] t=%.3f (dur=%.3f)", wp_idx, t_wp, total_duration);
+        continue;
+    }
+    // 钳制在有效范围内
+    if (t_wp > total_duration) t_wp = total_duration - 0.001;
+    
+    int span = (int)(t_wp / dt);
+    if (span < 0) span = 0;
+    if (span >= M) span = M - 1;
+    double u = (t_wp - span * dt) / dt;
+    
+    Eigen::Vector4d basis_val, basis_grad;
+    getBasisValues(u, basis_val, basis_grad);
+    
+    // [关键修复] 相对前一个航点展开，而非相对start_yaw
+    // 这确保了yaw路径的连续性，避免跨越±π边界时的突变
+    double d = yaw_target - prev_unwrapped;
+    while (d > M_PI) d -= 2*M_PI;
+    while (d < -M_PI) d += 2*M_PI;
+    double unwrapped = prev_unwrapped + d;
+    
+    // 更新prev_unwrapped供下一个航点使用
+    prev_unwrapped = unwrapped;
+    
+    // 调试输出
+    ROS_DEBUG("[YawOpt] WP[%lu] t=%.2f: target=%.2f deg -> unwrapped=%.2f deg",
+              wp_idx, t_wp, yaw_target * 180.0 / M_PI, unwrapped * 180.0 / M_PI);
+    
+    for (int r = 0; r < 4; ++r) {
+      int idx_r = span + r;
+      if (idx_r >= N) continue;
+      for (int c = 0; c < 4; ++c) {
+        int idx_c = span + c;
+        if (idx_c >= N) continue;
+        H(idx_r, idx_c) += w_waypoint * basis_val(r) * basis_val(c);
+      }
+      f(idx_r) += -2.0 * w_waypoint * unwrapped * basis_val(r);
+    }
+  }
+
+  // 5. [新增] 角速度惩罚项
+  double w_rate = 100.0 / (max_yaw_rate * max_yaw_rate);
+  for (int k = 0; k < N - 1; ++k) {
+    double coef = w_rate / (dt * dt);
+    H(k, k) += coef;
+    H(k+1, k+1) += coef;
+    H(k, k+1) -= coef;
+    H(k+1, k) -= coef;
+  }
+
+  // 6. 起止点约束
+  double w_fix = 1000000.0;
+  
+  // 起点
+  Eigen::Vector3d vec_s(1.0/6.0, 4.0/6.0, 1.0/6.0);
+  int idx_s[3] = {0, 1, 2};
+  for(int r=0; r<3; ++r) {
+    for(int c=0; c<3; ++c) {
+      H(idx_s[r], idx_s[c]) += w_fix * vec_s(r) * vec_s(c);
+    }
+    f(idx_s[r]) += -2.0 * w_fix * start_yaw * vec_s(r);
+  }
+  
+  // 终点
+  // [关键修复] 终点yaw相对最后一个航点展开，保持累积连续性
+  double final_target = end_yaw;
+  double d = final_target - prev_unwrapped;  // 使用prev_unwrapped而非start_yaw
+  while(d > M_PI) d -= 2*M_PI;
+  while(d < -M_PI) d += 2*M_PI;
+  final_target = prev_unwrapped + d;
+  
+  Eigen::Vector3d vec_e(1.0/6.0, 4.0/6.0, 1.0/6.0);
+  int idx_e[3] = {N-3, N-2, N-1};
+  for(int r=0; r<3; ++r) {
+    for(int c=0; c<3; ++c) {
+      H(idx_e[r], idx_e[c]) += w_fix * vec_e(r) * vec_e(c);
+    }
+    f(idx_e[r]) += -2.0 * w_fix * final_target * vec_e(r);
+  }
+  
+  // 终点速度约束
+  Eigen::Vector2d vec_ev(-1.0, 1.0);
+  int idx_ev[2] = {N-3, N-1};
+  for(int r=0; r<2; ++r) {
+    for(int c=0; c<2; ++c) {
+      H(idx_ev[r], idx_ev[c]) += w_fix * vec_ev(r) * vec_ev(c);
+    }
+  }
+
+  // 7. 求解QP
+  Eigen::VectorXd x;
+  if (solveQP(H, f, x)) {
+    yaw_ctrl_pts.resize(N);
+    for(int i=0; i<N; ++i) yaw_ctrl_pts[i] = x(i);
+    ROS_INFO("[YawOpt] Waypoint constraints: %lu points, max_rate=%.2f rad/s", 
+             waypoint_yaws.size(), max_yaw_rate);
     return true;
   }
   

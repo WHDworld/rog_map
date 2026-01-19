@@ -32,6 +32,27 @@ public:
                 std::vector<double>& yaw_ctrl_pts,
                 double dt = 0.05);
 
+  /**
+   * @brief Yaw轨迹优化（支持中间航点yaw约束）
+   * 
+   * @param xyz_traj 位置轨迹
+   * @param start_yaw 起始yaw
+   * @param end_yaw 终点yaw
+   * @param waypoint_yaws 中间航点yaw约束 (time, yaw) pairs
+   * @param yaw_ctrl_pts 输出: B样条控制点
+   * @param max_yaw_rate 最大角速度约束 [rad/s]
+   * @param dt 时间步长
+   * @return true 优化成功
+   */
+  bool optimizeWithWaypoints(
+      const poly_traj::Trajectory& xyz_traj, 
+      double start_yaw, 
+      double end_yaw, 
+      const std::vector<std::pair<double, double>>& waypoint_yaws,
+      std::vector<double>& yaw_ctrl_pts,
+      double max_yaw_rate = 1.0,
+      double dt = 0.05);
+
   // Helper functions for B-spline evaluation (Uniform B-spline, order=3 or 4)
   // Assuming Yaw B-spline has same time allocation as XYZ or uniform? 
   // For simplicity and coupling, we can reuse XYZ's time allocation or resample.
