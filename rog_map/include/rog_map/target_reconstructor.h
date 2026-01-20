@@ -129,6 +129,17 @@ struct CameraParams {
     }
 };
 
+/**
+ * @brief 未扫描体素簇（用于第二阶段补扫）
+ */
+struct ScanCluster {
+    std::vector<int> voxel_indices;  // 簇内体素索引列表
+    Eigen::Vector3d centroid;        // 簇质心
+    int cluster_id;                  // 簇ID
+    
+    ScanCluster() : centroid(0,0,0), cluster_id(-1) {}
+};
+
 // ==================== TargetReconstructor 类 ====================
 
 /**
@@ -388,6 +399,12 @@ private:
     std::vector<ReconViewpoint> sampleHelixViewpoints();
     
     /**
+     * @brief [两阶段] 第一阶段视点筛选：4扇区 × 2高度层
+     * @param candidates 输入/输出：候选视点集合，筛选后被修改
+     */
+    void selectPhase1Viewpoints(std::vector<ReconViewpoint>& candidates);
+    
+    /**
      * @brief 滤波视点（走廊约束 + 遮挡检测）
      */
     std::vector<ReconViewpoint> filterViewpoints(const std::vector<ReconViewpoint>& vps);
@@ -469,6 +486,27 @@ private:
     std::vector<ReconViewpoint> sampleConeViewpoints(
         const Eigen::Vector3d& center, const Eigen::Vector3d& normal);
     
+    /**
+     * @brief [两阶段] 为未扫描簇生成观测视点（平均向量法）
+     * @param cluster 未扫描体素簇
+     * @return 计算得到的观测视点
+     */
+    ReconViewpoint generateViewpointForCluster(const ScanCluster& cluster);
+    
+    /**
+     * @brief [两阶段] 对未扫描体素进行BFS聚类
+     * @return 聚类后的簇列表
+     */
+    std::vector<ScanCluster> clusterUnscannedRegions();
+    
+    /**
+     * @brief [两阶段] 将视点调整到走廊边界内
+     * @param vp_pos 原始视点位置
+     * @param target 观测目标点
+     * @return 调整后的视点位置
+     */
+    Eigen::Vector3d adjustToCorridorBoundary(const Eigen::Vector3d& vp_pos, const Eigen::Vector3d& target);
+    
     // ========== 可视化 ==========
     
     void publishCorridor();
@@ -485,6 +523,8 @@ private:
     ros::Publisher corridor_pub_;
     ros::Publisher viewpoints_pub_;
     ros::Publisher path_pub_;
+    ros::Publisher accumulated_cloud_pub_;  // [新增] 累积点云发布器
+    ros::Publisher occupied_voxel_pub_;      // [新增] 占据态体素发布器
     
     // 状态
     bool initialized_ = false;
@@ -537,13 +577,12 @@ private:
     int cyl_num_layers_ = 4;
     int cyl_points_per_circle_ = 12;
     
-    // [新增] 螺旋采样参数（Multi-Layer Helix Sampling）
+    // [新增] 螺旋采样参数（Multi-Layer Helix Sampling，高度自适应）
     double helix_min_dist_ = 1.5;         // 最近距离 [m]
-    double helix_max_dist_ = 3.0;         // 最远距离 [m]
-    double helix_z_min_ = -0.5;           // 目标中心下方偏移 [m]
-    double helix_z_max_ = 0.5;            // 目标中心上方偏移 [m]
+    double helix_max_dist_ = 2.0;         // 最远距离 [m]
     int helix_num_revolutions_ = 3;       // 螺旋圈数
     int helix_points_per_rev_ = 8;        // 每圈点数
+    double helix_height_margin_ = 0.3;    // 高度边距 [m]（相对于目标BBox）
     
     // 半球采样参数
     double hemi_min_dist_ = 2.0;

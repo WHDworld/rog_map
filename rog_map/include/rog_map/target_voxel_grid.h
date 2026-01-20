@@ -26,7 +26,6 @@ enum class TargetVoxelType {
  */
 struct TargetVoxelState {
     TargetVoxelType state = TargetVoxelType::UNKNOWN;  // 体素状态
-    bool is_observed = false;                           // 是否被有效观测过
     int hit_count = 0;                                  // 击中次数
     
     TargetVoxelState() = default;
@@ -35,6 +34,7 @@ struct TargetVoxelState {
     bool isSurface() const { return state == TargetVoxelType::OCCUPIED; }
     bool isFree() const { return state == TargetVoxelType::FREE; }
     bool isUnknown() const { return state == TargetVoxelType::UNKNOWN; }
+    bool isWellScanned() const { return hit_count >= 3; }  // [新增] 高质量扫描判定
 };
 
 /**
@@ -86,14 +86,19 @@ public:
     int getSurfaceVoxelCount() const { return occupied_count_; }
     
     /**
-     * @brief 获取已观测体素数
+     * @brief [改进] 获取高质量扫描体素数 (hit_count >= 3)
      */
-    int getObservedVoxelCount() const { return observed_count_; }
+    int getWellScannedVoxelCount() const { return well_scanned_count_; }
+    
+    /**
+     * @brief [新增] 获取理论表面体素数（基于 BBox 估算）
+     */
+    int getEstimatedSurfaceCount() const { return estimated_surface_count_; }
     
     // ==================== 覆盖计算（方案B核心） ====================
     
     /**
-     * @brief 计算从给定视点能看到的未覆盖体素
+      * @brief 计算从给定视点能看到的未覆盖体素
      * @param vp_pos 视点位置
      * @param vp_yaw 视点Yaw角（无人机朝向）
      * @param camera_pitch 相机固定俯仰角
@@ -113,6 +118,21 @@ public:
         const std::unordered_set<int>& already_covered) const;
     
     /**
+     * @brief [新增] 计算加权覆盖分数
+     * @param vp_pos 视点位置
+     * @param vp_yaw 视点Yaw角
+     * @param camera_pitch 相机俯仰角
+     * @return 加权分数（UNKNOWN=1, OCCUPIED未充分扫描=0.5, 已充分扫描=0.25）
+     */
+    double computeWeightedCoverageScore(
+        const Eigen::Vector3d& vp_pos,
+        double vp_yaw,
+        double camera_pitch,
+        double hfov,
+        double vfov,
+        double max_range) const;
+    
+    /**
      * @brief 获取所有表面体素的索引
      */
     std::vector<int> getSurfaceVoxelIndices() const;
@@ -121,6 +141,11 @@ public:
      * @brief 获取所有未观测的表面体素索引
      */
     std::vector<int> getUnobservedVoxelIndices() const;
+    
+    /**
+     * @brief [新增] 获取所有占据态体素的索引
+     */
+    std::vector<int> getOccupiedVoxelIndices() const;
     
     // ==================== 遮挡检测 ====================
     
@@ -202,7 +227,7 @@ private:
     int estimated_surface_count_ = 0; // 理论表面体素数（基于 BBox 估算）
     int free_count_ = 0;              // FREE 体素数
     int occupied_count_ = 0;          // OCCUPIED 体素数（实际发现的表面）
-    int observed_count_ = 0;          // 已观测的有效体素数（不再使用）
+    int well_scanned_count_ = 0;      // 高质量扫描体素数 (hit_count >= 3)
     
     // 线程安全
     mutable std::mutex mutex_;
@@ -216,10 +241,23 @@ private:
     
     /**
      * @brief 判断 UNKNOWN 体素是否为内部空心（被 OCCUPIED 包围）
-     * @param idx 体素索引
-     * @return true=内部空心（排除），false=外部未扫描区域（计入分母）
      */
     bool isInteriorUnknown(int idx) const;
+    
+    /**
+     * @brief [新增] 在 FOV 内均匀采样射线方向
+     */
+    std::vector<Eigen::Vector3d> sampleRayDirections(
+        double yaw, double pitch, double hfov, double vfov,
+        int num_h, int num_v) const;
+    
+    /**
+     * @brief [新增] 计算射线与目标 BBox 的交点
+     * @return true=有交点，false=无交点
+     */
+    bool rayBBoxIntersection(
+        const Eigen::Vector3d& origin, const Eigen::Vector3d& dir,
+        Eigen::Vector3d& entry_point, Eigen::Vector3d& exit_point) const;
 };
 
 } // namespace rog_map

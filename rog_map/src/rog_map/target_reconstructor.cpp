@@ -1,5 +1,7 @@
 #include "rog_map/target_reconstructor.h"
 #include <random>
+#include <set>
+#include <queue>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/io/pcd_io.h>
 
@@ -19,6 +21,10 @@ void TargetReconstructor::init(ros::NodeHandle& nh, star_mvf::GlobalMap::Ptr glo
         "/target_recon/viewpoints", 1, true);
     path_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(
         "/target_recon/optimized_path", 1, true);
+    accumulated_cloud_pub_ = nh_.advertise<sensor_msgs::PointCloud2>(
+        "/target_recon/accumulated_cloud", 1, true);
+    occupied_voxel_pub_ = nh_.advertise<sensor_msgs::PointCloud2>(
+        "/target_recon/occupied_voxels", 1, true);
         
     // 订阅话题（使用从参数加载的话题名）
     target_sub_ = nh_.subscribe(target_detection_topic_, 1, &TargetReconstructor::triggerCallback, this);
@@ -76,13 +82,12 @@ void TargetReconstructor::loadParameters() {
     nh_param.param("target_recon/cylindrical/num_height_layers", cyl_num_layers_, 4);
     nh_param.param("target_recon/cylindrical/points_per_circle", cyl_points_per_circle_, 12);
     
-    // [新增] 螺旋采样参数
+    // [新增] 螺旋采样参数（高度根据目标自适应）
     nh_param.param("target_recon/helix/min_distance", helix_min_dist_, 1.5);
-    nh_param.param("target_recon/helix/max_distance", helix_max_dist_, 3.0);
-    nh_param.param("target_recon/helix/z_min", helix_z_min_, -0.5);
-    nh_param.param("target_recon/helix/z_max", helix_z_max_, 0.5);
+    nh_param.param("target_recon/helix/max_distance", helix_max_dist_, 2.0);
     nh_param.param("target_recon/helix/num_revolutions", helix_num_revolutions_, 3);
     nh_param.param("target_recon/helix/points_per_rev", helix_points_per_rev_, 8);
+    nh_param.param("target_recon/helix/height_margin", helix_height_margin_, 0.3);  // 高度边距
     
     // 半球采样参数
     nh_param.param("target_recon/hemisphere/min_distance", hemi_min_dist_, 1.5);
@@ -521,18 +526,11 @@ bool TargetReconstructor::markCurrentViewpointComplete() {
     // 移动到下一个视点
     target->current_viewpoint_idx++;
     
-    // 检查是否完成所有视点
-    if (target->current_viewpoint_idx >= (int)target->tour.size()) {
-        target->recon_state = ReconstructionState::RECON_COMPLETE;
-        active_target_id_ = -1;
-        ROS_INFO("[TargetReconstructor] Target %d reconstruction complete! Final coverage: %.1f%%", 
-                 target->id, target->coverage_ratio * 100.0);
-        return false;  // 没有下一个视点
-    }
-    
     ROS_INFO("[TargetReconstructor] Marked viewpoint %d complete, moving to %d/%lu", 
              target->current_viewpoint_idx - 1, target->current_viewpoint_idx, target->tour.size());
-    return true;  // 还有下一个视点
+    
+    // 返回是否还有下一个视点（但不在这里判断重建完成）
+    return target->current_viewpoint_idx < (int)target->tour.size();
 }
 
 void TargetReconstructor::pauseReconstruction() {
@@ -611,61 +609,182 @@ bool TargetReconstructor::optimizeRemainingViewpoints() {
             updated = true;
             continue;
         }
-        
-        // ========== 优化2: Yaw调整(基于最新voxel_grid) ==========
-        if (target->voxel_grid) {
-            // 获取未观测体素的质心方向
-            auto unobserved = target->voxel_grid->getUnobservedVoxelIndices();
-            if (!unobserved.empty()) {
-                // 计算未观测体素质心
-                Eigen::Vector3d centroid(0, 0, 0);
-                for (int idx : unobserved) {
-                    centroid += target->voxel_grid->getVoxelCenter(idx);
-                }
-                centroid /= unobserved.size();
-                
-                Eigen::Vector3d guide_direction = centroid - vp.position;
-                if (guide_direction.norm() > 0.1) {
-                    double new_yaw = atan2(guide_direction.y(), guide_direction.x());
-                    if (fabs(new_yaw - vp.yaw) > 0.2) {  // 差异>11度才更新
-                        vp.yaw = new_yaw;
-                        updated = true;
-                        ROS_INFO("[TargetReconstructor] Updated viewpoint %d yaw to %.2f deg", 
-                                 vp_id, new_yaw * 180.0 / M_PI);
-                    }
-                }
-            }
-        }
     }
     
-    // 如果有视点被移除,检查是否需要动态补充
-    if (updated && target->tour.size() < 3) {
-        ROS_WARN("[TargetReconstructor] Too few remaining viewpoints (%lu), triggering dynamic replanning", 
-                 target->tour.size());
-        // 触发动态重规划
-        bool replan_success = triggerDynamicReplanning();
+    // ========== [两阶段] 第二阶段触发或完成判断 ==========
+    // 当第一阶段视点执行完毕(当前索引超出tour)，检查覆盖率决定下一步
+    if (current_idx >= (int)target->tour.size()) {
         
-        if (replan_success) {
-            // 将新生成的视点追加到target
-            for (const auto& new_vp : viewpoints_) {
+        // ========== 计算三个覆盖率维度 ==========
+        double surface_discovery_ratio = 0.0;  // 表面发现率
+        double scan_quality_ratio = 0.0;       // 扫描质量
+        double viewpoint_coverage = 0.0;       // 视点覆盖率
+        
+        int occupied = 0, estimated = 0, well_scanned = 0;
+        
+        if (target->voxel_grid) {
+            occupied = target->voxel_grid->getSurfaceVoxelCount();
+            estimated = target->voxel_grid->getEstimatedSurfaceCount();
+            well_scanned = target->voxel_grid->getWellScannedVoxelCount();
+            
+            // 1. 表面发现率 = occupied / estimated（裁剪到[0,1]）
+            if (estimated > 0) {
+                surface_discovery_ratio = std::min(1.0, static_cast<double>(occupied) / estimated);
+            }
+            
+            // 2. 扫描质量 = well_scanned / occupied
+            if (occupied > 0) {
+                scan_quality_ratio = static_cast<double>(well_scanned) / occupied;
+            }
+        }
+        
+        // 3. 视点覆盖率 = 已完成视点 / 第一阶段总视点数
+        // 注意：current_idx 此时等于 tour.size()，说明刚好执行完
+        int total_phase1_viewpoints = target->tour.size();  // 第一阶段视点数
+        if (total_phase1_viewpoints > 0) {
+            viewpoint_coverage = 1.0;  // 当前索引超出tour，说明全部执行完
+        }
+        
+        // 更新 target 的覆盖率（使用表面发现率作为主指标）
+        target->coverage_ratio = surface_discovery_ratio;
+        
+        // ========== 诊断日志：三维度覆盖率详细信息 ==========
+        ROS_INFO("[Coverage Diag] surface_discovery=%.1f%% (occupied=%d/estimated=%d)",
+                 surface_discovery_ratio * 100.0, occupied, estimated);
+        ROS_INFO("[Coverage Diag] scan_quality=%.1f%% (well_scanned=%d/occupied=%d)",
+                 scan_quality_ratio * 100.0, well_scanned, occupied);
+        ROS_INFO("[Coverage Diag] viewpoint_coverage=%.1f%% (completed=%d/total=%d)",
+                 viewpoint_coverage * 100.0, current_idx, total_phase1_viewpoints);
+        
+        // ========== 多维度完成判断阈值 ==========
+        const double surface_threshold = 0.90;     // 表面发现率 >= 90%
+        const double quality_threshold = 0.85;     // 扫描质量 >= 85%
+        const double viewpoint_threshold = 0.80;   // 视点覆盖率 >= 80%
+        
+        bool reconstruction_complete = 
+            (surface_discovery_ratio >= surface_threshold) &&
+            (scan_quality_ratio >= quality_threshold) &&
+            (viewpoint_coverage >= viewpoint_threshold);
+        
+        if (reconstruction_complete) {
+            // 三维度都达标，重建完成！
+            target->recon_state = ReconstructionState::RECON_COMPLETE;
+            active_target_id_ = -1;
+            ROS_INFO("[TargetReconstructor] Target %d reconstruction COMPLETE!", target->id);
+            ROS_INFO("[TargetReconstructor]   surface_discovery: %.1f%% >= %.1f%% ✓",
+                     surface_discovery_ratio * 100.0, surface_threshold * 100.0);
+            ROS_INFO("[TargetReconstructor]   scan_quality: %.1f%% >= %.1f%% ✓",
+                     scan_quality_ratio * 100.0, quality_threshold * 100.0);
+            ROS_INFO("[TargetReconstructor]   viewpoint_coverage: %.1f%% >= %.1f%% ✓",
+                     viewpoint_coverage * 100.0, viewpoint_threshold * 100.0);
+            return true;  // 返回true让FSM知道状态变化
+        }
+        
+        // ========== 未达标，显示原因并尝试第二阶段补扫 ==========
+        ROS_WARN("[TargetReconstructor] Target %d NOT complete, checking Phase2...", target->id);
+        if (surface_discovery_ratio < surface_threshold) {
+            ROS_WARN("[TargetReconstructor]   surface_discovery: %.1f%% < %.1f%% ✗",
+                     surface_discovery_ratio * 100.0, surface_threshold * 100.0);
+        }
+        if (scan_quality_ratio < quality_threshold) {
+            ROS_WARN("[TargetReconstructor]   scan_quality: %.1f%% < %.1f%% ✗",
+                     scan_quality_ratio * 100.0, quality_threshold * 100.0);
+        }
+        if (viewpoint_coverage < viewpoint_threshold) {
+            ROS_WARN("[TargetReconstructor]   viewpoint_coverage: %.1f%% < %.1f%% ✗",
+                     viewpoint_coverage * 100.0, viewpoint_threshold * 100.0);
+        }
+        
+        // 覆盖率未达标，尝试第二阶段补扫
+        auto clusters = clusterUnscannedRegions();
+        
+        // ========== 诊断日志：聚类结果分析 ==========
+        if (clusters.empty()) {
+            // 详细分析为什么没有未扫描簇
+            if (target->voxel_grid) {
+                auto unobserved = target->voxel_grid->getUnobservedVoxelIndices();
+                ROS_WARN("[Phase2 Diag] No clusters! Unobserved voxels (OCCUPIED but hit<3): %lu", unobserved.size());
+                ROS_WARN("[Phase2 Diag] Possible reasons:");
+                ROS_WARN("[Phase2 Diag]   1. All OCCUPIED voxels are well-scanned (hit>=3)");
+                ROS_WARN("[Phase2 Diag]   2. getUnobservedVoxelIndices filters by OCCUPIED state");
+                ROS_WARN("[Phase2 Diag]   3. Actual surface matches BBox estimate well");
+            }
+        } else {
+            ROS_INFO("[Phase2] Found %lu unscanned clusters for補扫", clusters.size());
+        }
+        
+        if (!clusters.empty()) {
+            // ========== 重置视点信息 ==========
+            target->viewpoints.clear();
+            target->tour.clear();
+            target->current_viewpoint_idx = 0;
+            
+            // ========== 为每个簇生成视点 ==========
+            int rejected_small = 0, rejected_corridor = 0, rejected_duplicate = 0;
+            
+            for (const auto& cluster : clusters) {
+                if (cluster.voxel_indices.size() < 3) {
+                    rejected_small++;
+                    continue;  // 忽略过小的簇
+                }
+                
+                ReconViewpoint vp = generateViewpointForCluster(cluster);
+                
+                // 检查安全性
+                if (!isInsideCorridor(vp.position)) {
+                    rejected_corridor++;
+                    ROS_DEBUG("[Phase2] Cluster %d viewpoint (%.2f,%.2f,%.2f) rejected: outside corridor",
+                             cluster.cluster_id, vp.position.x(), vp.position.y(), vp.position.z());
+                    continue;
+                }
+                
+                // 检查与已生成视点是否重复
                 bool duplicate = false;
                 for (const auto& existing : target->viewpoints) {
-                    if ((existing.position - new_vp.position).norm() < 0.5) {
+                    if ((existing.position - vp.position).norm() < 0.5) {
                         duplicate = true;
                         break;
                     }
                 }
-                if (!duplicate) {
-                    ReconViewpoint vp_copy = new_vp;
-                    vp_copy.id = target->viewpoints.size();
-                    target->viewpoints.push_back(vp_copy);
-                    target->tour.push_back(vp_copy.id);
+                
+                if (duplicate) {
+                    rejected_duplicate++;
+                    continue;
                 }
+                
+                vp.id = target->viewpoints.size();
+                target->viewpoints.push_back(vp);
+                ROS_INFO("[Phase2] Generated viewpoint %d for cluster %d at (%.2f, %.2f, %.2f)",
+                         vp.id, cluster.cluster_id, vp.position.x(), vp.position.y(), vp.position.z());
             }
+            
+            // ========== 诊断日志：视点生成统计 ==========
+            ROS_INFO("[Phase2 Diag] Cluster stats: total=%lu, too_small=%d, outside_corridor=%d, duplicate=%d, generated=%lu",
+                     clusters.size(), rejected_small, rejected_corridor, rejected_duplicate, target->viewpoints.size());
+            
+            // ========== TSP优化新视点序列 ==========
+            if (!target->viewpoints.empty()) {
+                target->tour = greedyTSP(target->viewpoints);
+                if (target->tour.size() > 3) {
+                    twoOptImprovement(target->tour, target->viewpoints);
+                }
+                updated = true;
+                ROS_INFO("[Phase2] Generated %lu viewpoints for Phase2 reconstruction", target->viewpoints.size());
+            } else {
+                ROS_WARN("[Phase2 Diag] All clusters rejected! No viewpoints generated.");
+            }
+        } else {
+            // 没有找到未扫描簇，即使覆盖率未达标也标记完成
+            target->recon_state = ReconstructionState::RECON_COMPLETE;
+            active_target_id_ = -1;
+            ROS_INFO("[TargetReconstructor] Target %d reconstruction complete (no more clusters)! Coverage: %.1f%%", 
+                     target->id, target->coverage_ratio * 100.0);
+            return true;
         }
     }
+    
     double optimize_remaining_viewpoints_time = (ros::Time::now() - t0).toSec() * 1000;
-    ROS_INFO("[processExecRecon] Optimized remaining viewpoints, optimize_remaining_viewpoints_time: %f ms", optimize_remaining_viewpoints_time);
+    ROS_DEBUG("[optimizeRemainingViewpoints] time: %.1f ms", optimize_remaining_viewpoints_time);
     return updated;
 }
 
@@ -725,23 +844,46 @@ void TargetReconstructor::targetCloudCallback(const sensor_msgs::PointCloud2Cons
         return;
     }
     
-    // 3. [新增] 累积彩色点云（保留原始 RGB）
-    *active_target->accumulated_cloud += target_cloud_rgb;
+    // 3. [修正] 获取目标BBox边界（带边距）
+    const double margin = 0.1;  // 边距
+    Eigen::Vector3d bbox_min = active_target->info.center - active_target->info.size / 2.0 - Eigen::Vector3d(margin, margin, margin);
+    Eigen::Vector3d bbox_max = active_target->info.center + active_target->info.size / 2.0 + Eigen::Vector3d(margin, margin, margin);
     
-    // 4. 提取 XYZ 用于 VoxelGrid 更新
-    pcl::PointCloud<pcl::PointXYZ> target_cloud_xyz;
-    pcl::copyPointCloud(target_cloud_rgb, target_cloud_xyz);
+    // 4. [修正] 过滤点云：只保留在目标BBox内的点
+    pcl::PointCloud<pcl::PointXYZRGB> filtered_cloud;
+    pcl::PointCloud<pcl::PointXYZ> filtered_cloud_xyz;
     
-    // 5. 更新活跃目标的 VoxelGrid
+    for (const auto& pt : target_cloud_rgb.points) {
+        if (pt.x >= bbox_min.x() && pt.x <= bbox_max.x() &&
+            pt.y >= bbox_min.y() && pt.y <= bbox_max.y() &&
+            pt.z >= bbox_min.z() && pt.z <= bbox_max.z()) {
+            filtered_cloud.push_back(pt);
+            pcl::PointXYZ pt_xyz;
+            pt_xyz.x = pt.x;
+            pt_xyz.y = pt.y;
+            pt_xyz.z = pt.z;
+            filtered_cloud_xyz.push_back(pt_xyz);
+        }
+    }
+    
+    if (filtered_cloud.empty()) {
+        ROS_DEBUG_THROTTLE(1.0, "[TargetReconstructor] No points within target BBox");
+        return;
+    }
+    
+    // 5. 累积过滤后的彩色点云
+    *active_target->accumulated_cloud += filtered_cloud;
+    
+    // 6. 更新活跃目标的 VoxelGrid
     Eigen::Vector3d sensor_pose = drone_position_;
-    active_target->voxel_grid->update(target_cloud_xyz, sensor_pose);
+    active_target->voxel_grid->update(filtered_cloud_xyz, sensor_pose);
     
-    // 6. 同步更新覆盖率
+    // 7. 同步更新覆盖率
     active_target->coverage_ratio = active_target->voxel_grid->getCoverageRatio();
     active_target->last_update_time = ros::Time::now();
     
-    ROS_DEBUG("[TargetReconstructor] Updated target %d: +%lu pts (total %lu), coverage %.1f%%", 
-              active_target_id_, target_cloud_rgb.size(), 
+    ROS_DEBUG("[TargetReconstructor] Updated target %d: +%lu pts (filtered from %lu, total %lu), coverage %.1f%%", 
+              active_target_id_, filtered_cloud.size(), target_cloud_rgb.size(),
               active_target->accumulated_cloud->size(),
               active_target->coverage_ratio * 100.0);
 }
@@ -796,16 +938,27 @@ bool TargetReconstructor::generateViewpoints() {
     // 4. 评分
     scoreViewpoints(filtered_vps);
     double score_viewpoints_time = (ros::Time::now() - t3).toSec() * 1000;
+    
+    // 5. [两阶段] 第一阶段视点筛选：4扇区 × 2高度层
     ros::Time t4 = ros::Time::now();
-    // 5. 序列优化
+    selectPhase1Viewpoints(filtered_vps);
+    double phase1_select_time = (ros::Time::now() - t4).toSec() * 1000;
+    
+    if (filtered_vps.empty()) {
+        ROS_WARN("[TargetReconstructor] No viewpoints after Phase1 selection");
+        return false;
+    }
+    
+    ros::Time t5 = ros::Time::now();
+    // 6. 序列优化
     viewpoints_ = filtered_vps; // 保存有效视点
     tour_ = optimizeSequence(viewpoints_);
-    double optimize_sequence_time = (ros::Time::now() - t4).toSec() * 1000;
+    double optimize_sequence_time = (ros::Time::now() - t5).toSec() * 1000;
     ROS_INFO("[TargetReconstructor] Target center: %.2f, %.2f, %.2f, Generated %zu viewpoints, "
-             "corridor: %.1fms, sample: %.1fms, filter: %.1fms, score: %.1fms, optimize: %.1fms", 
+             "corridor: %.1fms, sample: %.1fms, filter: %.1fms, score: %.1fms, phase1: %.1fms, optimize: %.1fms", 
              current_target_.center.x(), current_target_.center.y(), current_target_.center.z(), 
              viewpoints_.size(), generate_corridor_time, sample_viewpoints_time, 
-             filter_viewpoints_time, score_viewpoints_time, optimize_sequence_time);
+             filter_viewpoints_time, score_viewpoints_time, phase1_select_time, optimize_sequence_time);
              
     return !tour_.empty();
 }
@@ -865,6 +1018,47 @@ void TargetReconstructor::visTimerCallback(const ros::TimerEvent& e) {
     publishCorridor();
     publishViewpoints();
     publishOptimalPath();
+    
+    // ========== [新增] 发布累积点云和占据态体素 ==========
+    TrackedTarget* target = getActiveTargetNoLock();
+    if (!target) return;
+    
+    // 1. 发布累积点云（带RGB颜色）
+    if (target->accumulated_cloud && !target->accumulated_cloud->empty()) {
+        sensor_msgs::PointCloud2 cloud_msg;
+        pcl::toROSMsg(*target->accumulated_cloud, cloud_msg);
+        cloud_msg.header.frame_id = "map";
+        cloud_msg.header.stamp = ros::Time::now();
+        accumulated_cloud_pub_.publish(cloud_msg);
+    }
+    
+    // 2. 发布占据态体素点云
+    if (target->voxel_grid) {
+        auto occupied_indices = target->voxel_grid->getOccupiedVoxelIndices();
+        if (!occupied_indices.empty()) {
+            pcl::PointCloud<pcl::PointXYZRGB>::Ptr voxel_cloud(new pcl::PointCloud<pcl::PointXYZRGB>());
+            voxel_cloud->reserve(occupied_indices.size());
+            
+            for (int idx : occupied_indices) {
+                Eigen::Vector3d center = target->voxel_grid->getVoxelCenter(idx);
+                pcl::PointXYZRGB pt;
+                pt.x = center.x();
+                pt.y = center.y();
+                pt.z = center.z();
+                // 用绿色表示已扫描的占据体素
+                pt.r = 0;
+                pt.g = 255;
+                pt.b = 0;
+                voxel_cloud->push_back(pt);
+            }
+            
+            sensor_msgs::PointCloud2 voxel_msg;
+            pcl::toROSMsg(*voxel_cloud, voxel_msg);
+            voxel_msg.header.frame_id = "map";
+            voxel_msg.header.stamp = ros::Time::now();
+            occupied_voxel_pub_.publish(voxel_msg);
+        }
+    }
 }
 
 std::vector<ReconViewpoint> TargetReconstructor::getOptimizedPath() const {
@@ -983,17 +1177,32 @@ std::vector<ReconViewpoint> TargetReconstructor::sampleCylindricalViewpoints() {
 }
 
 // [新增] 螺旋采样：Multi-Layer Helix Sampling
+// 根据目标实际高度自适应计算采样范围
 std::vector<ReconViewpoint> TargetReconstructor::sampleHelixViewpoints() {
     std::vector<ReconViewpoint> vps;
     int id = 0;
     
-    // 参数
+    // 距离参数
     double r_min = helix_min_dist_;
     double r_max = helix_max_dist_;
-    double z_min = helix_z_min_;
-    double z_max = helix_z_max_;
     int points_per_rev = helix_points_per_rev_;
     int total_points = helix_num_revolutions_ * points_per_rev;  // 总点数 = 圈数 × 每圈点数
+    
+    // ========== [自适应高度] 根据目标BBox计算采样高度范围 ==========
+    // 目标底部（地面）: center.z - size.z/2
+    // 目标顶部: center.z + size.z/2
+    // 采样范围: [地面 + margin, 顶部 + margin]
+    double target_bottom = current_target_.center.z() - current_target_.size.z() / 2.0;
+    double target_top = current_target_.center.z() + current_target_.size.z() / 2.0;
+    
+    // 确保最低高度不低于地面限制
+    double z_min = std::max(target_bottom + helix_height_margin_, min_ground_height_ + 0.3);
+    double z_max = target_top + helix_height_margin_;
+    
+    // 如果高度范围太小，扩展一下
+    if (z_max - z_min < 0.5) {
+        z_max = z_min + 0.5;
+    }
     
     for (int i = 0; i < total_points; ++i) {
         double t = static_cast<double>(i) / std::max(1, total_points - 1);  // 归一化进度 [0, 1]
@@ -1002,7 +1211,7 @@ std::vector<ReconViewpoint> TargetReconstructor::sampleHelixViewpoints() {
         double theta = 2.0 * M_PI * i / points_per_rev;
         
         // 高度：线性上升
-        double z_offset = z_min + (z_max - z_min) * t;
+        double z = z_min + (z_max - z_min) * t;
         
         // 半径：正弦变化（中间远，两端近）
         double r = r_min + (r_max - r_min) * sin(M_PI * t);
@@ -1010,7 +1219,7 @@ std::vector<ReconViewpoint> TargetReconstructor::sampleHelixViewpoints() {
         ReconViewpoint vp;
         vp.position.x() = current_target_.center.x() + r * cos(theta);
         vp.position.y() = current_target_.center.y() + r * sin(theta);
-        vp.position.z() = current_target_.center.z() + z_offset;
+        vp.position.z() = z;  // 使用计算出的绝对高度
         
         // Yaw 朝向目标
         double dx = current_target_.center.x() - vp.position.x();
@@ -1023,11 +1232,192 @@ std::vector<ReconViewpoint> TargetReconstructor::sampleHelixViewpoints() {
         vps.push_back(vp);
     }
     
-    ROS_INFO("[TargetReconstructor] Helix sampling: %lu viewpoints, r=[%.1f,%.1f], z=[%.1f,%.1f]",
-             vps.size(), r_min, r_max, 
-             current_target_.center.z() + z_min, current_target_.center.z() + z_max);
+    ROS_INFO("[TargetReconstructor] Helix sampling: %lu viewpoints, r=[%.1f,%.1f], z=[%.2f,%.2f] (target_z=[%.2f,%.2f])",
+             vps.size(), r_min, r_max, z_min, z_max, target_bottom, target_top);
     
     return vps;
+}
+
+// ========== 两阶段重建策略方法 ==========
+
+void TargetReconstructor::selectPhase1Viewpoints(std::vector<ReconViewpoint>& candidates) {
+    if (candidates.empty()) return;
+    
+    // ========== 参数定义 ==========
+    const int NUM_SECTORS = 4;        // 4个扇区 (每个90°)
+    const int NUM_HEIGHT_LAYERS = 2;  // 2个高度层 (上/下)
+    const double sector_step = 2 * M_PI / NUM_SECTORS;
+    const double z_threshold = current_target_.center.z();  // 高度分界线
+    
+    // ========== 数据结构 ==========
+    // [sector_idx][height_layer] -> (best_vp, max_score)
+    std::vector<std::vector<ReconViewpoint>> best_vps(NUM_SECTORS, 
+        std::vector<ReconViewpoint>(NUM_HEIGHT_LAYERS));
+    std::vector<std::vector<bool>> has_best(NUM_SECTORS, 
+        std::vector<bool>(NUM_HEIGHT_LAYERS, false));
+    std::vector<std::vector<double>> max_scores(NUM_SECTORS, 
+        std::vector<double>(NUM_HEIGHT_LAYERS, -1.0));
+    
+    // ========== 遍历所有候选视点 ==========
+    for (const auto& vp : candidates) {
+        // 1. 计算扇区索引 (0-3)
+        double angle = atan2(vp.position.y() - current_target_.center.y(),
+                             vp.position.x() - current_target_.center.x());
+        int sector_idx = static_cast<int>(floor((angle + M_PI) / sector_step));
+        sector_idx = std::clamp(sector_idx, 0, NUM_SECTORS - 1);
+        
+        // 2. 计算高度层索引 (0=下层, 1=上层)
+        int height_layer = (vp.position.z() >= z_threshold) ? 1 : 0;
+        
+        // 3. 使用已评分的score字段（scoreViewpoints已调用）
+        double score = vp.score;
+        
+        // 4. 更新最优视点
+        if (score > max_scores[sector_idx][height_layer]) {
+            max_scores[sector_idx][height_layer] = score;
+            best_vps[sector_idx][height_layer] = vp;
+            has_best[sector_idx][height_layer] = true;
+        }
+    }
+    
+    // ========== 收集结果 ==========
+    candidates.clear();
+    for (int s = 0; s < NUM_SECTORS; ++s) {
+        for (int h = 0; h < NUM_HEIGHT_LAYERS; ++h) {
+            if (has_best[s][h]) {
+                candidates.push_back(best_vps[s][h]);
+            }
+        }
+    }
+    
+    ROS_INFO("[Phase1] Selected %lu viewpoints (4 sectors x 2 height layers)", 
+             candidates.size());
+}
+
+ReconViewpoint TargetReconstructor::generateViewpointForCluster(const ScanCluster& cluster) {
+    Eigen::Vector3d C = cluster.centroid;  // 簇质心
+    Eigen::Vector3d T = current_target_.center;  // 目标中心
+    
+    // ========== 简化方案：水平向外观察 ==========
+    // 1. 方向：目标中心 → 簇质心（确保从外侧观察，避免从后面看前面）
+    Eigen::Vector2d outward_dir_xy(C.x() - T.x(), C.y() - T.y());
+    
+    // 退化处理：如果簇质心与目标中心XY重合，使用默认方向
+    if (outward_dir_xy.norm() < 0.05) {
+        outward_dir_xy = Eigen::Vector2d(1, 0);
+    }
+    outward_dir_xy.normalize();
+    
+    // 2. 视点位置：簇中心 + 向外方向 × 距离，高度 = 簇中心高度
+    Eigen::Vector3d vp_pos;
+    vp_pos.x() = C.x() + outward_dir_xy.x() * optimal_distance_;
+    vp_pos.y() = C.y() + outward_dir_xy.y() * optimal_distance_;
+    vp_pos.z() = C.z();  // 视点高度 = 簇中心高度（水平观察）
+    
+    // 3. Yaw：朝向簇中心
+    double yaw = atan2(-outward_dir_xy.y(), -outward_dir_xy.x());
+    
+    // 构建视点
+    ReconViewpoint vp;
+    vp.position = vp_pos;
+    vp.yaw = yaw;
+    vp.pitch = camera_fixed_pitch_;
+    vp.id = -1;
+    
+    // 安全性校验
+    if (!isInsideCorridor(vp.position)) {
+        vp.position = adjustToCorridorBoundary(vp.position, C);
+        vp.yaw = atan2(C.y() - vp.position.y(), C.x() - vp.position.x());
+    }
+    
+    return vp;
+}
+
+std::vector<ScanCluster> TargetReconstructor::clusterUnscannedRegions() {
+    std::vector<ScanCluster> clusters;
+    if (!voxel_grid_) return clusters;
+    
+    // 1. 获取未观测体素
+    std::vector<int> unobserved = voxel_grid_->getUnobservedVoxelIndices();
+    if (unobserved.empty()) return clusters;
+    
+    // 2. BFS聚类
+    std::set<int> visited;
+    int cluster_id = 0;
+    const double cluster_eps = octree_resolution_ * 2.5;  // 聚类距离阈值
+    
+    for (int seed_idx : unobserved) {
+        if (visited.count(seed_idx)) continue;
+        
+        ScanCluster cluster;
+        cluster.cluster_id = cluster_id++;
+        std::queue<int> q;
+        q.push(seed_idx);
+        visited.insert(seed_idx);
+        
+        Eigen::Vector3d centroid_sum(0, 0, 0);
+        
+        while (!q.empty()) {
+            int curr = q.front();
+            q.pop();
+            
+            cluster.voxel_indices.push_back(curr);
+            centroid_sum += voxel_grid_->getVoxelCenter(curr);
+            
+            // 查找邻居
+            Eigen::Vector3d curr_center = voxel_grid_->getVoxelCenter(curr);
+            for (int neighbor_idx : unobserved) {
+                if (visited.count(neighbor_idx)) continue;
+                
+                Eigen::Vector3d neighbor_center = voxel_grid_->getVoxelCenter(neighbor_idx);
+                double dist = (neighbor_center - curr_center).norm();
+                
+                if (dist <= cluster_eps) {
+                    visited.insert(neighbor_idx);
+                    q.push(neighbor_idx);
+                }
+            }
+        }
+        
+        // 计算质心
+        if (!cluster.voxel_indices.empty()) {
+            cluster.centroid = centroid_sum / cluster.voxel_indices.size();
+            clusters.push_back(cluster);
+        }
+    }
+    
+    ROS_INFO("[Phase2] Clustered %lu unobserved voxels into %lu clusters", 
+             unobserved.size(), clusters.size());
+    
+    return clusters;
+}
+
+Eigen::Vector3d TargetReconstructor::adjustToCorridorBoundary(
+    const Eigen::Vector3d& vp_pos, const Eigen::Vector3d& target) 
+{
+    // 二分搜索找到走廊边界上的合法位置
+    Eigen::Vector3d dir = (target - vp_pos).normalized();
+    double max_dist = (target - vp_pos).norm();
+    
+    double lo = 0.0, hi = max_dist;
+    Eigen::Vector3d result = target;  // 默认返回目标点
+    
+    for (int iter = 0; iter < 10; ++iter) {
+        double mid = (lo + hi) / 2.0;
+        Eigen::Vector3d test_pos = vp_pos + dir * mid;
+        
+        if (isInsideCorridor(test_pos)) {
+            result = test_pos;
+            hi = mid;  // 尝试更靠外
+        } else {
+            lo = mid;  // 需要更靠近目标
+        }
+    }
+    
+    // 添加安全余量
+    result += dir * safety_margin_;
+    
+    return result;
 }
 
 // ========== Voxel Grid Methods (替代原IROS Innovation Methods) ==========
@@ -1260,17 +1650,20 @@ void TargetReconstructor::scoreViewpoints(std::vector<ReconViewpoint>& vps) {
     for (auto& vp : vps) {
         vp.coverage_score = computeCoverageScore(vp);
         vp.angle_score = computeAngleScore(vp);
-        vp.distance_score = computeDistanceScore(vp);
+        // vp.distance_score = computeDistanceScore(vp);
         vp.safety_score = computeSafetyScore(vp);
         
         // IROS Innovation: Normal Score included
-        double normal_score = computeNormalScore(vp);
+        // double normal_score = computeNormalScore(vp);
         
+        // vp.score = coverage_weight_ * vp.coverage_score +
+        //            angle_weight_ * vp.angle_score +
+        //            distance_weight_ * vp.distance_score +
+        //            safety_weight_ * vp.safety_score +
+        //            normal_weight_ * normal_score;
         vp.score = coverage_weight_ * vp.coverage_score +
                    angle_weight_ * vp.angle_score +
-                   distance_weight_ * vp.distance_score +
-                   safety_weight_ * vp.safety_score +
-                   normal_weight_ * normal_score;
+                   safety_weight_ * vp.safety_score;
     }
     
     // 按分数排序 (高分在前)
@@ -1284,28 +1677,56 @@ void TargetReconstructor::scoreViewpoints(std::vector<ReconViewpoint>& vps) {
 double TargetReconstructor::computeCoverageScore(const ReconViewpoint& vp) {
     if (!voxel_grid_) return 0.5;  // 无体素网格时返回中间值
     
-    // 使用体素网格的覆盖计算
-    std::unordered_set<int> empty_set;
-    auto coverage = voxel_grid_->computeNewCoverage(
+    // [改进] 使用加权覆盖评分
+    // UNKNOWN=1分、OCCUPIED未充分扫描=0.5分、已充分扫描=0.25分
+    double weighted_score = voxel_grid_->computeWeightedCoverageScore(
         vp.position, vp.yaw, vp.pitch,
         camera_params_.hfov, camera_params_.vfov,
-        camera_params_.max_range, empty_set);
+        camera_params_.max_range);
     
-    int total_surface = voxel_grid_->getSurfaceVoxelCount();
-    if (total_surface == 0) return 0.5;
+    // 归一化：最大分数为 64（射线数）× 1.0 = 64
+    double max_possible = 64.0;  // 8×8 射线，每条最高 1 分
     
-    return static_cast<double>(coverage.size()) / total_surface;
+    // 归一化到 [0, 1]
+    return std::min(1.0, weighted_score / max_possible);
 }
 
 double TargetReconstructor::computeAngleScore(const ReconViewpoint& vp) {
-    Eigen::Vector3d dir = (current_target_.center - vp.position).normalized();
-    Eigen::Vector3d radial = (current_target_.center - vp.position);
-    radial.z() = 0; 
-    radial.normalize();
+    // [改进] 基于 FOV 有效观测效率的评分
     
-    // 期望有一定的俯视角度
-    double cos_angle = dir.dot(radial); // 实际上是水平夹角的余弦
-    return std::max(0.0, 1.0 - fabs(cos_angle - optimal_angle_cos_));
+    // 1. 计算水平距离
+    double dx = current_target_.center.x() - vp.position.x();
+    double dy = current_target_.center.y() - vp.position.y();
+    double horiz_dist = sqrt(dx * dx + dy * dy);
+    
+    if (horiz_dist < 0.1) return 0.0;  // 太近，无法计算
+    
+    // 2. 计算 FOV 在目标平面的垂直覆盖范围
+    double view_z_center = vp.position.z() + horiz_dist * tan(vp.pitch);
+    double fov_half_height = horiz_dist * tan(camera_params_.vfov / 2.0);
+    
+    double fov_z_min = view_z_center - fov_half_height;
+    double fov_z_max = view_z_center + fov_half_height;
+    double fov_height = fov_z_max - fov_z_min;
+    
+    // 3. 目标高度范围
+    double target_z_min = current_target_.center.z() - current_target_.size.z() / 2.0;
+    double target_z_max = current_target_.center.z() + current_target_.size.z() / 2.0;
+    double target_height = current_target_.size.z();
+    
+    // 4. 计算交集（有效观测范围）
+    double intersect_min = std::max(fov_z_min, target_z_min);
+    double intersect_max = std::min(fov_z_max, target_z_max);
+    double effective_height = std::max(0.0, intersect_max - intersect_min);
+    
+    // 5. 评分指标
+    double fov_efficiency = effective_height / (fov_height + 1e-6);    // FOV 利用率
+    double target_coverage = effective_height / (target_height + 1e-6); // 目标覆盖率
+    
+    // 6. 综合评分：FOV 效率权重 0.6，目标覆盖权重 0.4（开根号鼓励近景细节）
+    double score = 0.6 * fov_efficiency + 0.4 * sqrt(target_coverage);
+    
+    return std::max(0.0, std::min(1.0, score));
 }
 
 double TargetReconstructor::computeDistanceScore(const ReconViewpoint& vp) {

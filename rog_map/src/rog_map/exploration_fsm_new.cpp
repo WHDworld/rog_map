@@ -907,61 +907,84 @@ void ExplorationFSMNew::processReconPlan(const ros::TimerEvent& e) {
 
 void ExplorationFSMNew::processExecRecon(const ros::TimerEvent& e) {
     
-    // 2. [修改] 全程规划模式：检测最后一个视点是否到达
-    int last_vp_idx = (int)recon_path_.size() - 1;
+    // ==================== 1. 检查当前视点抵达情况 ====================
+    // 使用 getCurrentReconViewpoint 获取当前应该到达的视点
+    ReconViewpoint current_vp;
+    bool has_current_vp = target_reconstructor_->getCurrentReconViewpoint(current_vp);
     
-    if (last_vp_idx < 0) {
-        ROS_WARN("[ProcessExecRecon] Empty path! Completing.");
+    if (!has_current_vp) {
+        // 没有当前视点，可能已完成或出错
+        ROS_INFO("[ProcessExecRecon] No current viewpoint, checking completion...");
+        
+        // 调用 optimizeRemainingViewpoints 检查是否触发第二阶段
+        bool phase2_triggered = target_reconstructor_->optimizeRemainingViewpoints();
+        
+        if (phase2_triggered) {
+            // 第二阶段生成了新视点，获取新路径并规划
+            std::vector<ReconViewpoint> new_path;
+            int num_remaining = target_reconstructor_->getReconstructionPath(new_path);
+            
+            if (num_remaining > 0 && planReconstructionTrajectory(new_path, 0)) {
+                ROS_INFO("[ProcessExecRecon] Phase2 trajectory planned with %d viewpoints", num_remaining);
+                return;  // 继续执行新轨迹
+            }
+        }
+        
+        // 真的没有视点了，重建完成
+        ROS_INFO("[ProcessExecRecon] Reconstruction complete!");
         planner_manager_->setEnableHeightKeeping(true);
         recon_path_.clear();
         transitState(ExplorationState::LOCALPLAN, "recon_complete");
         return;
     }
     
-    // 3. 只检测最终目标（最后一个视点）是否到达
-    const ReconViewpoint& target_vp = recon_path_[last_vp_idx];
-    double dist_to_goal = (odom_pos_ - target_vp.position).norm();
+    // 检查当前视点到达情况
+    const double reach_threshold = 0.1;  // 10cm到达阈值
+    const double yaw_threshold = 10.0 * M_PI / 180.0;  // 10°yaw阈值
     
-    // ==================== [新增] 动态视点优化 ====================
-    // 频率控制：每 2 秒检查一次是否需要优化视点
-    static ros::Time last_optimize_time = ros::Time(0);
-    if ((ros::Time::now() - last_optimize_time).toSec() > 2.0) {
-        last_optimize_time = ros::Time::now();
-        
-        // 调用视点优化（基于最新的 Octree 信息调整 Yaw、移除不安全视点等）
-        bool updated = target_reconstructor_->optimizeRemainingViewpoints();
-        if (updated) {
-            ROS_INFO("[ProcessExecRecon] Viewpoints optimized based on latest octree");
-        }
+    double dist = (odom_pos_ - current_vp.position).norm();
+    double yaw_diff = fabs(odom_yaw_ - current_vp.yaw);
+    if (yaw_diff > M_PI) yaw_diff = 2 * M_PI - yaw_diff;
+    
+    if (dist < reach_threshold && yaw_diff < yaw_threshold) {
+        // 当前视点到达，标记完成
+        target_reconstructor_->markCurrentViewpointComplete();
+        ROS_INFO("[ProcessExecRecon] Viewpoint %d reached (dist=%.2fm, yaw_diff=%.1f°)", 
+                 current_vp.id, dist, yaw_diff * 180.0 / M_PI);
     }
     
-    bool reached_final_goal = (dist_to_goal < 0.1);  // 10cm阈值
+    // ==================== 2. 调用视点优化（检查安全性、触发第二阶段） ====================
+    bool viewpoints_changed = target_reconstructor_->optimizeRemainingViewpoints();
     
-    if (reached_final_goal) 
-    {
-        // 标记所有视点完成
-        for (size_t i = 0; i < recon_path_.size(); ++i) {
-            target_reconstructor_->markCurrentViewpointComplete();
+    // ==================== 3. 如果视点发生变化，重新获取并规划轨迹 ====================
+    if (viewpoints_changed) {
+        ROS_INFO("[ProcessExecRecon] Viewpoints changed, replanning trajectory...");
+        
+        // 获取更新后的视点路径
+        std::vector<ReconViewpoint> new_path;
+        int num_remaining = target_reconstructor_->getReconstructionPath(new_path);
+        
+        if (num_remaining == 0) {
+            // 第二阶段也没有生成新视点，重建完成
+            ROS_INFO("[ProcessExecRecon] No remaining viewpoints, reconstruction complete!");
+            planner_manager_->setEnableHeightKeeping(true);
+            recon_path_.clear();
+            transitState(ExplorationState::LOCALPLAN, "recon_complete");
+            return;
         }
         
-        // ROS_INFO("[ProcessExecRecon] ALL COMPLETE! Total %lu viewpoints, final dist=%.2f", 
-        //          recon_path_.size(), dist_to_goal);
-        planner_manager_->setEnableHeightKeeping(true);
-        recon_path_.clear();
-        transitState(ExplorationState::LOCALPLAN, "recon_complete");
-        return;
+        // 规划新轨迹
+        if (planReconstructionTrajectory(new_path, 0)) {
+            ROS_INFO("[ProcessExecRecon] Replanned trajectory with %d viewpoints", num_remaining);
+            // recon_path_ 在 planReconstructionTrajectory 内部已更新
+        } else {
+            ROS_WARN("[ProcessExecRecon] Failed to replan, returning to exploration");
+            planner_manager_->setEnableHeightKeeping(true);
+            recon_path_.clear();
+            transitState(ExplorationState::LOCALPLAN, "recon_replan_failed");
+            return;
+        }
     }
-    
-    // 5. 检查轨迹超时
-    // double t_elapsed = ros::Time::now().toSec() - traj_start_time_;
-    // if (t_elapsed > traj_duration_ + 2.0) {
-    //     ROS_WARN("[ProcessExecRecon] Timeout! t=%.1f/%.1f, replan from window %d", 
-    //              t_elapsed, traj_duration_, recon_window_start_);
-    //     if (!planReconstructionTrajectory(recon_path_, recon_window_start_, RECON_WINDOW_SIZE)) {
-    //         planner_manager_->setEnableHeightKeeping(true);
-    //         transitState(ExplorationState::LOCALPLAN, "recon_timeout");
-    //     }
-    // }
 }
 
 bool ExplorationFSMNew::planReconstructionTrajectory(

@@ -260,14 +260,13 @@ target_recon:
     max_elevation: 75.0               # 最大仰角 [deg]
     points_per_layer: 12              # 每层采样点数
   
-  # ---------- [新增] 螺旋采样参数 (Multi-Layer Helix) ----------
+  # ---------- [新增] 螺旋采样参数 (Multi-Layer Helix, 高度自适应) ----------
   helix:
     min_distance: 1.0                 # 最近距离 [m]
-    max_distance: 3.0                 # 最远距离 [m]
-    z_min: -0.5                       # 目标中心下方偏移 [m]
-    z_max: 0.5                        # 目标中心上方偏移 [m]
+    max_distance: 2.5                 # 最远距离 [m]
     num_revolutions: 3                # 螺旋圈数（绕几圈）
     points_per_rev: 8                 # 每圈点数
+    height_margin: 0.2                # 高度边距 [m]（相对于目标BBox）
   
   # ---------- 滤波参数 ----------
   safety_margin: 0.3                  # 安全边距 [m]
@@ -275,15 +274,15 @@ target_recon:
   
   # ---------- 评分权重 ----------
   coverage_weight: 0.40               # 覆盖率权重
-  angle_weight: 0.25                  # 角度权重
+  angle_weight: 0.3                  # 角度权重
   distance_weight: 0.20               # 距离权重
-  safety_weight: 0.15                 # 安全权重
+  safety_weight: 0.3                 # 安全权重
   normal_weight: 0.30                 # 法向量权重
   optimal_distance: 2.5               # 最优观测距离 [m]
   
   # ---------- Octree参数 ----------
   octree_resolution: 0.1              # Octree分辨率 [m]
-  octree_hit_threshold: 3             # 法向量有效阈值
+  octree_hit_threshold: 3             # 重建质量阈值
   
   # ---------- TSP优化 ----------
   max_2opt_iterations: 100            # 2-opt最大迭代次数

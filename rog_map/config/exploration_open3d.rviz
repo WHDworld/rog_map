@@ -30,7 +30,7 @@ Panels:
   - Class: rviz/Time
     Name: Time
     SyncMode: 0
-    SyncSource: occupied_voxels
+    SyncSource: Image
 Preferences:
   PromptSaveOnExit: true
 Toolbars:
@@ -171,7 +171,7 @@ Visualization Manager:
           Color: 173; 127; 168
           Color Transformer: FlatColor
           Decay Time: 0
-          Enabled: true
+          Enabled: false
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -186,7 +186,7 @@ Visualization Manager:
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
-          Value: true
+          Value: false
         - Alpha: 1
           Class: rviz/Axes
           Enabled: true
@@ -435,7 +435,7 @@ Visualization Manager:
           Color: 239; 41; 41
           Color Transformer: RGB8
           Decay Time: 0
-          Enabled: true
+          Enabled: false
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -450,7 +450,7 @@ Visualization Manager:
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
-          Value: true
+          Value: false
         - Alpha: 1
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
@@ -696,9 +696,7 @@ Visualization Manager:
           Marker Topic: /exploration/viewpoints
           Name: Viewpoints
           Namespaces:
-            view_directions: true
-            viewpoint_labels: true
-            viewpoints: true
+            {}
           Queue Size: 100
           Value: true
         - Class: rviz/MarkerArray
@@ -706,7 +704,7 @@ Visualization Manager:
           Marker Topic: /exploration/frustums
           Name: Frustums
           Namespaces:
-            frustum_lines: true
+            {}
           Queue Size: 100
           Value: true
         - Class: rviz/MarkerArray
@@ -730,9 +728,7 @@ Visualization Manager:
           Marker Topic: /exploration/region_route
           Name: region_route
           Namespaces:
-            history_nodes: true
-            node_subgrid_links: true
-            subgrid_centers: true
+            {}
           Queue Size: 100
           Value: true
       Enabled: true
@@ -759,7 +755,7 @@ Visualization Manager:
           Color: 238; 238; 236
           Color Transformer: FlatColor
           Decay Time: 0
-          Enabled: true
+          Enabled: false
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -774,13 +770,13 @@ Visualization Manager:
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
-          Value: true
+          Value: false
         - Class: rviz/MarkerArray
           Enabled: true
           Marker Topic: /target_detection/confirmed_bboxes
           Name: confirmed_bboxes
           Namespaces:
-            box3D: true
+            {}
           Queue Size: 100
           Value: true
         - Class: rviz/Image
@@ -817,6 +813,62 @@ Visualization Manager:
             {}
           Queue Size: 100
           Value: true
+        - Alpha: 1
+          Autocompute Intensity Bounds: true
+          Autocompute Value Bounds:
+            Max Value: 10
+            Min Value: -10
+            Value: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz/PointCloud2
+          Color: 255; 255; 255
+          Color Transformer: RGB8
+          Decay Time: 0
+          Enabled: false
+          Invert Rainbow: false
+          Max Color: 255; 255; 255
+          Min Color: 0; 0; 0
+          Name: targe_occupy
+          Position Transformer: XYZ
+          Queue Size: 10
+          Selectable: true
+          Size (Pixels): 3
+          Size (m): 0.009999999776482582
+          Style: Flat Squares
+          Topic: /target_recon/occupied_voxels
+          Unreliable: false
+          Use Fixed Frame: true
+          Use rainbow: true
+          Value: false
+        - Alpha: 1
+          Autocompute Intensity Bounds: true
+          Autocompute Value Bounds:
+            Max Value: 10
+            Min Value: -10
+            Value: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz/PointCloud2
+          Color: 255; 255; 255
+          Color Transformer: RGB8
+          Decay Time: 0
+          Enabled: true
+          Invert Rainbow: false
+          Max Color: 255; 255; 255
+          Min Color: 0; 0; 0
+          Name: target_point
+          Position Transformer: XYZ
+          Queue Size: 10
+          Selectable: true
+          Size (Pixels): 3
+          Size (m): 0.004999999888241291
+          Style: Points
+          Topic: /target_recon/accumulated_cloud
+          Unreliable: false
+          Use Fixed Frame: true
+          Use rainbow: true
+          Value: true
       Enabled: true
       Name: reconstructor
   Enabled: true
@@ -842,7 +894,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/XYOrbit
-      Distance: 32.637481689453125
+      Distance: 47.5506706237793
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -850,17 +902,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 1.2848466634750366
-        Y: -0.8696074485778809
-        Z: -8.812112355371937e-06
+        X: 1.069462776184082
+        Y: 2.8840012550354004
+        Z: -7.739228749414906e-06
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.72979736328125
+      Pitch: 0.6197975277900696
       Target Frame: perfect_drone
-      Yaw: 2.297269105911255
+      Yaw: 2.0872669219970703
     Saved:
       - Class: rviz/ThirdPersonFollower
         Distance: 17.48538589477539

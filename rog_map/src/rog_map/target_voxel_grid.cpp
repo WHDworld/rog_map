@@ -10,7 +10,7 @@ TargetVoxelGrid::TargetVoxelGrid(const Eigen::Vector3d& center,
     : center_(center), size_(size), resolution_(resolution)
 {
     // 添加边距确保点云不会超出边界
-    double margin = 0.3;
+    double margin = 0.1;
     Eigen::Vector3d padded_size = size + Eigen::Vector3d(margin, margin, margin) * 2.0;
     
     // 计算各维度体素数量
@@ -66,12 +66,12 @@ void TargetVoxelGrid::update(const pcl::PointCloud<pcl::PointXYZ>& cloud,
             occupied_count_++;
         }
         
-        // 标记为已观测
-        if (!voxel.is_observed) {
-            voxel.is_observed = true;
-            observed_count_++;
-        }
+        // [改进] 统计高质量扫描体素：hit_count 从 2 变为 3 时触发
+        int old_hit = voxel.hit_count;
         voxel.hit_count++;
+        if (old_hit < 10 && voxel.hit_count >= 10) {
+            well_scanned_count_++;
+        }
     }
 }
 
@@ -97,12 +97,6 @@ void TargetVoxelGrid::raycastAndMarkFree(const Eigen::Vector3d& from,
         if (voxel.state == TargetVoxelType::UNKNOWN) {
             voxel.state = TargetVoxelType::FREE;
             free_count_++;
-        }
-        
-        // 射线经过的体素也标记为已观测
-        if (!voxel.is_observed) {
-            voxel.is_observed = true;
-            observed_count_++;
         }
     }
 }
@@ -132,26 +126,101 @@ std::unordered_set<int> TargetVoxelGrid::computeNewCoverage(
     
     std::unordered_set<int> new_coverage;
     
-    for (int idx = 0; idx < total_voxels_; ++idx) {
-        if (voxels_[idx].state != TargetVoxelType::OCCUPIED) continue;  // 只考虑表面体素
-        if (already_covered.count(idx)) continue;  // 已覆盖的跳过
-        
-        Eigen::Vector3d voxel_center = indexToPos(idx);
+    // [改进] 基于射线采样的覆盖评估，同时考虑 UNKNOWN 和 OCCUPIED 体素
+    // 在 FOV 内采样 8×8 = 64 条射线
+    auto ray_dirs = sampleRayDirections(vp_yaw, camera_pitch, hfov, vfov, 8, 8);
+    
+    for (const auto& dir : ray_dirs) {
+        // 计算射线与目标 BBox 的交点
+        Eigen::Vector3d entry, exit;
+        if (!rayBBoxIntersection(vp_pos, dir, entry, exit)) continue;
         
         // 距离检查
-        double dist = (voxel_center - vp_pos).norm();
-        if (dist < 0.5 || dist > max_range) continue;
+        double dist_to_entry = (entry - vp_pos).norm();
+        if (dist_to_entry > max_range) continue;
         
-        // FOV检查
-        if (!isInFOV(vp_pos, vp_yaw, camera_pitch, hfov, vfov, voxel_center)) continue;
+        // 沿射线遍历 BBox 内的体素
+        double step = resolution_ * 0.5;
+        double ray_length = (exit - entry).norm();
+        Eigen::Vector3d ray_dir = (exit - entry).normalized();
         
-        // 遮挡检查
-        if (isOccluded(vp_pos, voxel_center)) continue;
-        
-        new_coverage.insert(idx);
+        for (double t = 0; t < ray_length; t += step) {
+            Eigen::Vector3d pt = entry + ray_dir * t;
+            int idx = posToIndex(pt);
+            if (idx < 0) continue;
+            
+            const auto& voxel = voxels_[idx];
+            
+            // 遇到 UNKNOWN 或 OCCUPIED 体素 → 有覆盖价值
+            if (voxel.state == TargetVoxelType::UNKNOWN || 
+                voxel.state == TargetVoxelType::OCCUPIED) {
+                if (!already_covered.count(idx)) {
+                    new_coverage.insert(idx);
+                }
+                break;  // 射线被阻挡，停止遍历这条射线
+            }
+        }
     }
     
     return new_coverage;
+}
+
+double TargetVoxelGrid::computeWeightedCoverageScore(
+    const Eigen::Vector3d& vp_pos,
+    double vp_yaw,
+    double camera_pitch,
+    double hfov,
+    double vfov,
+    double max_range) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    double total_score = 0.0;
+    
+    // 在 FOV 内采样 8×8 = 64 条射线
+    auto ray_dirs = sampleRayDirections(vp_yaw, camera_pitch, hfov, vfov, 8, 8);
+    
+    for (const auto& dir : ray_dirs) {
+        // 计算射线与目标 BBox 的交点
+        Eigen::Vector3d entry, exit;
+        if (!rayBBoxIntersection(vp_pos, dir, entry, exit)) continue;
+        
+        // 距离检查
+        double dist_to_entry = (entry - vp_pos).norm();
+        if (dist_to_entry > max_range) continue;
+        
+        // 沿射线遍历 BBox 内的体素
+        double step = resolution_ * 0.5;
+        double ray_length = (exit - entry).norm();
+        Eigen::Vector3d ray_dir = (exit - entry).normalized();
+        
+        for (double t = 0; t < ray_length; t += step) {
+            Eigen::Vector3d pt = entry + ray_dir * t;
+            int idx = posToIndex(pt);
+            if (idx < 0) continue;
+            
+            const auto& voxel = voxels_[idx];
+            
+            // [加权评分策略]
+            if (voxel.state == TargetVoxelType::UNKNOWN) {
+                // UNKNOWN 体素：最高信息增益
+                total_score += 1.0;
+                break;
+            } else if (voxel.state == TargetVoxelType::OCCUPIED) {
+                if (!voxel.isWellScanned()) {
+                    // OCCUPIED 但未充分扫描 (hit_count < 3)：需要更多观测
+                    total_score += 0.5;
+                } else {
+                    // OCCUPIED 且已充分扫描：可以再观测但优先级低
+                    total_score += 0.25;
+                }
+                break;
+            }
+            // FREE 体素：继续遍历
+        }
+    }
+    
+    return total_score;
 }
 
 std::vector<int> TargetVoxelGrid::getSurfaceVoxelIndices() const {
@@ -172,12 +241,17 @@ std::vector<int> TargetVoxelGrid::getUnobservedVoxelIndices() const {
     std::vector<int> indices;
     
     for (int idx = 0; idx < total_voxels_; ++idx) {
-        // 未观测的有效体素（FREE 或 OCCUPIED）
-        if (voxels_[idx].state != TargetVoxelType::UNKNOWN && !voxels_[idx].is_observed) {
+        // [改进] 未充分扫描的体素（hit_count < 3）
+        if (voxels_[idx].state == TargetVoxelType::OCCUPIED && !voxels_[idx].isWellScanned()) {
             indices.push_back(idx);
         }
     }
     return indices;
+}
+
+std::vector<int> TargetVoxelGrid::getOccupiedVoxelIndices() const {
+    // 直接复用 getSurfaceVoxelIndices 的逻辑
+    return getSurfaceVoxelIndices();
 }
 
 bool TargetVoxelGrid::isOccluded(const Eigen::Vector3d& from, const Eigen::Vector3d& to) const {
@@ -326,6 +400,80 @@ bool TargetVoxelGrid::isInteriorUnknown(int idx) const {
     
     // 如果 6 个方向都被阻挡 → 是内部空心
     return blocked_count == 6;
+}
+
+std::vector<Eigen::Vector3d> TargetVoxelGrid::sampleRayDirections(
+    double yaw, double pitch, double hfov, double vfov,
+    int num_h, int num_v) const 
+{
+    std::vector<Eigen::Vector3d> dirs;
+    dirs.reserve(num_h * num_v);
+    
+    // 相机朝向的基准向量
+    Eigen::Vector3d forward(cos(yaw) * cos(pitch), sin(yaw) * cos(pitch), sin(pitch));
+    
+    // 构建局部坐标系
+    Eigen::Vector3d up = Eigen::Vector3d::UnitZ();
+    Eigen::Vector3d right = forward.cross(up).normalized();
+    if (right.norm() < 0.01) {
+        right = Eigen::Vector3d::UnitX();
+    }
+    Eigen::Vector3d local_up = right.cross(forward).normalized();
+    
+    // 在 FOV 内均匀采样
+    for (int i = 0; i < num_h; ++i) {
+        double h_angle = -hfov / 2.0 + hfov * i / std::max(1, num_h - 1);
+        for (int j = 0; j < num_v; ++j) {
+            double v_angle = -vfov / 2.0 + vfov * j / std::max(1, num_v - 1);
+            
+            // 旋转基准向量
+            Eigen::Vector3d dir = forward * cos(h_angle) * cos(v_angle)
+                                + right * sin(h_angle) * cos(v_angle)
+                                + local_up * sin(v_angle);
+            dirs.push_back(dir.normalized());
+        }
+    }
+    
+    return dirs;
+}
+
+bool TargetVoxelGrid::rayBBoxIntersection(
+    const Eigen::Vector3d& origin, const Eigen::Vector3d& dir,
+    Eigen::Vector3d& entry_point, Eigen::Vector3d& exit_point) const 
+{
+    // 计算目标 BBox 边界
+    Eigen::Vector3d bbox_min = center_ - size_ / 2.0;
+    Eigen::Vector3d bbox_max = center_ + size_ / 2.0;
+    
+    double t_min = -1e9;
+    double t_max = 1e9;
+    
+    for (int i = 0; i < 3; ++i) {
+        if (std::abs(dir[i]) > 1e-6) {
+            double t1 = (bbox_min[i] - origin[i]) / dir[i];
+            double t2 = (bbox_max[i] - origin[i]) / dir[i];
+            if (t1 > t2) std::swap(t1, t2);
+            t_min = std::max(t_min, t1);
+            t_max = std::min(t_max, t2);
+        } else {
+            // 射线与该轴平行
+            if (origin[i] < bbox_min[i] || origin[i] > bbox_max[i]) {
+                return false;  // 射线不穿过 BBox
+            }
+        }
+    }
+    
+    if (t_min > t_max || t_max < 0) {
+        return false;  // 无交点或在射线反方向
+    }
+    
+    // 确保 t_min >= 0（从射线起点开始）
+    if (t_min < 0) t_min = 0;
+    
+    entry_point = origin + dir * t_min;
+    exit_point = origin + dir * t_max;
+    
+    return true;
 }
 
 } // namespace rog_map
