@@ -202,8 +202,9 @@ int TargetReconstructor::matchOrCreateTarget(const TargetInfo& detection) {
                     target.is_confirmed = true;
                     // 初始化该目标的 VoxelGrid
                     target.voxel_grid.reset(new TargetVoxelGrid(target.info.center, target.info.size, octree_resolution_));
-                    ROS_INFO("[TargetReconstructor] Target %d confirmed at (%.2f, %.2f, %.2f)", 
-                             target.id, target.info.center.x(), target.info.center.y(), target.info.center.z());
+                    ROS_INFO("[TargetReconstructor] Target %d confirmed at (%.2f, %.2f, %.2f), size: (%.2f, %.2f, %.2f)", 
+                             target.id, target.info.center.x(), target.info.center.y(), target.info.center.z(),
+                             target.info.size.x(), target.info.size.y(), target.info.size.z());
                 }
                 
                 return matched_id;
@@ -408,11 +409,27 @@ bool TargetReconstructor::startReconstruction(const Eigen::Vector3d& drone_pos, 
     // Step 1: 选择目标
     TrackedTarget* target = nullptr;
     if (target_id == -1) {
-        // 自动选择:优先选择IDLE且已确认的目标
+        // 自动选择: 
+        // (1) 优先恢复RECONSTRUCTING或VIEWPOINT_READY状态的目标（中断后恢复）
+        // (2) 其次选择IDLE且已确认的目标（新任务）
         for (auto& t : tracked_targets_) {
-            if (t.is_confirmed && t.recon_state == ReconstructionState::IDLE) {
+            if (t.is_confirmed && 
+                (t.recon_state == ReconstructionState::RECONSTRUCTING ||
+                 t.recon_state == ReconstructionState::VIEWPOINT_READY)) {
                 target = &t;
+                active_target_id_ = t.id;  // 恢复active_target_id_
+                ROS_INFO("[TargetReconstructor] Resuming target %d (state=%d)", t.id, static_cast<int>(t.recon_state));
                 break;
+            }
+        }
+        
+        // 如果没有需要恢复的目标，选择新任务
+        if (!target) {
+            for (auto& t : tracked_targets_) {
+                if (t.is_confirmed && t.recon_state == ReconstructionState::IDLE) {
+                    target = &t;
+                    break;
+                }
             }
         }
     } else {
@@ -752,6 +769,16 @@ bool TargetReconstructor::optimizeRemainingViewpoints() {
                     continue;
                 }
                 
+                // [修复] 检查与当前无人机位置的距离，避免生成已经到达的视点
+                // 这可以防止Phase2生成当前位置附近的视点导致死循环
+                double dist_to_drone = (vp.position - drone_position_).norm();
+                if (dist_to_drone < 0.8) {
+                    ROS_DEBUG("[Phase2] Cluster %d viewpoint too close to drone (%.2fm), skipping",
+                             cluster.cluster_id, dist_to_drone);
+                    rejected_duplicate++;  // 计入rejected_duplicate统计
+                    continue;
+                }
+                
                 vp.id = target->viewpoints.size();
                 target->viewpoints.push_back(vp);
                 ROS_INFO("[Phase2] Generated viewpoint %d for cluster %d at (%.2f, %.2f, %.2f)",
@@ -768,10 +795,19 @@ bool TargetReconstructor::optimizeRemainingViewpoints() {
                 if (target->tour.size() > 3) {
                     twoOptImprovement(target->tour, target->viewpoints);
                 }
+                // [修复] 同步成员变量，供可视化使用
+                viewpoints_ = target->viewpoints;
+                tour_ = target->tour;
+                
                 updated = true;
                 ROS_INFO("[Phase2] Generated %lu viewpoints for Phase2 reconstruction", target->viewpoints.size());
             } else {
+                // 没有生成任何视点，标记完成
+                target->recon_state = ReconstructionState::RECON_COMPLETE;
+                active_target_id_ = -1;
                 ROS_WARN("[Phase2 Diag] All clusters rejected! No viewpoints generated.");
+                ROS_INFO("[TargetReconstructor] Target %d reconstruction complete (no Phase2 viewpoints).", target->id);
+                return true;
             }
         } else {
             // 没有找到未扫描簇，即使覆盖率未达标也标记完成
@@ -970,16 +1006,34 @@ void TargetReconstructor::triggerCallback(const vision_msgs::Detection3DArrayCon
     std::vector<TargetInfo> detections;
     for (const auto& detection : msg->detections) {
         TargetInfo target;
+        
+        // ========== [修复] 假设目标站在地面(z=0) ==========
+        // 前端可视化代码的逻辑：
+        //   top = center.z + z_width/2  (检测框顶部)
+        //   可视化框从地面(0)延伸到top
+        // 我们需要做相同处理：
+        double original_center_z = detection.bbox.center.position.z;
+        double original_size_z = detection.bbox.size.z;
+        double top = original_center_z + original_size_z / 2.0;  // 检测框顶部
+        
+        // 新的高度范围：从地面(0)到顶部(top)
+        double corrected_size_z = top;              // 新高度 = 顶部坐标
+        double corrected_center_z = top / 2.0;      // 新中心 = 高度的一半
+        
         target.center = Eigen::Vector3d(
             detection.bbox.center.position.x, 
             detection.bbox.center.position.y, 
-            detection.bbox.center.position.z
+            corrected_center_z
         );
         target.size = Eigen::Vector3d(
             detection.bbox.size.x, 
             detection.bbox.size.y, 
-            detection.bbox.size.z
+            corrected_size_z
         );
+        
+        ROS_DEBUG("[TargetReconstructor] Detection corrected: original_z=(%.2f, h=%.2f) -> corrected_z=(%.2f, h=%.2f)",
+                  original_center_z, original_size_z, corrected_center_z, corrected_size_z);
+        
         detections.push_back(target);
     }
     
@@ -1083,7 +1137,12 @@ bool TargetReconstructor::generateCorridor() {
     const auto& cloud = processed_cloud_.empty() ? obstacle_cloud_ : processed_cloud_;
     
     // 提取局部障碍物
-    Vec3f seed(current_target_.center.x(), current_target_.center.y(), current_target_.center.z());
+    // [修复] 种子点z坐标使用无人机飞行高度（约1m），而不是目标中心
+    // 因为修正后的center.z可能太低（假设目标站在地面时中心在高度的一半处）
+    // 这会导致走廊在较低位置生成，高处视点被拒绝
+    double seed_z = std::max(current_target_.center.z(), 1.0);  // 至少1m高度
+    
+    Vec3f seed(current_target_.center.x(), current_target_.center.y(), seed_z);
     vec_Vec3f obs = extractLocalObstacles(seed, cloud);
     
     // SeedDecomp3D
@@ -1247,7 +1306,20 @@ void TargetReconstructor::selectPhase1Viewpoints(std::vector<ReconViewpoint>& ca
     const int NUM_SECTORS = 4;        // 4个扇区 (每个90°)
     const int NUM_HEIGHT_LAYERS = 2;  // 2个高度层 (上/下)
     const double sector_step = 2 * M_PI / NUM_SECTORS;
-    const double z_threshold = current_target_.center.z();  // 高度分界线
+    
+    // [修正] 动态计算高度分界线
+    double min_z = 1000.0, max_z = -1000.0;
+    for (const auto& vp : candidates) {
+        if (vp.position.z() < min_z) min_z = vp.position.z();
+        if (vp.position.z() > max_z) max_z = vp.position.z();
+    }
+    double z_threshold = (min_z + max_z) / 2.0;
+    
+    // 如果高度差太小（例如只要一层），强制只要一层？
+    // 这里保持简单，如果都在一条线上，也会分到两层（>= threshold）
+    // 或者添加一个容差检查
+    
+    ROS_INFO("[Phase1] Viewpoint Z range: [%.2f, %.2f], threshold: %.2f", min_z, max_z, z_threshold);
     
     // ========== 数据结构 ==========
     // [sector_idx][height_layer] -> (best_vp, max_score)

@@ -942,30 +942,50 @@ void ExplorationFSMNew::processExecRecon(const ros::TimerEvent& e) {
     const double reach_threshold = 0.1;  // 10cm到达阈值
     const double yaw_threshold = 10.0 * M_PI / 180.0;  // 10°yaw阈值
     
-    double dist = (odom_pos_ - current_vp.position).norm();
+    double dist_to_current_vp = (odom_pos_ - current_vp.position).norm();
     double yaw_diff = fabs(odom_yaw_ - current_vp.yaw);
     if (yaw_diff > M_PI) yaw_diff = 2 * M_PI - yaw_diff;
     
-    if (dist < reach_threshold && yaw_diff < yaw_threshold) {
+    if (dist_to_current_vp < reach_threshold && yaw_diff < yaw_threshold) {
         // 当前视点到达，标记完成
         target_reconstructor_->markCurrentViewpointComplete();
         ROS_INFO("[ProcessExecRecon] Viewpoint %d reached (dist=%.2fm, yaw_diff=%.1f°)", 
-                 current_vp.id, dist, yaw_diff * 180.0 / M_PI);
+                 current_vp.id, dist_to_current_vp, yaw_diff * 180.0 / M_PI);
     }
     
     // ==================== 2. 调用视点优化（检查安全性、触发第二阶段） ====================
     bool viewpoints_changed = target_reconstructor_->optimizeRemainingViewpoints();
     
-    // ==================== 3. 如果视点发生变化，重新获取并规划轨迹 ====================
-    if (viewpoints_changed) {
-        ROS_INFO("[ProcessExecRecon] Viewpoints changed, replanning trajectory...");
+    // ==================== 3. 定时重规划检查 ====================
+    // 复用 replan_check_interval 参数，定时从当前位置重规划到剩余视点
+    bool need_periodic_replan = false;
+    double time_since_last_replan = (ros::Time::now() - last_recon_update_time_).toSec();
+    
+    // 触发条件：
+    // 1. 有正在执行的轨迹
+    // 2. 距上次规划已超过 replan_check_interval
+    // 3. 距离当前目标视点足够远（>1.0m），避免太近时规划失败
+    if (has_trajectory_ && 
+        time_since_last_replan >= config_.replan_check_interval &&
+        dist_to_current_vp > 1.0) {
+        need_periodic_replan = true;
+    }
+    
+    // ==================== 4. 执行重规划（视点变化或定时触发） ====================
+    if (viewpoints_changed || need_periodic_replan) {
+        if (need_periodic_replan && !viewpoints_changed) {
+            ROS_INFO("[ProcessExecRecon] Periodic replan triggered (%.1fs elapsed, dist=%.2fm)", 
+                     time_since_last_replan, dist_to_current_vp);
+        } else {
+            ROS_INFO("[ProcessExecRecon] Viewpoints changed, replanning trajectory...");
+        }
         
-        // 获取更新后的视点路径
-        std::vector<ReconViewpoint> new_path;
-        int num_remaining = target_reconstructor_->getReconstructionPath(new_path);
+        // 获取剩余未完成的视点路径
+        std::vector<ReconViewpoint> remaining_path;
+        int num_remaining = target_reconstructor_->getReconstructionPath(remaining_path);
         
         if (num_remaining == 0) {
-            // 第二阶段也没有生成新视点，重建完成
+            // 所有视点已完成，重建结束
             ROS_INFO("[ProcessExecRecon] No remaining viewpoints, reconstruction complete!");
             planner_manager_->setEnableHeightKeeping(true);
             recon_path_.clear();
@@ -973,16 +993,18 @@ void ExplorationFSMNew::processExecRecon(const ros::TimerEvent& e) {
             return;
         }
         
-        // 规划新轨迹
-        if (planReconstructionTrajectory(new_path, 0)) {
-            ROS_INFO("[ProcessExecRecon] Replanned trajectory with %d viewpoints", num_remaining);
-            // recon_path_ 在 planReconstructionTrajectory 内部已更新
+        // 从当前位置规划到剩余视点
+        // - 从当前轨迹预测位置开始，实现平滑衔接
+        // - 更新 traj_start_time_, traj_duration_, has_trajectory_
+        // - 更新 last_recon_update_time_
+        if (planReconstructionTrajectory(remaining_path, 0)) {
+            ROS_INFO("[ProcessExecRecon] Replanned trajectory with %d remaining viewpoints", 
+                     num_remaining);
         } else {
-            ROS_WARN("[ProcessExecRecon] Failed to replan, returning to exploration");
-            planner_manager_->setEnableHeightKeeping(true);
-            recon_path_.clear();
-            transitState(ExplorationState::LOCALPLAN, "recon_replan_failed");
-            return;
+            ROS_WARN("[ProcessExecRecon] Failed to replan, continuing with current trajectory");
+            // 规划失败时不退出，继续执行当前轨迹
+            // 更新时间戳避免频繁重试
+            last_recon_update_time_ = ros::Time::now();
         }
     }
 }
@@ -1038,18 +1060,14 @@ bool ExplorationFSMNew::planReconstructionTrajectory(
             while (diff < -M_PI) diff += 2 * M_PI;
             start_yaw = last_yaw_ + diff;
         }
-        // [New] 安全检查：如果预测Yaw与当前里程计Yaw偏差过大，强制使用里程计Yaw
-        // 防止由于之前的跟踪误差累积，导致新规划基于错误的假设开始
+        // [诊断] 检查预测Yaw与里程计Yaw的偏差
+        // 注意：不再修改start_yaw，因为这会导致360°跳变
         double yaw_diff = start_yaw - odom_yaw_;
         while (yaw_diff > M_PI) yaw_diff -= 2 * M_PI;
         while (yaw_diff < -M_PI) yaw_diff += 2 * M_PI;
-        if (std::abs(yaw_diff) > 45.0 * M_PI / 180.0) { // 阈值 45度
-            ROS_WARN("[FSM] Yaw divergence detected (%.2f deg). Resetting start_yaw to Odom.", 
-                     yaw_diff * 180.0 / M_PI);
-            // 将 odom_yaw_ 展开到与 start_yaw 最接近的等价角度
-            // 这样保持了展开空间的连续性
-            double odom_yaw_expanded = start_yaw - yaw_diff;
-            start_yaw = odom_yaw_expanded;
+        if (std::abs(yaw_diff) > 45.0 * M_PI / 180.0) {
+            ROS_DEBUG("[FSM] Yaw tracking lag in recon: %.2f deg", yaw_diff * 180.0 / M_PI);
+            // 不再重置start_yaw，保持展开空间连续性
         }
         planner_manager_->setReplanStartTime(traj_start_time_ + t_predict);
     }
@@ -1070,8 +1088,8 @@ bool ExplorationFSMNew::planReconstructionTrajectory(
         waypoints.push_back(viewpoints[i].position);
     }
     
-    if (waypoints.size() < 2) {
-        ROS_WARN("[FSM] Not enough waypoints in window");
+    if (waypoints.empty()) {
+        ROS_WARN("[FSM] No waypoints in window");
         return false;
     }
     
@@ -1136,8 +1154,10 @@ bool ExplorationFSMNew::planReconstructionTrajectory(
             ROS_INFO("[FSM] Generated %d yaw segments for smooth transition", (int)recon_segments_.size());
         }
         
+        // [修复] 安全访问waypoints，避免越界
+        Eigen::Vector3d first_goal = waypoints.size() > 0 ? waypoints[0] : Eigen::Vector3d::Zero();
         ROS_INFO("[FSM] Sliding window recon trajectory: window[%d-%d], %lu waypoints, %.2fs, current_pos: %f %f %f, first_goal: %f %f %f",
-                 from_idx, end_idx - 1, waypoints.size(), traj_duration_, odom_pos_.x(), odom_pos_.y(), odom_pos_.z(), waypoints[1].x(), waypoints[1].y(), waypoints[1].z());
+                 from_idx, end_idx - 1, waypoints.size(), traj_duration_, odom_pos_.x(), odom_pos_.y(), odom_pos_.z(), first_goal.x(), first_goal.y(), first_goal.z());
         return true;
     } else {
         ROS_WARN("[FSM] Failed to plan sliding window trajectory");
@@ -1618,19 +1638,17 @@ bool ExplorationFSMNew::planTrajectory(const Eigen::Vector3d& target, double tar
             start_yaw = last_yaw_ + diff;
         }
 
-        // [New] 安全检查：如果预测Yaw与当前里程计Yaw偏差过大，强制使用里程计Yaw
-        // 防止由于之前的跟踪误差累积，导致新规划基于错误的假设开始
+        // [诊断] 检查预测Yaw与里程计Yaw的偏差
+        // 注意：不再修改start_yaw，因为这会导致360°跳变
+        // YawOptimizer和calculate_yaw已有动力学限制，确保yaw变化平滑
         double yaw_diff = start_yaw - odom_yaw_;
         while (yaw_diff > M_PI) yaw_diff -= 2 * M_PI;
         while (yaw_diff < -M_PI) yaw_diff += 2 * M_PI;
 
         if (std::abs(yaw_diff) > 45.0 * M_PI / 180.0) { // 阈值 45度
-            ROS_WARN("[FSM] Yaw divergence detected (%.2f deg). Resetting start_yaw to Odom.", 
-                     yaw_diff * 180.0 / M_PI);
-            // 将 odom_yaw_ 展开到与 start_yaw 最接近的等价角度
-            // 这样保持了展开空间的连续性
-            double odom_yaw_expanded = start_yaw - yaw_diff;
-            start_yaw = odom_yaw_expanded;
+            ROS_DEBUG("[FSM] Yaw tracking lag: %.2f deg (start_yaw=%.2f, odom_yaw=%.2f)", 
+                     yaw_diff * 180.0 / M_PI, start_yaw * 180.0 / M_PI, odom_yaw_ * 180.0 / M_PI);
+            // 不再重置start_yaw，保持展开空间连续性
         }
 
         planner_manager_->setReplanStartTime(traj_start_time_ + t_predict);
@@ -1658,6 +1676,19 @@ bool ExplorationFSMNew::planTrajectory(const Eigen::Vector3d& target, double tar
         has_trajectory_ = true;
         last_replan_time_ = ros::Time::now();
         trajectory_start_time_ = ros::Time(traj_start_time_);
+        
+        // [关键修复] 同步 last_yaw_ 到新轨迹的起点值
+        // 防止 calculate_yaw 在新轨迹第一帧使用旧的 last_yaw_ 导致360°跳变
+        auto& local_data = planner_manager_->traj_.local_traj;
+        if (local_data.use_yaw_traj && !local_data.yaw_ctrl_pts.empty()) {
+            double new_start_yaw = ego_planner::YawOptimizer::evaluateYaw(
+                local_data.yaw_ctrl_pts, 0.0, local_data.duration);
+            last_yaw_ = new_start_yaw;
+            last_yaw_dot_ = 0.0;  // 重置角速度
+        } else {
+            last_yaw_ = start_yaw;  // 使用传入的start_yaw
+            last_yaw_dot_ = 0.0;
+        }
     } 
     else {
         // 确保 executionCallback 继续执行当前轨迹，而不是尝试切换到不存在的新轨迹
@@ -1754,11 +1785,6 @@ std::pair<double, double> ExplorationFSMNew::calculate_yaw(double t_cur, Eigen::
     // 1. 计算速度方向 Yaw (Velocity Yaw)
     double time_forward = 0.5; 
     Eigen::Vector3d dir;
-    
-    // 辅助lambda：从多项式采样位置
-    auto getPos = [&](double t, const rog_map::PolyTraj& traj_data) -> Eigen::Vector3d {
-        return planner_manager_->traj_.local_traj.traj.getPos(t); 
-    };
     
     // Helper lambda for angle normalization
     auto normalizeAngle = [](double angle) {

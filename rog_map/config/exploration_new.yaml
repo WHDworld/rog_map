@@ -135,7 +135,7 @@ viewpoint_manager:
 # ========== HistoryGraph (2Hz) ==========
 history_graph:
   update_rate: 2.0                  # Hz
-  node_spacing: 4.0                 # 节点间距 [m]
+  node_spacing: 5.0                 # 节点间距 [m]
   max_assoc_dist: 10.0              # 最大关联距离 [m]
 
 # ========== 探索状态机 (100Hz) ==========
@@ -228,9 +228,9 @@ target_recon:
   
   # ---------- 安全走廊参数 ----------
   corridor_radius: 2.0                # 走廊半径 [m]
-  local_bbox_x: 3.0                   # 以目标中心为中心的搜索区域半尺寸 [m]
-  local_bbox_y: 3.0                   # 以目标中心为中心的搜索区域半尺寸 [m]
-  local_bbox_z: 2.0                   # 以目标中心为中心的搜索区域半尺寸 [m]
+  local_bbox_x: 4.0                   # 以目标中心为中心的搜索区域半尺寸 [m]
+  local_bbox_y: 4.0                   # 以目标中心为中心的搜索区域半尺寸 [m]
+  local_bbox_z: 3.0                   # 以目标中心为中心的搜索区域半尺寸 [m]
   obstacle_search_radius: 5.0        # 障碍物搜索半径 [m]
   min_ground_height: 0.2              # 最小飞行高度 [m]
   
@@ -263,7 +263,7 @@ target_recon:
   # ---------- [新增] 螺旋采样参数 (Multi-Layer Helix, 高度自适应) ----------
   helix:
     min_distance: 1.0                 # 最近距离 [m]
-    max_distance: 2.5                 # 最远距离 [m]
+    max_distance: 3.0                 # 最远距离 [m]
     num_revolutions: 3                # 螺旋圈数（绕几圈）
     points_per_rev: 8                 # 每圈点数
     height_margin: 0.2                # 高度边距 [m]（相对于目标BBox）

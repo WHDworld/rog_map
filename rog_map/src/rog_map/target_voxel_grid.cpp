@@ -69,7 +69,7 @@ void TargetVoxelGrid::update(const pcl::PointCloud<pcl::PointXYZ>& cloud,
         // [改进] 统计高质量扫描体素：hit_count 从 2 变为 3 时触发
         int old_hit = voxel.hit_count;
         voxel.hit_count++;
-        if (old_hit < 10 && voxel.hit_count >= 10) {
+        if (old_hit < 6 && voxel.hit_count >= 6) {
             well_scanned_count_++;
         }
     }
