@@ -104,6 +104,20 @@ public:
     Position getGlobalMax() const { return config_.global_max; }
     float getResolution() const { return config_.resolution; }
     
+    // 子网格信息 (SemanticTargetExtractor 需要)
+    float getSubGridSize() const { return sub_grid_x_; }  // 子网格世界尺寸
+    int getSubGridNumX() const { return sub_grid_num_x_; }
+    int getSubGridNumY() const { return sub_grid_num_y_; }
+    
+    // 语义目标分析索引接口
+    const std::unordered_set<int>& getReadyForAnalysisSubGrids() const { 
+        return ready_for_analysis_subgrids_; 
+    }
+    void markSubGridAnalyzed(int linear_idx);
+    void setSemanticExplorationThreshold(float threshold) { 
+        semantic_exploration_threshold_ = threshold; 
+    }
+    
     /**
      * @brief 检查位置是否在地图范围内
      */
@@ -404,6 +418,10 @@ protected:
     std::unordered_set<VoxelIndex, VoxelIndexHash> frontier_voxels_;
     std::unordered_set<int> current_frontier_subgrids_;
     std::unordered_set<int> dirty_subgrids_;
+    
+    // 语义目标提取索引 (探索率达标但尚未分析的子网格)
+    std::unordered_set<int> ready_for_analysis_subgrids_;
+    float semantic_exploration_threshold_ = 0.9f;  // 探索率阈值
     
     // 地图索引范围
     VoxelIndex global_min_idx_;

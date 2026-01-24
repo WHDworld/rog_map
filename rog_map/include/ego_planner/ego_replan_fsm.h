@@ -73,6 +73,7 @@ namespace ego_planner
     int target_type_;
     double no_replan_thresh_, replan_thresh_;
     double waypoints_[50][3];
+    double waypoints_yaw_[50];  // 每个目标点的yaw，NaN表示跟随速度方向
     int waypoint_num_, wpt_id_;
     double planning_horizen_;
     double emergency_time_;
@@ -125,9 +126,13 @@ namespace ego_planner
     ros::NodeHandle node_;
     ros::Timer exec_timer_, safety_timer_;
     ros::Subscriber waypoint_sub_, viewpoint_sub_, viewpoint_path_sub_, odom_sub_, trigger_sub_, mandatory_stop_sub_, state_sub_;
-    ros::Publisher poly_traj_pub_, pos_cmd_pub_, replan_pub_;
+    ros::Publisher pos_cmd_pub_, replan_pub_;
     ros::ServiceClient arming_client_, set_mode_client_;
     ros::Publisher set_target_point_pub_;
+    ros::Publisher traj_vis_pub_;  // 轨迹可视化（MarkerArray：轨迹+终点yaw+实时yaw）
+    
+    /* 轨迹可视化 */
+    void visualizeTrajectory();
     /* state machine functions */
     void execFSMCallback(const ros::TimerEvent &e);
     void changeFSMExecState(FSM_EXEC_STATE new_state, std::string pos_call);
@@ -160,6 +165,25 @@ namespace ego_planner
     /* PX4 control */
     void publishTakeoffCmd();
     void publishHoverCmd();
+    
+    /* 轨迹执行（独立定时器） */
+    ros::Timer execution_timer_;
+    double traj_start_time_, traj_duration_;
+    Eigen::Vector3d last_pos_;
+    double last_yaw_, last_yaw_dot_;
+    
+    /* 旧轨迹保存（用于衔接） */
+    bool has_prev_traj_;
+    double prev_traj_start_time_, prev_traj_duration_;
+    poly_traj::Trajectory prev_traj_;
+    std::vector<double> prev_yaw_ctrl_pts_;
+    bool prev_use_yaw_traj_;
+    double prev_last_yaw_;
+    
+    void executionCallback(const ros::TimerEvent &e);
+    void publishCmd(const Eigen::Vector3d& p, const Eigen::Vector3d& v, 
+                    const Eigen::Vector3d& a, double yaw, double yaw_dot);
+    void savePrevTrajectory();
   };
 
 } // namespace ego_planner

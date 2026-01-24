@@ -1,0 +1,16 @@
+cam_model: Pinhole
+cam_width: 1280
+cam_height: 1024
+scale: 1.0
+# RealSense 相机内参（从 640x480 按比例缩放到 1280x1024）
+# 原始内参: fx=376, fy=376, cx=376, cy=240 (640x480)
+# 缩放比例: width_scale=1280/640=2.0, height_scale=1024/480≈2.133
+cam_fx: 639.9976491530514        # 376 * 2.0
+cam_fy: 639.9976491530514      # 376 * 2.133
+cam_cx: 640.5        # 1280 / 2
+cam_cy: 512.0        # 1024 / 2
+# 畸变系数（来自 realsense_camera.sdf depth camera）
+cam_d0: 0.00000001   # k1
+cam_d1: 0.00000001   # k2
+cam_d2: 0.00000001   # p1
+cam_d3: 0.00000001   # p2

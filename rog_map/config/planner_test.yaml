@@ -1,0 +1,143 @@
+# ===========================================================
+# 规划器测试节点参数配置
+# ===========================================================
+#
+# 用于 ego_planner_node 测试规划器功能
+# 只包含规划器相关模块实际读取的参数
+#
+# 参数来源：
+# - EGOReplanFSM::init() -> fsm/*
+# - EGOPlannerManager::initPlanModules() -> manager/*
+# - PolyTrajOptimizer::setParam() -> optimization/*
+# - MapManager::initFromROS() -> rog_map/*
+#
+# ===========================================================
+
+# ========== FSM 状态机配置 ==========
+# 读取位置: ego_replan_fsm.cpp init()
+fsm:
+  # 目标类型
+  flight_type: 2              # 1=MANUAL_TARGET, 2=PRESET_TARGET
+  
+  # 仿真模式
+  sim_mode: 0                 # 0=GAZEBO, 1=OPEN3D, 2=REAL
+  
+  # 重规划参数
+  thresh_replan_time: 1.0     # 重规划时间阈值 [s]
+  thresh_no_replan_meter: 1.0 # 不重规划距离阈值 [m]
+  planning_horizon: 7.5       # 规划视野 [m]
+  emergency_time: 1.0         # 紧急停止时间 [s]
+  fail_safe: true             # 启用安全保护
+  
+  # 起飞和控制参数
+  takeoff_height: 1.5         # 起飞高度 [m]
+  takeoff_accel_time: 1.0     # 起飞加速时间 [s]
+  replan_duration: 0.05       # 重规划时间偏移 [s]（FALCON风格轨迹衔接）
+  auto_start_preset: true     # 自动开始预设目标点
+  
+  # 目标点数量
+  waypoint_num: 4
+  
+  # 目标点配置 (x, y, z, yaw)
+  # yaw 单位: 弧度，不设置或NaN = 跟随速度方向
+  waypoint0_x: 10.0
+  waypoint0_y: 0.0
+  waypoint0_z: 1.5
+  waypoint0_yaw: 0.785          # 45°
+  
+  waypoint1_x: 10.0
+  waypoint1_y: 10.0
+  waypoint1_z: 1.5
+  waypoint1_yaw: 2.356         # 135°
+  
+  waypoint2_x: 0.0
+  waypoint2_y: 10.0
+  waypoint2_z: 1.5
+  waypoint2_yaw: 3.927         # 225°
+  
+  waypoint3_x: 0.0
+  waypoint3_y: 0.0
+  waypoint3_z: 1.5
+  waypoint3_yaw: 5.498        # 315°
+
+# ========== 规划管理器 ==========
+# 读取位置: ego_planner_manager.cpp initPlanModules()
+manager:
+  max_vel: 1.0                # 最大速度 [m/s]
+  max_acc: 1.0                # 最大加速度 [m/s²]
+  max_yaw_rate: 1.0          # 最大偏航角速度 [rad/s]
+  max_yaw_acc: 1.0            # 最大偏航角加速度 [rad/s²]
+  feasibility_tolerance: 0.05 # 可行性容差
+  polyTraj_piece_length: 1.5  # 多项式轨迹段长度 [m]
+  planning_horizon: 7.5       # 规划视野 [m]
+  use_distinctive_trajs: false # 是否使用多拓扑轨迹搜索
+
+# ========== 轨迹优化 ==========
+# 读取位置: poly_traj_optimizer.cpp setParam()
+optimization:
+  # 约束点
+  constraint_points_perPiece: 3     # 每段轨迹的约束点数
+  
+  # 优化权重
+  weight_obstacle: 10000.0          # 障碍物代价权重（硬约束）
+  weight_obstacle_soft: 5000.0      # 软约束障碍物权重
+  weight_feasibility: 10000.0       # 可行性约束权重（速度/加速度限制）
+  weight_sqrvariance: 3000.0        # 段长度方差权重（轨迹平滑性）
+  weight_time: 50.0                 # 时间优化权重
+  
+  # 安全距离
+  obstacle_clearance: 0.5          # 硬约束安全距离 [m]
+  obstacle_clearance_soft: 0.8      # 软约束安全距离 [m]
+  
+  # 高度保持
+  enable_height_keeping: true       # 是否启用高度保持
+  weight_height: 500000.0           # 高度保持权重
+  height_tolerance: 0.1             # 高度容差 [m]
+
+# ========== 地图配置 ==========
+# 读取位置: MapManager::initFromROS()
+rog_map:
+  # 话题配置
+  lidar_topic: "/cloud_registered"
+  odom_topic: "/ground_truth/odom"
+  frame_id: "map"
+  
+  # 分辨率
+  resolution: 0.2
+  
+  # 可视化
+  viz_rate: 5.0
+  visualization_en: true
+  visualization_range: [20.0, 20.0, 6.0]
+  
+  # 局部地图
+  local_map:
+    half_size: [10.0, 10.0, 3.0]
+    log_odds_hit: 0.85
+    log_odds_miss: -0.4
+    log_odds_min: -2.0
+    log_odds_max: 3.5
+    log_odds_occ_thresh: 0.0
+    use_raycast: true
+    raycast_step: 0.1
+  
+  # 传感器
+  sensor:
+    lidar_max_range: 30.0
+    lidar_min_range: 0.2
+    lidar_downsample_filter: 1
+  
+  # 全局地图
+  global_map:
+    map_size: [50, 50, 5.0]
+    map_model: 0
+    ground_height: -0.1
+    sub_grid_xy: 0.05
+    frontier_height_min: 0.3
+    frontier_height_max: 1.6
+  
+  # 膨胀
+  inflation:
+    enable: true
+    inflation_step: 1
+

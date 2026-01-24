@@ -521,8 +521,12 @@ namespace ego_planner
     traj_.local_traj.start_pos = traj.getPos(0);
     ++traj_.local_traj.traj_id;
     
-    // 兼容性：保留 global_traj.duration 供外部查询
+    // 关键：设置 global_traj（getLocalTarget需要访问所有字段）
+    traj_.global_traj.traj = traj;
     traj_.global_traj.duration = duration;
+    traj_.global_traj.global_start_time = time_now.toSec();
+    traj_.global_traj.glb_t_of_lc_tgt = time_now.toSec();  // 初始化为起始时间
+    traj_.global_traj.last_glb_t_of_lc_tgt = time_now.toSec();
     
     // [新增] Yaw轨迹优化 (适用于重建任务)
     if (yaw_optimizer_ && end_yaw < 9999.0)

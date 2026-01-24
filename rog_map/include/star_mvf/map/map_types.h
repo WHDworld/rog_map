@@ -141,6 +141,37 @@ struct SubGridIndex {
     }
 };
 
+// ==================== 语义目标元数据 (用于高价值目标缓存) ====================
+/**
+ * @brief 语义目标元数据
+ * 
+ * 存储从几何地图中提取的高价值目标信息
+ * 设计为轻量级结构，便于 SubGrid 级缓存
+ */
+struct SemanticTargetMetadata {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    
+    Position centroid;              // 质心位置
+    Position bbox_min;              // 包围盒最小点
+    Position bbox_max;              // 包围盒最大点
+    VoxelIndex seed_voxel;          // 种子体素索引 (用于惰性重生成)
+    float score = 0.0f;             // 目标评分
+    double timestamp = 0.0;         // 发现时间戳
+    
+    SemanticTargetMetadata() {
+        centroid.setZero();
+        bbox_min.setZero();
+        bbox_max.setZero();
+    }
+    
+    // 尺寸计算辅助函数
+    float getHeight() const { return bbox_max.z() - bbox_min.z(); }
+    float getWidth() const { 
+        return std::max(bbox_max.x() - bbox_min.x(), 
+                        bbox_max.y() - bbox_min.y()); 
+    }
+};
+
 // ==================== 子网格结构 ====================
 struct SubGrid {
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -175,13 +206,26 @@ struct SubGrid {
     std::vector<VoxelIndex> unknown_voxels_list_;
     std::unordered_map<VoxelIndex, int, VoxelIndexHash> unknown_to_list_pos_;
     
-    // ==================== 3. OCCUPIED 体素结构 (新增：视觉规划专用) ====================
-    // [A] 未被视觉观测的占据体素 (Yaw规划的重点目标)
+    // ==================== 3. OCCUPIED 体素结构 (视觉规划专用) ====================
+    // 未被视觉观测的占据体素 (语义目标提取的数据来源)
     std::vector<VoxelIndex> occ_unobserved_list_;
     std::unordered_map<VoxelIndex, int, VoxelIndexHash> occ_unobserved_map_;
-    // [B] 已被视觉观测的占据体素 (避免重复观测)
-    std::vector<VoxelIndex> occ_observed_list_;
-    std::unordered_map<VoxelIndex, int, VoxelIndexHash> occ_observed_map_;
+    
+    // ==================== 4. 语义目标提取状态机 (SemanticTargetExtractor 使用) ====================
+    /**
+     * @brief 语义分析状态
+     * UNKNOWN: 未探索
+     * ACCUMULATING: 正在建图（有体素但探索未完成）
+     * ANALYZED: 已分析完成（永不再处理）
+     */
+    enum class SemanticStatus {
+        UNKNOWN,       // 未探索
+        ACCUMULATING,  // 正在建图
+        ANALYZED       // 已分析完成
+    };
+    
+    SemanticStatus semantic_status_ = SemanticStatus::UNKNOWN;
+    std::vector<SemanticTargetMetadata> cached_targets_;  // 提取的高价值目标 (ANALYZED 后不再修改)
 
     // 前沿体素集合（保持unordered_set，因为需要快速查找和去重）
     std::unordered_set<VoxelIndex, VoxelIndexHash> sub_grid_frontier_voxels_;
@@ -249,6 +293,61 @@ struct SubGrid {
         unknown_voxels_list_.pop_back();
         unknown_to_list_pos_.erase(it);
         unknown_count--;
+    }
+    
+    // ==================== OCC_UNOBSERVED 体素操作 (语义目标提取专用) ====================
+    
+    /**
+     * @brief 添加未观测占据体素（O(1)）
+     * 当 LiDAR 发现新的 OCCUPIED 体素且尚未被相机观测时调用
+     */
+    void addOccUnobserved(const VoxelIndex& idx) {
+        if (occ_unobserved_map_.count(idx)) return;
+        
+        occ_unobserved_list_.push_back(idx);
+        occ_unobserved_map_[idx] = static_cast<int>(occ_unobserved_list_.size() - 1);
+        
+        // 状态转换：首次发现体素时进入 ACCUMULATING
+        if (semantic_status_ == SemanticStatus::UNKNOWN) {
+            semantic_status_ = SemanticStatus::ACCUMULATING;
+        }
+    }
+    
+    /**
+     * @brief 移除未观测占据体素（O(1) Swap-and-Pop）
+     * 当体素被相机观测后调用，将其移动到 occ_observed_list_
+     */
+    void removeOccUnobserved(const VoxelIndex& idx) {
+        auto it = occ_unobserved_map_.find(idx);
+        if (it == occ_unobserved_map_.end()) return;
+        
+        int pos = it->second;
+        int last_pos = static_cast<int>(occ_unobserved_list_.size() - 1);
+        
+        if (pos != last_pos) {
+            VoxelIndex last_idx = occ_unobserved_list_[last_pos];
+            occ_unobserved_list_[pos] = last_idx;
+            occ_unobserved_map_[last_idx] = pos;
+        }
+        
+        occ_unobserved_list_.pop_back();
+        occ_unobserved_map_.erase(it);
+        // 注意：移除体素不影响状态，ANALYZED 后不再变化
+    }
+    
+    /**
+     * @brief 标记体素为已观测（从未观测列表移除）
+     * 当相机观测到体素时调用
+     */
+    void markOccObserved(const VoxelIndex& idx) {
+        removeOccUnobserved(idx);
+    }
+    
+    /**
+     * @brief 检查体素是否在未观测占据列表中
+     */
+    bool isOccUnobserved(const VoxelIndex& idx) const {
+        return occ_unobserved_map_.find(idx) != occ_unobserved_map_.end();
     }
     
     /**

@@ -1,0 +1,27 @@
+<!-- 规划器测试 Launch 文件 -->
+<launch>
+    <!-- 参数配置 -->
+    <arg name="config" default="$(find rog_map)/config/planner_test.yaml"/>
+    <!-- 调试模式：设为true启用GDB调试 -->
+    <arg name="debug" default="false"/>
+    
+    <!-- 规划器测试节点 -->
+    <group if="$(arg debug)">
+        <node pkg="rog_map" type="ego_planner_node" name="ego_planner_node" output="screen"
+              launch-prefix="gdb -ex run --args">
+            <rosparam file="$(arg config)" command="load"/>
+        </node>
+    </group>
+    <group unless="$(arg debug)">
+        <node pkg="rog_map" type="ego_planner_node" name="ego_planner_node" output="screen">
+            <rosparam file="$(arg config)" command="load"/>
+        </node>
+    </group>
+    
+    <!-- RViz 可视化 (可选) -->
+    <node pkg="rviz" type="rviz" name="rviz" args="-d $(find rog_map)/config/planner_test.rviz"/>
+
+    <node pkg="my_control_package" type="mpc_analyzer_chw.py" name="record_data" output="screen">
+        <rosparam command="load" file="$(find my_control_package)/config/controller_param.yaml" ns="controller" />
+    </node>
+</launch>

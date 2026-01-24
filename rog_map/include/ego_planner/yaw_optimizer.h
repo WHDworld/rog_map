@@ -62,10 +62,10 @@ public:
   static double evaluateYawDot(const std::vector<double>& ctrl_pts, double t, double total_dur);
 
 private:
-  // Optimization weights
-  double w_smooth_ = 10.0; // Smoothness (minimize jerk/acc)
-  double w_vel_ = 10.0;    // Alignment with velocity
-  double w_target_ = 10.0; // Alignment with target yaw
+  // Optimization weights (TV-YC tuned)
+  double w_smooth_ = 10.0;    // Smoothness (minimize jerk/acc)
+  double w_vel_ = 1000.0;     // Alignment with velocity (巡航阶段强跟随速度方向)
+  double w_target_ = 1000.0;  // Alignment with target yaw (接近阶段强收敛到目标)
 
   // Solve Unconstrained QP: min 0.5 * x'Hx + f'x
   bool solveQP(const Eigen::MatrixXd& H, const Eigen::VectorXd& f, Eigen::VectorXd& x);

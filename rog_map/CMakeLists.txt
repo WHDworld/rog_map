@@ -203,6 +203,7 @@ add_executable(exploration_planner_node_new
         src/rog_map/exploration_fsm_new.cpp
         src/rog_map/viewpoint_manager.cpp
         src/rog_map/history_graph.cpp
+        src/rog_map/semantic_target_extractor.cpp
 )
 add_dependencies(exploration_planner_node_new ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(exploration_planner_node_new 

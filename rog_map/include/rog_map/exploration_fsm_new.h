@@ -48,6 +48,9 @@
 // 目标重建
 #include "rog_map/target_reconstructor.h"
 
+// 语义目标提取
+#include "rog_map/semantic_target_extractor.h"
+
 namespace rog_map {
 
 using MapManager = star_mvf::MapManager;
@@ -321,7 +324,7 @@ private:
     ros::Publisher poly_traj_pub_; // 规划轨迹发布
     ros::Publisher pos_cmd_pub_; // 位置命令发布
     ros::Publisher replan_pub_; // 重规划通知发布
-    ros::Publisher traj_vis_pub;
+    ros::Publisher traj_vis_pub;  // 轨迹可视化（MarkerArray：轨迹+终点yaw+实时yaw）
 
     rog_map::PolyTraj current_traj_;       // 当前多项式轨迹数据
     double traj_start_time_;               // 轨迹绝对开始时间
@@ -340,6 +343,9 @@ private:
     bool has_prev_traj_ = false;          // 是否有旧轨迹
     double prev_traj_start_time_;
     double prev_traj_duration_;
+    std::vector<double> prev_yaw_ctrl_pts_;  // [新增] 旧Yaw轨迹控制点
+    bool prev_use_yaw_traj_ = false;         // [新增] 旧轨迹是否使用Yaw B样条
+    double prev_last_yaw_ = 0.0;             // [新增] 保存旧轨迹时的last_yaw_
 
     // ==================== [新增] 轨迹日志记录 ====================
     std::ofstream traj_log_file_;         // 轨迹日志文件流
@@ -374,6 +380,10 @@ private:
 
     // ========== 重建任务相关 ==========
     TargetReconstructor::Ptr target_reconstructor_;
+    
+    // ========== 语义目标提取 ==========
+    std::unique_ptr<SemanticTargetExtractor> semantic_target_extractor_;
+    
     ReconViewpoint current_recon_viewpoint_;
     ros::Time last_recon_check_time_;
     ros::Time last_recon_update_time_;

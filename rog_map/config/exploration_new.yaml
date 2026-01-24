@@ -44,7 +44,7 @@ rog_map:
   
   # ---------- 传感器 ----------
   sensor:
-    lidar_max_range: 20.0
+    lidar_max_range: 30.0
     lidar_min_range: 0.2
     lidar_downsample_filter: 1     # 降采样因子
     camera_max_range: 5.0
@@ -136,7 +136,7 @@ viewpoint_manager:
 history_graph:
   update_rate: 2.0                  # Hz
   node_spacing: 5.0                 # 节点间距 [m]
-  max_assoc_dist: 10.0              # 最大关联距离 [m]
+  max_assoc_dist: 30.0              # 最大关联距离 [m]
 
 # ========== 探索状态机 (100Hz) ==========
 fsm:
@@ -200,8 +200,8 @@ optimization:
   weight_time: 50.0                # 时间优化权重
   
   # 安全距离
-  obstacle_clearance: 0.25          # 硬约束安全距离 [m]
-  obstacle_clearance_soft: 0.5     # 软约束安全距离 [m]
+  obstacle_clearance: 0.5          # 硬约束安全距离 [m]
+  obstacle_clearance_soft: 0.8     # 软约束安全距离 [m]
   
   # 高度保持（用于室内/走廊场景）
   enable_height_keeping: true       # 是否启用高度保持

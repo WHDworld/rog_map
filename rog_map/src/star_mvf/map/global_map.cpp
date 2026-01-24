@@ -399,7 +399,19 @@ void GlobalMap::updateVoxelStateFromCamera(const VoxelIndex& encoded_pos, bool i
     
     auto it = voxels_.find(idx);
     if (it != voxels_.end()) {
-        VoxelStateBits::setVisited(it->second, is_visited);
+        VoxelState& state = it->second;
+        bool was_visited = VoxelStateBits::isVisited(state);
+        VoxelStateBits::setVisited(state, is_visited);
+        
+        // 如果是 OCCUPIED 体素且刚被标记为 VISITED，从未观测列表移除
+        if (is_visited && !was_visited && VoxelStateBits::isOccupied(state)) {
+            SubGridIndex sg_idx;
+            voxelToSubGrid(idx, sg_idx);
+            int linear_idx = subGridToLinearIndex(sg_idx);
+            if (linear_idx >= 0 && linear_idx < static_cast<int>(sub_grids_.size())) {
+                sub_grids_[linear_idx].markOccObserved(idx);
+            }
+        }
     }
 }
 
@@ -457,6 +469,16 @@ void GlobalMap::updateOccupiedVoxels(const std::vector<VoxelIndex>& occupied_ind
                     sg.removeFreeVoxel(idx);
                 }
                 sg.occupied_count++;
+                
+                // 新增 OCCUPIED 体素默认为未观测状态，加入语义提取列表
+                sg.addOccUnobserved(idx);
+                
+                // 检查探索率是否达标，加入待分析索引
+                using Status = SubGrid::SemanticStatus;
+                if (sg.semantic_status_ == Status::ACCUMULATING &&
+                    sg.getExplorationRate() > semantic_exploration_threshold_) {
+                    ready_for_analysis_subgrids_.insert(linear_idx);
+                }
             }
         }
 
@@ -1622,6 +1644,14 @@ Position GlobalMap::getLocalMapOrigin() const {
 
 Position GlobalMap::getLocalMapSize() const {
     return local_map_size_;
+}
+
+void GlobalMap::markSubGridAnalyzed(int linear_idx) {
+    ready_for_analysis_subgrids_.erase(linear_idx);
+    
+    if (linear_idx >= 0 && linear_idx < static_cast<int>(sub_grids_.size())) {
+        sub_grids_[linear_idx].semantic_status_ = SubGrid::SemanticStatus::ANALYZED;
+    }
 }
 
 }  // namespace star_mvf

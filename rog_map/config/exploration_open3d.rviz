@@ -6,7 +6,6 @@ Panels:
       Expanded:
         - /Global Options1
         - /Status1
-        - /ENV1
         - /ROGMap1
         - /Global_map1
         - /planner1
@@ -171,7 +170,7 @@ Visualization Manager:
           Color: 173; 127; 168
           Color Transformer: FlatColor
           Decay Time: 0
-          Enabled: false
+          Enabled: true
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -186,7 +185,7 @@ Visualization Manager:
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
-          Value: false
+          Value: true
         - Alpha: 1
           Class: rviz/Axes
           Enabled: true
@@ -435,7 +434,7 @@ Visualization Manager:
           Color: 239; 41; 41
           Color Transformer: RGB8
           Decay Time: 0
-          Enabled: false
+          Enabled: true
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -450,7 +449,7 @@ Visualization Manager:
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
-          Value: false
+          Value: true
         - Alpha: 1
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
@@ -491,7 +490,7 @@ Visualization Manager:
           Color: 255; 255; 255
           Color Transformer: Intensity
           Decay Time: 0
-          Enabled: false
+          Enabled: true
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -506,7 +505,7 @@ Visualization Manager:
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
-          Value: false
+          Value: true
         - Class: rviz/MarkerArray
           Enabled: false
           Marker Topic: /exploration_planner_node/global_map/sub_grid_range
@@ -643,14 +642,6 @@ Visualization Manager:
           Use Fixed Frame: true
           Use rainbow: true
           Value: true
-        - Class: rviz/Marker
-          Enabled: true
-          Marker Topic: /ego_planner/trajectory_vis
-          Name: trajectory_vis
-          Namespaces:
-            ego_trajectory: true
-          Queue Size: 100
-          Value: true
       Enabled: true
       Name: planner
     - Class: rviz/Group
@@ -736,6 +727,14 @@ Visualization Manager:
             subgrid_centers: true
           Queue Size: 100
           Value: true
+        - Class: rviz/MarkerArray
+          Enabled: true
+          Marker Topic: /ego_planner/trajectory_vis
+          Name: trajectory_vis
+          Namespaces:
+            {}
+          Queue Size: 100
+          Value: true
       Enabled: true
       Name: Exploration
     - Class: rviz/Group
@@ -745,8 +744,7 @@ Visualization Manager:
           Marker Topic: /target_recon/viewpoints
           Name: target_viewpoints
           Namespaces:
-            "": true
-            camera_frustum: true
+            {}
           Queue Size: 100
           Value: true
         - Alpha: 1
@@ -782,7 +780,7 @@ Visualization Manager:
           Marker Topic: /target_detection/confirmed_bboxes
           Name: confirmed_bboxes
           Namespaces:
-            box3D: true
+            {}
           Queue Size: 100
           Value: true
         - Class: rviz/Image
@@ -816,7 +814,7 @@ Visualization Manager:
           Marker Topic: /target_recon/optimized_path
           Name: target_optimized_path
           Namespaces:
-            path: true
+            {}
           Queue Size: 100
           Value: true
         - Alpha: 1
@@ -900,7 +898,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/XYOrbit
-      Distance: 16.108739852905273
+      Distance: 34.626304626464844
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -908,17 +906,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 2.377105474472046
-        Y: 0.8321430683135986
+        X: -2.8551721572875977
+        Y: 2.6118619441986084
         Z: -3.447694325586781e-06
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.3347977101802826
+      Pitch: 1.1747972965240479
       Target Frame: perfect_drone
-      Yaw: 5.615454196929932
+      Yaw: 6.088598251342773
     Saved:
       - Class: rviz/ThirdPersonFollower
         Distance: 17.48538589477539

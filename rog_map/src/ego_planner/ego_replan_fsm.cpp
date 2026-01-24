@@ -22,6 +22,14 @@ namespace ego_planner
     // Initialize target state
     end_vel_ = Eigen::Vector3d::Zero();
     end_yaw_ = 0.0;
+    
+    // 轨迹执行状态初始化
+    has_prev_traj_ = false;
+    last_yaw_ = 0.0;
+    last_yaw_dot_ = 0.0;
+    last_pos_ = Eigen::Vector3d::Zero();
+    traj_start_time_ = 0.0;
+    traj_duration_ = 0.0;
 
     map_manager_ = map;
 
@@ -56,20 +64,27 @@ namespace ego_planner
       nh.param("fsm/waypoint" + std::to_string(i) + "_x", waypoints_[i][0], -1.0);
       nh.param("fsm/waypoint" + std::to_string(i) + "_y", waypoints_[i][1], -1.0);
       nh.param("fsm/waypoint" + std::to_string(i) + "_z", waypoints_[i][2], -1.0);
+      // 读取yaw参数，默认为NaN表示跟随速度方向
+      double yaw_default = std::numeric_limits<double>::quiet_NaN();
+      nh.param("fsm/waypoint" + std::to_string(i) + "_yaw", waypoints_yaw_[i], yaw_default);
     }
 
     /* callbacks */
     exec_timer_ = nh.createTimer(ros::Duration(0.01), &EGOReplanFSM::execFSMCallback, this);
     safety_timer_ = nh.createTimer(ros::Duration(0.05), &EGOReplanFSM::checkCollisionCallback, this);
+    execution_timer_ = nh.createTimer(ros::Duration(0.01), &EGOReplanFSM::executionCallback, this);  // 100Hz轨迹执行
 
-    odom_sub_ = nh.subscribe("odom", 1, &EGOReplanFSM::odometryCallback, this);
+    // 从参数读取odom话题名（与MapManager一致）
+    std::string odom_topic;
+    nh.param<std::string>("rog_map/odom_topic", odom_topic, "/odom");
+    odom_sub_ = nh.subscribe(odom_topic, 1, &EGOReplanFSM::odometryCallback, this);
     mandatory_stop_sub_ = nh.subscribe("mandatory_stop", 1, &EGOReplanFSM::mandatoryStopCallback, this);
     state_sub_ = nh.subscribe("/mavros/state", 10, &EGOReplanFSM::stateCallback, this);
 
-    poly_traj_pub_ = nh.advertise<rog_map::PolyTraj>("/planning/trajectory", 10);
     pos_cmd_pub_ = nh.advertise<quadrotor_msgs::PositionCommand>("/planning/pos_cmd", 10);
     replan_pub_ = nh.advertise<std_msgs::Int8>("/planning/replan", 10);
     set_target_point_pub_ = nh.advertise<visualization_msgs::Marker>("/planning/set_target_point", 10);
+    traj_vis_pub_ = nh.advertise<visualization_msgs::MarkerArray>("/planning/trajectory_vis", 10);
     arming_client_ = nh.serviceClient<mavros_msgs::CommandBool>("/mavros/cmd/arming");
     set_mode_client_ = nh.serviceClient<mavros_msgs::SetMode>("/mavros/set_mode");
 
@@ -94,7 +109,10 @@ namespace ego_planner
       ROS_INFO("[EGOReplanFSM] Preset waypoints (%d):", waypoint_num_);
       for (int i = 0; i < waypoint_num_; i++)
       {
-        ROS_INFO("  [%d] (%.2f, %.2f, %.2f)", i, waypoints_[i][0], waypoints_[i][1], waypoints_[i][2]);
+        if (std::isnan(waypoints_yaw_[i]))
+          ROS_INFO("  [%d] (%.2f, %.2f, %.2f), yaw=auto", i, waypoints_[i][0], waypoints_[i][1], waypoints_[i][2]);
+        else
+          ROS_INFO("  [%d] (%.2f, %.2f, %.2f), yaw=%.2f", i, waypoints_[i][0], waypoints_[i][1], waypoints_[i][2], waypoints_yaw_[i]);
       }
     }
   }
@@ -582,6 +600,9 @@ namespace ego_planner
 
   bool EGOReplanFSM::callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj)
   {
+    // [优化] 规划前保存旧轨迹（用于衔接）
+    savePrevTrajectory();
+    
     planner_manager_->getLocalTarget(planning_horizen_, start_pt_, end_pt_,
                                      local_target_pt_, local_target_vel_, touch_goal_);
 
@@ -599,16 +620,23 @@ namespace ego_planner
 
     bool success = planner_manager_->reboundReplan(start_pt_, start_vel_, start_acc_,
                                                    local_target_pt_, local_target_vel_,
-                                                   flag_use_poly_init, flag_randomPolyTraj, touch_goal_);
+                                                   flag_use_poly_init, flag_randomPolyTraj, touch_goal_,
+                                                   odom_yaw_, end_yaw_);  // 传递yaw参数以启用yaw优化
     
     if (success)
     {
-      // Publish trajectory with yaw info
-      rog_map::PolyTraj poly_msg;
-      polyTraj2ROSMsg(poly_msg);
-      poly_traj_pub_.publish(poly_msg);
+      // [优化] 更新轨迹执行状态（不再发布poly_traj，改为executionCallback直接发布pos_cmd）
+      auto& local_traj = planner_manager_->traj_.local_traj;
+      traj_start_time_ = local_traj.start_time;
+      traj_duration_ = local_traj.duration;
       
-      // Notify trajectory server
+      // 同步 last_yaw_ 到新轨迹起点
+      if (local_traj.use_yaw_traj && !local_traj.yaw_ctrl_pts.empty())
+      {
+        last_yaw_ = YawOptimizer::evaluateYaw(local_traj.yaw_ctrl_pts, 0.0, traj_duration_);
+      }
+      
+      // Notify trajectory server (保留用于调试)
       std_msgs::Int8 replan_msg;
       replan_msg.data = 1;
       replan_pub_.publish(replan_msg);
@@ -938,10 +966,9 @@ namespace ego_planner
     wps_.clear();
     for (int i = 0; i < waypoint_num_; i++)
     {
-      // For preset waypoints, use NaN for yaw (means "follow velocity direction")
-      // and zero velocity (will stop at each waypoint)
+      // 从参数读取的yaw值（NaN表示跟随速度方向）
       Eigen::Vector3d pos(waypoints_[i][0], waypoints_[i][1], waypoints_[i][2]);
-      wps_.push_back(Waypoint(pos, std::numeric_limits<double>::quiet_NaN(), Eigen::Vector3d::Zero()));
+      wps_.push_back(Waypoint(pos, waypoints_yaw_[i], Eigen::Vector3d::Zero()));
       
       // Visualize target point
       visualization_msgs::Marker goal_marker;
@@ -986,9 +1013,21 @@ namespace ego_planner
   {
     std::vector<Eigen::Vector3d> waypoints;
     waypoints.push_back(next_wp.pos);
+    
+    // 计算start_yaw和end_yaw
+    double start_yaw = previous_wp.yaw;
+    double end_yaw = next_wp.yaw;
+    
+    // 如果yaw是NaN，使用当前的odom_yaw_作为起点，或使用速度方向（10000.0表示自动）
+    if (std::isnan(start_yaw))
+      start_yaw = odom_yaw_;
+    if (std::isnan(end_yaw))
+      end_yaw = 10000.0;  // 特殊值表示跟随速度方向
+    
     // Use previous waypoint's velocity as start, next waypoint's velocity as end
     planner_manager_->planGlobalTrajWaypoints(previous_wp.pos, previous_wp.vel, Eigen::Vector3d::Zero(),
-                                               waypoints, next_wp.vel, Eigen::Vector3d::Zero());
+                                             waypoints, next_wp.vel, Eigen::Vector3d::Zero(),
+                                             start_yaw, end_yaw);
   }
 
   void EGOReplanFSM::mandatoryStopCallback(const std_msgs::Empty &msg)
@@ -1120,6 +1159,260 @@ namespace ego_planner
     cmd.trajectory_id = 0;
     
     pos_cmd_pub_.publish(cmd);
+  }
+
+  // ==================== 轨迹执行相关函数 ====================
+  
+  void EGOReplanFSM::savePrevTrajectory()
+  {
+    auto& local_traj = planner_manager_->traj_.local_traj;
+    if (local_traj.traj.getPieceNum() > 0)
+    {
+      has_prev_traj_ = true;
+      prev_traj_start_time_ = traj_start_time_;
+      prev_traj_duration_ = traj_duration_;
+      prev_traj_ = local_traj.traj;
+      prev_use_yaw_traj_ = local_traj.use_yaw_traj;
+      prev_last_yaw_ = last_yaw_;
+      if (local_traj.use_yaw_traj && !local_traj.yaw_ctrl_pts.empty())
+      {
+        prev_yaw_ctrl_pts_ = local_traj.yaw_ctrl_pts;
+      }
+      else
+      {
+        prev_yaw_ctrl_pts_.clear();
+      }
+    }
+  }
+
+  void EGOReplanFSM::executionCallback(const ros::TimerEvent &e)
+  {
+    // 只在有效状态下执行轨迹
+    if (!have_odom_ || exec_state_ == INIT || exec_state_ == PRE_ARM || 
+        exec_state_ == TAKEOFF || exec_state_ == WAIT_TARGET || exec_state_ == EMERGENCY_STOP)
+    {
+      return;
+    }
+    
+    ros::Time now = ros::Time::now();
+    auto& local_traj = planner_manager_->traj_.local_traj;
+    
+    // 无有效轨迹时悬停
+    if (local_traj.traj.getPieceNum() == 0)
+    {
+      return;  // publishHoverCmd()由其他回调处理
+    }
+    
+    double t_cur = now.toSec() - traj_start_time_;
+    
+    // Case 1: 过渡期（新轨迹还没开始）-> 执行旧轨迹
+    if (t_cur < 0 && has_prev_traj_)
+    {
+      double t_prev = now.toSec() - prev_traj_start_time_;
+      if (prev_traj_.getPieceNum() > 0 && t_prev >= 0 && t_prev < prev_traj_duration_)
+      {
+        double t_eval = std::min(t_prev, prev_traj_.getTotalDuration());
+        Eigen::Vector3d pos = prev_traj_.getPos(t_eval);
+        Eigen::Vector3d vel = prev_traj_.getVel(t_eval);
+        Eigen::Vector3d acc = prev_traj_.getAcc(t_eval);
+        
+        double yaw = last_yaw_, yaw_dot = 0.0;
+        if (prev_use_yaw_traj_ && !prev_yaw_ctrl_pts_.empty())
+        {
+          yaw = YawOptimizer::evaluateYaw(prev_yaw_ctrl_pts_, t_eval, prev_traj_duration_);
+          yaw_dot = YawOptimizer::evaluateYawDot(prev_yaw_ctrl_pts_, t_eval, prev_traj_duration_);
+        }
+        
+        last_pos_ = pos;
+        last_yaw_ = yaw;
+        last_yaw_dot_ = yaw_dot;
+        publishCmd(pos, vel, acc, yaw, yaw_dot);
+        return;
+      }
+    }
+    
+    // Case 2: 正常执行当前轨迹
+    if (t_cur >= 0 && t_cur < traj_duration_)
+    {
+      double t_eval = std::min(t_cur, local_traj.traj.getTotalDuration());
+      Eigen::Vector3d pos = local_traj.traj.getPos(t_eval);
+      Eigen::Vector3d vel = local_traj.traj.getVel(t_eval);
+      Eigen::Vector3d acc = local_traj.traj.getAcc(t_eval);
+      
+      double yaw = last_yaw_, yaw_dot = 0.0;
+      if (local_traj.use_yaw_traj && !local_traj.yaw_ctrl_pts.empty())
+      {
+        yaw = YawOptimizer::evaluateYaw(local_traj.yaw_ctrl_pts, t_eval, traj_duration_);
+        yaw_dot = YawOptimizer::evaluateYawDot(local_traj.yaw_ctrl_pts, t_eval, traj_duration_);
+      }
+      
+      last_pos_ = pos;
+      last_yaw_ = yaw;
+      last_yaw_dot_ = yaw_dot;
+      publishCmd(pos, vel, acc, yaw, yaw_dot);
+      
+      // 降频可视化（每10帧一次）
+      static int vis_count = 0;
+      if (++vis_count >= 10)
+      {
+        vis_count = 0;
+        visualizeTrajectory();
+      }
+      return;
+    }
+    
+    // Case 3: 轨迹执行完毕 -> 由FSM状态机处理（不在这里悬停，避免冲突）
+  }
+
+  void EGOReplanFSM::publishCmd(const Eigen::Vector3d& p, const Eigen::Vector3d& v, 
+                                 const Eigen::Vector3d& a, double yaw, double yaw_dot)
+  {
+    quadrotor_msgs::PositionCommand cmd;
+    cmd.header.stamp = ros::Time::now();
+    cmd.header.frame_id = "world";
+    
+    cmd.position.x = p.x();
+    cmd.position.y = p.y();
+    cmd.position.z = p.z();
+    cmd.velocity.x = v.x();
+    cmd.velocity.y = v.y();
+    cmd.velocity.z = v.z();
+    cmd.acceleration.x = a.x();
+    cmd.acceleration.y = a.y();
+    cmd.acceleration.z = a.z();
+    cmd.yaw = yaw;
+    cmd.yaw_dot = yaw_dot;
+    cmd.trajectory_flag = quadrotor_msgs::PositionCommand::TRAJECTORY_STATUS_READY;
+    cmd.trajectory_id = 0;
+    
+    pos_cmd_pub_.publish(cmd);
+  }
+
+  void EGOReplanFSM::visualizeTrajectory()
+  {
+    auto& local_traj = planner_manager_->traj_.local_traj;
+    if (local_traj.traj.getPieceNum() == 0 || local_traj.duration <= 0)
+      return;
+    
+    visualization_msgs::MarkerArray marker_array;
+    
+    // ========== 1. 轨迹线 ==========
+    visualization_msgs::Marker traj_marker;
+    traj_marker.header.frame_id = "map";
+    traj_marker.header.stamp = ros::Time::now();
+    traj_marker.ns = "trajectory";
+    traj_marker.id = 0;
+    traj_marker.type = visualization_msgs::Marker::LINE_STRIP;
+    traj_marker.action = visualization_msgs::Marker::ADD;
+    traj_marker.pose.orientation.w = 1.0;
+    traj_marker.scale.x = 0.08;
+    traj_marker.color.r = 0.0;
+    traj_marker.color.g = 0.5;
+    traj_marker.color.b = 1.0;
+    traj_marker.color.a = 1.0;
+    
+    for (double t = 0; t < local_traj.duration; t += 0.1)
+    {
+      Eigen::Vector3d pos = local_traj.traj.getPos(t);
+      if (std::isnan(pos.x()) || std::isnan(pos.y()) || std::isnan(pos.z()))
+        continue;
+      geometry_msgs::Point pt;
+      pt.x = pos.x();
+      pt.y = pos.y();
+      pt.z = pos.z();
+      traj_marker.points.push_back(pt);
+    }
+    if (!traj_marker.points.empty())
+      marker_array.markers.push_back(traj_marker);
+    
+    // ========== 2. 终点Yaw视锥体（箭头表示朝向） ==========
+    if (!std::isnan(end_yaw_))
+    {
+      visualization_msgs::Marker goal_yaw_marker;
+      goal_yaw_marker.header.frame_id = "map";
+      goal_yaw_marker.header.stamp = ros::Time::now();
+      goal_yaw_marker.ns = "goal_yaw";
+      goal_yaw_marker.id = 1;
+      goal_yaw_marker.type = visualization_msgs::Marker::ARROW;
+      goal_yaw_marker.action = visualization_msgs::Marker::ADD;
+      
+      // 箭头起点和终点
+      geometry_msgs::Point start, end;
+      start.x = end_pt_.x();
+      start.y = end_pt_.y();
+      start.z = end_pt_.z();
+      double arrow_len = 1.0;
+      end.x = end_pt_.x() + arrow_len * cos(end_yaw_);
+      end.y = end_pt_.y() + arrow_len * sin(end_yaw_);
+      end.z = end_pt_.z();
+      goal_yaw_marker.points.push_back(start);
+      goal_yaw_marker.points.push_back(end);
+      
+      goal_yaw_marker.scale.x = 0.15;  // 箭杆直径
+      goal_yaw_marker.scale.y = 0.25;  // 箭头直径
+      goal_yaw_marker.scale.z = 0.0;
+      goal_yaw_marker.color.r = 1.0;
+      goal_yaw_marker.color.g = 0.3;
+      goal_yaw_marker.color.b = 0.0;
+      goal_yaw_marker.color.a = 1.0;
+      marker_array.markers.push_back(goal_yaw_marker);
+    }
+    
+    // ========== 3. 无人机实时Yaw视锥体 ==========
+    visualization_msgs::Marker fov_marker;
+    fov_marker.header.frame_id = "map";
+    fov_marker.header.stamp = ros::Time::now();
+    fov_marker.ns = "uav_fov";
+    fov_marker.id = 2;
+    fov_marker.type = visualization_msgs::Marker::LINE_LIST;
+    fov_marker.action = visualization_msgs::Marker::ADD;
+    fov_marker.pose.orientation.w = 1.0;
+    fov_marker.scale.x = 0.05;  // 线宽
+    fov_marker.color.r = 0.0;
+    fov_marker.color.g = 1.0;
+    fov_marker.color.b = 0.0;
+    fov_marker.color.a = 0.8;
+    
+    // 视锥体参数
+    double fov_h = 0.8;   // 水平FOV半角 (~70度)
+    double fov_v = 0.4;   // 垂直FOV半角 (~35度)
+    double fov_len = 1.5; // 视锥体深度
+    
+    Eigen::Vector3d cam_pos = odom_pos_;
+    double yaw = odom_yaw_;
+    
+    // 计算视锥体4个角点
+    Eigen::Vector3d corners[4];
+    double dx = fov_len * cos(yaw);
+    double dy = fov_len * sin(yaw);
+    double half_w = fov_len * tan(fov_h);  // 水平半宽
+    double half_h = fov_len * tan(fov_v);  // 垂直半高
+    
+    // 右上、左上、左下、右下
+    corners[0] = cam_pos + Eigen::Vector3d(dx - half_w * sin(yaw), dy + half_w * cos(yaw), half_h);
+    corners[1] = cam_pos + Eigen::Vector3d(dx + half_w * sin(yaw), dy - half_w * cos(yaw), half_h);
+    corners[2] = cam_pos + Eigen::Vector3d(dx + half_w * sin(yaw), dy - half_w * cos(yaw), -half_h);
+    corners[3] = cam_pos + Eigen::Vector3d(dx - half_w * sin(yaw), dy + half_w * cos(yaw), -half_h);
+    
+    // 从相机位置到4个角点的线
+    for (int i = 0; i < 4; ++i) {
+      geometry_msgs::Point p1, p2;
+      p1.x = cam_pos.x(); p1.y = cam_pos.y(); p1.z = cam_pos.z();
+      p2.x = corners[i].x(); p2.y = corners[i].y(); p2.z = corners[i].z();
+      fov_marker.points.push_back(p1);
+      fov_marker.points.push_back(p2);
+    }
+    // 4个角点连成的矩形框
+    for (int i = 0; i < 4; ++i) {
+      geometry_msgs::Point p1, p2;
+      p1.x = corners[i].x(); p1.y = corners[i].y(); p1.z = corners[i].z();
+      p2.x = corners[(i+1)%4].x(); p2.y = corners[(i+1)%4].y(); p2.z = corners[(i+1)%4].z();
+      fov_marker.points.push_back(p1);
+      fov_marker.points.push_back(p2);
+    }
+    marker_array.markers.push_back(fov_marker);
+    
+    traj_vis_pub_.publish(marker_array);
   }
 
 } // namespace ego_planner

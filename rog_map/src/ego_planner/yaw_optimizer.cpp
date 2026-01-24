@@ -91,7 +91,7 @@ bool YawOptimizer::optimize(const poly_traj::Trajectory& xyz_traj,
   Eigen::MatrixXd H = Eigen::MatrixXd::Zero(N, N);
   Eigen::VectorXd f = Eigen::VectorXd::Zero(N);
 
-  double T_align = 2.0; // Time window for alignment
+  double T_align = 4.0; // Time window for alignment
 
   for (int i = 0; i < M; ++i) // For each span
   {
@@ -112,12 +112,13 @@ bool YawOptimizer::optimize(const poly_traj::Trajectory& xyz_traj,
       // Calculate Reference Yaws
       // 1. Velocity Yaw (Psi_vel)
       Eigen::Vector3d vel = xyz_traj.getVel(t);
-      double vel_yaw = last_valid_yaw;
+      double raw_vel_yaw = last_valid_yaw;  // 原始速度方向角（未展开）
       if (vel.head(2).norm() > 0.1) {
-        vel_yaw = std::atan2(vel.y(), vel.x());
+        raw_vel_yaw = std::atan2(vel.y(), vel.x());
       }
       
-      // Unroll vel_yaw
+      // Unroll vel_yaw for smooth transition (用于平滑过渡)
+      double vel_yaw = raw_vel_yaw;
       double diff = vel_yaw - last_valid_yaw;
       while (diff > M_PI) diff -= 2*M_PI;
       while (diff < -M_PI) diff += 2*M_PI;
@@ -131,6 +132,14 @@ bool YawOptimizer::optimize(const poly_traj::Trajectory& xyz_traj,
       while (diff > M_PI) diff -= 2*M_PI;
       while (diff < -M_PI) diff += 2*M_PI;
       req_yaw = vel_yaw + diff;
+      
+      // [DEBUG] TV-YC调试日志
+      // static int debug_count = 0;
+      // if (debug_count++ % 50 == 0) {
+      //   double time_to_go_dbg = total_duration - t;
+      //   ROS_INFO("[YawOpt] t=%.2f ttg=%.2f vel=(%.2f,%.2f) raw_yaw=%.2f vel_yaw=%.2f", 
+      //            t, time_to_go_dbg, vel.x(), vel.y(), raw_vel_yaw, vel_yaw);
+      // }
 
       // Weights
       double time_to_go = total_duration - t;
@@ -168,8 +177,10 @@ bool YawOptimizer::optimize(const poly_traj::Trajectory& xyz_traj,
           double val = d_sample * (w_v + w_t) * basis_val(r) * basis_val(c);
           H(idx_r, idx_c) += val;
         }
-        
-        double weighted_ref = w_v * vel_yaw + w_t * req_yaw;
+        // [TV-YC] 巡航阶段使用原始速度方向，接近阶段使用unrolled值
+        // 这样巡航阶段yaw真正跟随速度方向，而不是被start_yaw影响
+        double effective_vel_ref = (time_to_go > T_align) ? raw_vel_yaw : vel_yaw;
+        double weighted_ref = w_v * effective_vel_ref + w_t * req_yaw;
         f(idx_r) += -2.0 * d_sample * weighted_ref * basis_val(r);
       }
     }
@@ -238,9 +249,11 @@ bool YawOptimizer::optimize(const poly_traj::Trajectory& xyz_traj,
   // Penalty: W_fix * (Pos(T) - end_yaw)^2
   
   // Use Hard Constraints by removing variables? No, simpler to use Soft Constraints with High Weights.
-  // [关键修复] 增大终点约束权重，确保轨迹终点精确收敛到目标 Yaw
-  // 原来 w_fix = 10000 太弱，被平滑性约束压制
-  double w_fix = 1000000.0;
+  // [TV-YC 修复] 分离起点和终点约束权重
+  // 起点：较低权重，允许快速过渡到速度方向（TV-YC前期跟随速度）
+  // 终点：高权重，确保精确收敛到目标Yaw
+  double w_fix_start = 100.0;   // 起点约束进一步降低，让巡航阶段速度方向约束生效
+  double w_fix_end = 1000000.0;   // 终点约束保持不变
   
   // Start Pos: (P0 + 4P1 + P2)/6 = start
   // 1/6 * P0 + 4/6 * P1 + 1/6 * P2 - start = 0
@@ -248,9 +261,9 @@ bool YawOptimizer::optimize(const poly_traj::Trajectory& xyz_traj,
   int idx_s[3] = {0, 1, 2};
   for(int r=0; r<3; ++r) {
     for(int c=0; c<3; ++c) {
-      H(idx_s[r], idx_s[c]) += w_fix * vec_s(r) * vec_s(c);
+      H(idx_s[r], idx_s[c]) += w_fix_start * vec_s(r) * vec_s(c);
     }
-    f(idx_s[r]) += -2.0 * w_fix * start_yaw * vec_s(r);
+    f(idx_s[r]) += -2.0 * w_fix_start * start_yaw * vec_s(r);
   }
   
   // End Pos: t=T corresponds to span M-1, u=1? No, span indices 0..M-1.
@@ -285,9 +298,9 @@ bool YawOptimizer::optimize(const poly_traj::Trajectory& xyz_traj,
   int idx_e[3] = {N-3, N-2, N-1};
   for(int r=0; r<3; ++r) {
     for(int c=0; c<3; ++c) {
-      H(idx_e[r], idx_e[c]) += w_fix * vec_e(r) * vec_e(c);
+      H(idx_e[r], idx_e[c]) += w_fix_end * vec_e(r) * vec_e(c);
     }
-    f(idx_e[r]) += -2.0 * w_fix * final_target * vec_e(r);
+    f(idx_e[r]) += -2.0 * w_fix_end * final_target * vec_e(r);
   }
   
   // End Vel: (-P_M + P_{M+2}) / (2dt) = 0 (stop rotating)
@@ -307,9 +320,20 @@ bool YawOptimizer::optimize(const poly_traj::Trajectory& xyz_traj,
   int idx_ev[2] = {N-3, N-1};
   for(int r=0; r<2; ++r) {
     for(int c=0; c<2; ++c) {
-      H(idx_ev[r], idx_ev[c]) += w_fix * vec_ev(r) * vec_ev(c);
+      H(idx_ev[r], idx_ev[c]) += w_fix_end * vec_ev(r) * vec_ev(c);
     }
     // Target 0
+  }
+
+  // 3.5 [新增] 角速度惩罚项 - 限制相邻控制点差值
+  // 注意：权重不能太大，否则会压制TV-YC的速度方向约束
+  double w_rate = 10.0;  // [修复] 从10000降到10，避免压制w_vel_
+  for (int k = 0; k < N - 1; ++k) {
+    double coef = w_rate / (dt * dt);
+    H(k, k) += coef;
+    H(k+1, k+1) += coef;
+    H(k, k+1) -= coef;
+    H(k+1, k) -= coef;
   }
 
   // 4. Solve QP
@@ -486,8 +510,8 @@ bool YawOptimizer::optimizeWithWaypoints(
     }
   }
 
-  // 5. [新增] 角速度惩罚项
-  double w_rate = 100.0 / (max_yaw_rate * max_yaw_rate);
+  // 5. [新增] 角速度惩罚项 - 增大权重以更强地限制角速度
+  double w_rate = 10000.0 / (max_yaw_rate * max_yaw_rate);
   for (int k = 0; k < N - 1; ++k) {
     double coef = w_rate / (dt * dt);
     H(k, k) += coef;
