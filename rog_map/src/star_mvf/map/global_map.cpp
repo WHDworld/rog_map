@@ -35,6 +35,7 @@ void GlobalMap::initFromROS(const std::string& name_space) {
     float ground_height;
     nh_.param(name_space + "/global_map/map_model", map_model, 0);
     nh_.param(name_space + "/global_map/ground_height", ground_height, -0.1f);
+    config_.ground_height = ground_height;  // 保存到配置，用于语义分析过滤
     
     // 根据map_model计算地图边界
     if (map_model == 0) {  // center
@@ -470,8 +471,12 @@ void GlobalMap::updateOccupiedVoxels(const std::vector<VoxelIndex>& occupied_ind
                 }
                 sg.occupied_count++;
                 
-                // 新增 OCCUPIED 体素默认为未观测状态，加入语义提取列表
-                sg.addOccUnobserved(idx);
+                // 新增 OCCUPIED 体素默认为未观测状态
+                // 过滤地面噪声：只有高于 ground_height + 0.2m 的体素才参与语义分析
+                Position voxel_pos = indexToPos(idx);
+                if (voxel_pos.z() > config_.ground_height + 0.2f) {
+                    sg.addOccUnobserved(idx);
+                }
                 
                 // 检查探索率是否达标，加入待分析索引
                 using Status = SubGrid::SemanticStatus;
@@ -874,82 +879,104 @@ bool GlobalMap::isSphereSafe(const Position& center, float radius) const {
 
 // ==================== 可视化 ====================
 void GlobalMap::visualize() {
-    // 统一入口，调用所有可视化方法（每个方法内部会检查订阅者）
-    visualizeGlobalMap();           // 占据+空闲+前沿点云
+    // 统一入口，调用所有可视化方法
+    visualizeGlobalMap();           // 占据+空闲+已访问+前沿点云（单次遍历优化）
     visualizeGlobalMapRange();      // 全局地图范围框
     visualizeSubGridRange();        // 子网格范围
-    visualizeVisitedVoxels();       // 已访问体素
     visualizeCameraFrustum();       // 相机视锥体
 }
 
 void GlobalMap::visualizeGlobalMap() {
-    // 发布占据点云（红色=未访问，绿色=已访问）- 仅在有订阅者时发布
-    if (global_map_occupied_pub_.getNumSubscribers() > 0) 
-    {
-        pcl::PointCloud<pcl::PointXYZRGB> occ_cloud;
-        std::lock_guard<std::mutex> lock(map_mutex_);
-        for (const auto& kv : voxels_) 
-        {
-            VoxelState geo_state = VoxelStateBits::getGeoState(kv.second);
-            if (geo_state == VoxelStateBits::GEO_OCCUPIED) 
-            {
-                Position pos = indexToPos(kv.first);
-                pcl::PointXYZRGB pt;
-                pt.x = pos.x(); pt.y = pos.y(); pt.z = pos.z();
-                    
-                // 颜色：已访问为绿色，未访问为红色
-                if (VoxelStateBits::isVisited(kv.second)) 
-                {
-                    pt.r = 0; pt.g = 255; pt.b = 0;
-                } 
-                else 
-                {
-                    pt.r = 255; pt.g = 0; pt.b = 0;
-                }
-                    occ_cloud.push_back(pt);
-            }
-        }
-        sensor_msgs::PointCloud2 msg;
-        pcl::toROSMsg(occ_cloud, msg);
-        msg.header.frame_id = config_.frame_id;
-        msg.header.stamp = ros::Time::now();
-        global_map_occupied_pub_.publish(msg);
+    // 检查是否有任何订阅者需要遍历 voxels_
+    bool need_occ = global_map_occupied_pub_.getNumSubscribers() > 0;
+    bool need_free = global_map_free_pub_.getNumSubscribers() > 0;
+    bool need_visited = visited_voxels_pub_.getNumSubscribers() > 0;
+    bool need_frontier = global_map_frontier_pub_.getNumSubscribers() > 0;
+    
+    // 如果没有任何订阅者，直接返回
+    if (!need_occ && !need_free && !need_visited && !need_frontier) {
+        return;
     }
     
-    // 发布空闲点云（浅蓝色=未访问，浅绿色=已访问）- 仅在有订阅者时发布
-    if (global_map_free_pub_.getNumSubscribers() > 0) 
-    {
-        pcl::PointCloud<pcl::PointXYZRGB> free_cloud;
-        {
-            std::lock_guard<std::mutex> lock(map_mutex_);
-            for (const auto& kv : voxels_) {
-                VoxelState geo_state = VoxelStateBits::getGeoState(kv.second);
-                if (geo_state == VoxelStateBits::GEO_FREE) {
-                    Position pos = indexToPos(kv.first);
-                    pcl::PointXYZRGB pt;
-                    pt.x = pos.x(); pt.y = pos.y(); pt.z = pos.z();
-                    
+    // 分类点云缓存
+    pcl::PointCloud<pcl::PointXYZRGB> occ_cloud;
+    pcl::PointCloud<pcl::PointXYZRGB> free_cloud;
+    pcl::PointCloud<pcl::PointXYZRGB> visited_cloud;
+    
+    // 单次遍历，分类缓存（仅当需要 occ/free/visited 时遍历）
+    if (need_occ || need_free || need_visited) {
+        std::lock_guard<std::mutex> lock(map_mutex_);
+        for (const auto& kv : voxels_) {
+            VoxelState geo_state = VoxelStateBits::getGeoState(kv.second);
+            bool is_visited = VoxelStateBits::isVisited(kv.second);
+            Position pos = indexToPos(kv.first);
+            
+            pcl::PointXYZRGB pt;
+            pt.x = pos.x(); pt.y = pos.y(); pt.z = pos.z();
+            
+            if (geo_state == VoxelStateBits::GEO_OCCUPIED) {
+                if (need_occ) {
+                    // 颜色：已访问为绿色，未访问为红色
+                    if (is_visited) {
+                        pt.r = 0; pt.g = 255; pt.b = 0;
+                    } else {
+                        pt.r = 255; pt.g = 0; pt.b = 0;
+                    }
+                    occ_cloud.push_back(pt);
+                }
+                // 已访问的占据体素也加入 visited_cloud
+                if (need_visited && is_visited) {
+                    pt.r = 150; pt.g = 255; pt.b = 50;  // 黄绿色
+                    visited_cloud.push_back(pt);
+                }
+            } else if (geo_state == VoxelStateBits::GEO_FREE) {
+                if (need_free) {
                     // 颜色：已访问为浅绿色，未访问为浅蓝色
-                    if (VoxelStateBits::isVisited(kv.second)) {
+                    if (is_visited) {
                         pt.r = 100; pt.g = 255; pt.b = 100;
                     } else {
                         pt.r = 100; pt.g = 100; pt.b = 255;
                     }
                     free_cloud.push_back(pt);
                 }
+                // 已访问的空闲体素也加入 visited_cloud
+                // if (need_visited && is_visited) {
+                //     pt.r = 100; pt.g = 200; pt.b = 255;  // 浅蓝色
+                //     visited_cloud.push_back(pt);
+                // }
             }
         }
-        
+    }
+    
+    // 按需发布
+    ros::Time now = ros::Time::now();
+    
+    if (need_occ && !occ_cloud.empty()) {
+        sensor_msgs::PointCloud2 msg;
+        pcl::toROSMsg(occ_cloud, msg);
+        msg.header.frame_id = config_.frame_id;
+        msg.header.stamp = now;
+        global_map_occupied_pub_.publish(msg);
+    }
+    
+    if (need_free && !free_cloud.empty()) {
         sensor_msgs::PointCloud2 msg;
         pcl::toROSMsg(free_cloud, msg);
         msg.header.frame_id = config_.frame_id;
-        msg.header.stamp = ros::Time::now();
+        msg.header.stamp = now;
         global_map_free_pub_.publish(msg);
     }
     
-    // 发布前沿点云 - 仅在有订阅者时发布（getFrontierPointCloud 内部有自己的锁）
-    if (global_map_frontier_pub_.getNumSubscribers() > 0)
-    {
+    if (need_visited && !visited_cloud.empty()) {
+        sensor_msgs::PointCloud2 msg;
+        pcl::toROSMsg(visited_cloud, msg);
+        msg.header.frame_id = config_.frame_id;
+        msg.header.stamp = now;
+        visited_voxels_pub_.publish(msg);
+    }
+    
+    // 前沿点云单独处理（有自己的数据结构）
+    if (need_frontier) {
         sensor_msgs::PointCloud2 frontier_msg;
         getFrontierPointCloud(frontier_msg);
         global_map_frontier_pub_.publish(frontier_msg);
@@ -1122,42 +1149,8 @@ void GlobalMap::visualizeSubGridRange() {
     sub_grid_range_pub_.publish(markers);
 }
 
-void GlobalMap::visualizeVisitedVoxels() {
-    if (visited_voxels_pub_.getNumSubscribers() == 0) return;
-    
-    pcl::PointCloud<pcl::PointXYZRGB> cloud;
-    
-    {
-        std::lock_guard<std::mutex> lock(map_mutex_);
-        for (const auto& kv : voxels_) {
-            if (VoxelStateBits::isVisited(kv.second)) {
-                Position pos = indexToPos(kv.first);
-                pcl::PointXYZRGB pt;
-                pt.x = pos.x(); pt.y = pos.y(); pt.z = pos.z();
-                
-                // 根据几何状态设置颜色
-                VoxelState geo_state = VoxelStateBits::getGeoState(kv.second);
-                if (geo_state == VoxelStateBits::GEO_OCCUPIED) {
-                    // 已访问的占据体素：黄绿色
-                    pt.r = 150; pt.g = 255; pt.b = 50;
-                } else if (geo_state == VoxelStateBits::GEO_FREE) {
-                    // 已访问的空闲体素：浅蓝色
-                    pt.r = 100; pt.g = 200; pt.b = 255;
-                } else {
-                    // 其他状态：白色
-                    pt.r = 200; pt.g = 200; pt.b = 200;
-                }
-                cloud.push_back(pt);
-            }
-        }
-    }
-    
-    sensor_msgs::PointCloud2 msg;
-    pcl::toROSMsg(cloud, msg);
-    msg.header.frame_id = config_.frame_id;
-    msg.header.stamp = ros::Time::now();
-    visited_voxels_pub_.publish(msg);
-}
+// visualizeVisitedVoxels 已合并到 visualizeGlobalMap，删除冗余函数
+
 
 void GlobalMap::visualizeCameraFrustum() {
     if (camera_frustum_pub_.getNumSubscribers() == 0) return;

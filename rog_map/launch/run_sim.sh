@@ -79,9 +79,9 @@ echo -e "${BLUE}[3/5] Launching Fast-Livo Mapping...${NC}"
 sleep 5
 
 # 4. 启动 YOLO 目标检测推理
-echo -e "${BLUE}[4/5] Launching YOLO Inference...${NC}"
-(cd ~/experiment/yolo_inference && source devel/setup.bash && roslaunch yolo_segmentation yolo_inference.launch) &
-sleep 3
+# echo -e "${BLUE}[4/5] Launching YOLO Inference...${NC}"
+# (cd ~/experiment/yolo_inference && source devel/setup.bash && roslaunch yolo_segmentation yolo_inference.launch) &
+# sleep 3
 
 # 5. 启动 Offboard Controller
 echo -e "${BLUE}[5/5] Starting Offboard Control Node...${NC}"

@@ -54,6 +54,7 @@ struct GlobalMapConfig {
     // 前沿参数
     float frontier_height_min = 0.9f;
     float frontier_height_max = 2.3f;
+    float ground_height = 0.0f;  // 地面高度，低于此高度+0.2m的体素不参与语义分析
     
     // 话题名称
     std::string frame_id = "map";
@@ -367,10 +368,9 @@ public:
     /**
      * @brief 单独的可视化方法（内部会检查订阅者）
      */
-    void visualizeGlobalMap();          // 占据+空闲+前沿点云
+    void visualizeGlobalMap();          // 占据+空闲+已访问+前沿点云（单次遍历优化）
     void visualizeGlobalMapRange();     // 全局地图范围框
     void visualizeSubGridRange();       // 子网格范围
-    void visualizeVisitedVoxels();      // 已访问体素
     void visualizeCameraFrustum();      // 相机视锥体
     
     /**

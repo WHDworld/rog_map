@@ -301,7 +301,7 @@ protected:
     // 回调函数
     void lidarCallback(const sensor_msgs::PointCloud2ConstPtr& msg);
     void odomCallback(const nav_msgs::OdometryConstPtr& msg);
-    void cameraOdomCallback(const nav_msgs::OdometryConstPtr& msg);
+    void cameraOdomCallback(const geometry_msgs::PoseStampedConstPtr& msg);
     void cameraRgbCallback(const sensor_msgs::ImageConstPtr& msg);
     void depthCallback(const sensor_msgs::ImageConstPtr& msg); // [Added]
     void vizTimerCallback(const ros::TimerEvent& event);

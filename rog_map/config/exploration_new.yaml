@@ -18,7 +18,7 @@ rog_map:
   # 话题配置
   lidar_topic: "/cloud_registered" #  /livox/lidar /cloud_registered
   odom_topic: "/ground_truth/odom" # /ground_truth/odom /uav_simulator/odometry
-  camera_pose_topic: "/camera/pose"
+  camera_pose_topic: "/ground_truth/camera_pose"
   camera_rgb_topic: "/camera/color/image_raw"
   # depth_topic: "/uav_simulator/depth_image"
   frame_id: "map"
@@ -33,18 +33,18 @@ rog_map:
   
   # ---------- 局部地图 ----------
   local_map:
-    half_size: [10.0, 10.0, 3.0]    # 局部地图半尺寸 [m]
+    half_size: [15.0, 15.0, 2.0]    # 局部地图半尺寸 [m]
     log_odds_hit: 0.85
     log_odds_miss: -0.4
     log_odds_min: -2.0
     log_odds_max: 3.5
     log_odds_occ_thresh: 0.0
     use_raycast: true
-    raycast_step: 0.1              # 使用老参数的0.1
+    raycast_step: 0.2              # 使用老参数的0.1
   
   # ---------- 传感器 ----------
   sensor:
-    lidar_max_range: 30.0
+    lidar_max_range: 25.0
     lidar_min_range: 0.2
     lidar_downsample_filter: 1     # 降采样因子
     camera_max_range: 5.0
@@ -63,8 +63,8 @@ rog_map:
   global_map:
     map_size: [50, 50, 2.0]
     map_model: 0
-    ground_height: -0.1
-    sub_grid_xy: 0.05
+    ground_height: 0.0
+    sub_grid_xy: 0.08
     frontier_height_min: 0.3
     frontier_height_max: 1.6
   
@@ -135,7 +135,7 @@ viewpoint_manager:
 # ========== HistoryGraph (2Hz) ==========
 history_graph:
   update_rate: 2.0                  # Hz
-  node_spacing: 5.0                 # 节点间距 [m]
+  node_spacing: 3.0                 # 节点间距 [m]
   max_assoc_dist: 30.0              # 最大关联距离 [m]
 
 # ========== 探索状态机 (100Hz) ==========
@@ -211,6 +211,37 @@ optimization:
 # ========== 轨迹服务器 ==========
 traj_server:
   time_forward: 1.0                 # Yaw规划前向时间 [s]
+
+# ========== 语义目标提取器 (SemanticTargetExtractor) ==========
+semantic_extractor:
+  # ---------- 触发阈值 ----------
+  exploration_threshold: 0.90       # 探索率超过此值触发分析 [0.0-1.0]
+  
+  # ---------- PCA 分析参数 ----------
+  pca_check_interval: 20            # 每生长多少个点检测一次
+  planarity_threshold: 0.85         # 平面度阈值 (>此值判为墙壁) [0.0-1.0]
+  wall_size_threshold: 1.0          # 大于此尺寸的平面才判为墙壁 [m]
+  
+  # ---------- 混合 PCA 参数 ----------
+  local_pca_radius: 0.3             # 局部 PCA 邻域半径 [m]
+  local_planarity_threshold: 0.7    # 局部平面度阈值（低于此值为异常点）
+  hybrid_switch_threshold: 0.6      # 全局平面度低于此值时使用混合分析
+  
+  # ---------- 目标筛选参数 ----------
+  min_voxel_count: 30               # 最小体素数（过滤噪声）
+  max_target_height: 2.5            # 目标最大高度 [m]（过滤天花板/高物体）
+  min_target_height: 0.5            # 目标最小高度 [m]（过滤地面噪声）
+  max_target_width: 2.0             # 目标最大宽度 [m]（过滤宽大物体）
+  
+  # ---------- 相机观测排除 ----------
+  observed_reject_ratio: 0.15       # 边界 occ_observed 比例阈值（超过则排除）
+  
+  # ---------- 自清洁 ----------
+  enable_self_cleaning: true        # 是否将识别的墙面标记为已观测
+  
+  # ---------- 更新频率 ----------
+  process_rate: 2.0                 # 分析处理频率 [Hz]
+  vis_rate: 1.0                     # 可视化更新频率 [Hz]
 
 # ========== 目标重建模块 (TargetReconstructor) ==========
 target_recon:

@@ -573,11 +573,13 @@ void LocalMap::updateCameraFrustum(const Position& camera_origin,
         for (int j = 0; j < num_rays_v; ++j) {
             float angle_v = fov_v_start + (fov_v_end - fov_v_start) * (j + 0.5f) / num_rays_v;
 
+            // 光学坐标系约定：Z轴为光轴，X轴向右，Y轴向下
+            // angle_h = 0, angle_v = 0 时，dir_cam = (0, 0, 1)，指向Z轴（光轴）
             float cos_v = std::cos(angle_v);
             Position dir_cam(
-                cos_v * std::cos(angle_h),
-                cos_v * std::sin(angle_h),
-                std::sin(angle_v)
+                cos_v * std::sin(angle_h),   // X = 水平偏移（向右为正）
+                -std::sin(angle_v),          // Y = 垂直偏移（光学系Y轴向下，FOV向上为正故取负）
+                cos_v * std::cos(angle_h)    // Z = 光轴方向
             );
 
             Position dir_world = camera_rotation * dir_cam;

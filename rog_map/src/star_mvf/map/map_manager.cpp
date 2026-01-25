@@ -117,7 +117,7 @@ void MapManager::initFromROS(const std::string& name_space) {
     nh_private_.param(name_space + "/sensor/camera_fov_v_deg", camera_fov_v_deg, 60.0);
     double camera_ray_step, camera_angular_resolution_deg;
     nh_private_.param(name_space + "/sensor/camera_ray_step", camera_ray_step, 0.1);
-    nh_private_.param(name_space + "/sensor/camera_angular_resolution_deg", camera_angular_resolution_deg, 1.0);
+    nh_private_.param(name_space + "/sensor/camera_angular_resolution_deg", camera_angular_resolution_deg, 3.0);  // 推荐值
     config_.local_config.lidar_max_range = static_cast<float>(lidar_sensor_max);
     config_.local_config.lidar_min_range = static_cast<float>(lidar_sensor_min);
     config_.local_config.lidar_downsample_filter = lidar_downsample_filter;
@@ -186,16 +186,29 @@ void MapManager::lidarCallback(const sensor_msgs::PointCloud2ConstPtr& msg) {
     
     // === 新架构：在lidarCallback中完成所有地图更新 ===
     
-    // Step 1: 更新局部地图
+    // Step 1: 先更新局部地图（LiDAR 点云 → 占据体素）
     auto t1 = ros::Time::now();
     local_map_->insertPointCloud(*msg, sensor_pos);
     auto t2 = ros::Time::now();
     
-    // Step 2: 同步到全局地图
+    // Step 2: 再更新相机可视域（标记已观测的占据体素）
+    // 必须在 insertPointCloud 之后，因为要先有占据体素才能标记观测
+    if (has_camera_pose_) {
+        Position cam_pos;
+        Quaternion cam_rot;
+        {
+            std::lock_guard<std::mutex> lock(camera_mutex_);
+            cam_pos = current_camera_position_;
+            cam_rot = current_camera_rotation_;
+        }
+        local_map_->updateCameraFrustum(cam_pos, cam_rot);
+    }
+    
+    // Step 3: 同步到全局地图
     syncLocalToGlobal();
     auto t3 = ros::Time::now();
     
-    // Step 3: 提取前沿
+    // Step 4: 提取前沿
     global_map_->extractGlobalFrontierIncremental();
     auto t4 = ros::Time::now();
     
@@ -246,21 +259,19 @@ void MapManager::odomCallback(const nav_msgs::OdometryConstPtr& msg) {
     }
 }
 
-// 添加相机位姿回调函数（在 odomCallback 后添加，第138行后）
-void MapManager::cameraOdomCallback(const nav_msgs::OdometryConstPtr& msg) {    
+// 添加相机位姿回调函数（仅存储位姿，视域在lidarCallback中与点云同频更新）
+void MapManager::cameraOdomCallback(const geometry_msgs::PoseStampedConstPtr& msg) {    
     std::lock_guard<std::mutex> lock(camera_mutex_);
     
     // 提取相机位姿
-    current_camera_position_.x() = static_cast<float>(msg->pose.pose.position.x);
-    current_camera_position_.y() = static_cast<float>(msg->pose.pose.position.y);
-    current_camera_position_.z() = static_cast<float>(msg->pose.pose.position.z);
+    current_camera_position_.x() = static_cast<float>(msg->pose.position.x);
+    current_camera_position_.y() = static_cast<float>(msg->pose.position.y);
+    current_camera_position_.z() = static_cast<float>(msg->pose.position.z);
     
-    current_camera_rotation_ = Quaternion(msg->pose.pose.orientation.w, msg->pose.pose.orientation.x, msg->pose.pose.orientation.y, msg->pose.pose.orientation.z);
+    current_camera_rotation_ = Quaternion(msg->pose.orientation.w, msg->pose.orientation.x, msg->pose.orientation.y, msg->pose.orientation.z);
     
     has_camera_pose_ = true;
-    
-    // 更新局部地图的可视域
-    local_map_->updateCameraFrustum(current_camera_position_, current_camera_rotation_);
+    // 注意: 视域更新已移至 lidarCallback 中，与点云处理同频（~10-20Hz）
 }
 
 void MapManager::cameraRgbCallback(const sensor_msgs::ImageConstPtr& msg) {
@@ -424,7 +435,7 @@ void MapManager::syncLocalToGlobal() {
     std::vector<VoxelIndex> occupied, free_voxels;
     local_map_->getUpdatedVoxels(occupied, free_voxels);
 
-    // 获取相机观测的体素（新增）
+    // 获取相机观测的体素
     std::vector<VoxelIndex> observed_voxels;
     if (has_camera_pose_) {
         local_map_->getObservedVoxels(observed_voxels);
@@ -432,17 +443,20 @@ void MapManager::syncLocalToGlobal() {
     
     if (occupied.empty() && free_voxels.empty()) return;
     
-    // 批量更新全局地图
+    // Step 1: 先批量更新全局地图（创建占据体素）
     global_map_->updateOccupiedVoxels(occupied, free_voxels);
     
-    // 批量更新全局地图的语义状态（VISITED）（新增）
+    // Step 2: 再更新语义状态（标记占据体素为 VISITED）
+    // 必须在 updateOccupiedVoxels 之后，因为要先有占据体素
     if (!observed_voxels.empty()) {
         for (const auto& idx : observed_voxels) {
             global_map_->updateVoxelStateFromCamera(idx, true);
         }
     }
-    // 清除局部地图缓存
+
+    // 清除局部地图缓存（包括观测缓存）
     local_map_->clearUpdateCache();
+    local_map_->clearObservedCache();  // 新增：清除观测缓存
 }
 
 }  // namespace star_mvf

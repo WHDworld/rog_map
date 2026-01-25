@@ -55,7 +55,7 @@ struct LocalMapConfig {
     float camera_fov_h_deg = 90.0f;
     float camera_fov_v_deg = 60.0f;
     float camera_ray_step = 0.1f;
-    float camera_angular_resolution_deg = 1.0f;
+    float camera_angular_resolution_deg = 3.0f;  // 推荐值，平衡精度和性能
     
     // 射线投射
     bool use_raycast = true;

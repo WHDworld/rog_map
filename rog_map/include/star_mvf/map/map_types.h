@@ -151,6 +151,7 @@ struct SubGridIndex {
 struct SemanticTargetMetadata {
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     
+    int id = -1;                    // 目标唯一 ID
     Position centroid;              // 质心位置
     Position bbox_min;              // 包围盒最小点
     Position bbox_max;              // 包围盒最大点

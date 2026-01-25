@@ -14,6 +14,7 @@
 
 #include <vector>
 #include <queue>
+#include <set>
 #include <unordered_map>
 #include <Eigen/Dense>
 #include <Eigen/Eigenvalues>
@@ -49,6 +50,9 @@ struct SemanticExtractorConfig {
     float max_target_height = 2.5f;     // 目标最大高度 (m)
     float min_target_height = 0.3f;     // 目标最小高度 (m)
     float max_target_width = 1.5f;      // 目标最大宽度 (m)
+    
+    // 相机观测排除参数
+    float observed_reject_ratio = 0.15f;  // 边界 occ_observed 比例阈值（超过则排除）
     
     // 自清洁开关
     bool enable_self_cleaning = true;   // 是否将识别的墙面设为VISITED
@@ -163,7 +167,13 @@ private:
     
     // ========== 核心算法 ==========
     void analyzeSubGrid(star_mvf::SubGrid& sg);
-    bool growRegion(const star_mvf::VoxelIndex& seed, SemanticCluster& cluster);
+    bool growRegion(const star_mvf::VoxelIndex& seed, SemanticCluster& cluster, 
+                    std::set<int>& adjacent_target_ids);
+    
+    // ========== 增量更新 ==========
+    void mergeToTarget(int target_id, const SemanticCluster& cluster);
+    int createNewTarget(const SemanticCluster& cluster);
+    void mergeTargets(const std::set<int>& target_ids);  // 合并多个目标
     
     void updatePCAStats(const Eigen::Vector3f& pos,
                         Eigen::Vector3f& sum_pos,
@@ -200,10 +210,9 @@ private:
                          float radius, 
                          ClusterPCAFeatures& out_features);
     
-    // ========== 防重机制 ==========
-    bool isVisited(const star_mvf::VoxelIndex& idx) const;
-    void markVisited(const star_mvf::VoxelIndex& idx);
-    void resetVisitTags();
+    // ========== 体素-目标映射 ==========
+    int getVoxelTargetId(const star_mvf::VoxelIndex& idx) const;
+    void setVoxelTargetId(const star_mvf::VoxelIndex& idx, int target_id);
     
     // ========== 辅助函数 ==========
     void getNeighbors6(const star_mvf::VoxelIndex& idx, 
@@ -222,9 +231,12 @@ private:
     ros::Publisher target_marker_pub_;
     std::string frame_id_ = "world";
     
-    // 防重机制 (时间戳标记法)
-    uint32_t current_visit_tag_ = 0;
-    std::unordered_map<star_mvf::VoxelIndex, uint32_t, star_mvf::VoxelIndexHash> voxel_visit_tags_;
+    // 体素 → 目标ID 映射 (-2: 未分配, -1: 墙/无效, >=0: 有效目标ID)
+    std::unordered_map<star_mvf::VoxelIndex, int, star_mvf::VoxelIndexHash> voxel_target_ids_;
+    
+    // 全局目标列表
+    std::vector<TargetMetadata> all_targets_;
+    int next_target_id_ = 0;
     
     // 统计信息
     int analyzed_count_ = 0;
