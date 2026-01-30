@@ -457,6 +457,22 @@ private:
     int current_viewpoint_id_ = -1;       // 当前目标视点ID
     std::vector<WaypointInfo> waypoint_queue_; // 航点队列（历史节点+视点）
     int current_waypoint_idx_ = 0;        // 当前航点索引
+
+    // ==================== [新增] 视点选择稳定性优化 ====================
+    
+    // 视点选择状态
+    int last_selected_cluster_id_ = -1;        // 上一帧选中的簇 ID（用于迟滞）
+    int last_selected_anchor_id_ = -1;         // 上一帧绑定的锚点 ID（用于锚点锁定）
+    ros::Time last_viewpoint_switch_time_;     // 上次视点切换时间
+    
+    // 配置参数结构体
+    struct ViewpointSelectionConfig {
+        double hysteresis_gain = 1.2;          // 迟滞增益（当前目标获得 20% 加分）
+        double heading_penalty_weight = 0.5;   // 航向惩罚权重（后方目标代价 ×1.5）
+        double min_switch_interval = 0.5;      // 最小切换间隔 [s]
+        double anchor_lock_distance = 2.0;     // 锚点锁定距离阈值 [m]
+        double velocity_threshold = 0.3;       // 使用速度方向的最低速度 [m/s]
+    } vp_selection_config_;
     
     // 状态计时
     ros::Time state_start_time_;

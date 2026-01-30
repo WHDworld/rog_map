@@ -197,6 +197,18 @@ public:
     void getNeighborSubGrids4(const SubGridIndex& idx, std::vector<SubGridIndex>& neighbors);
     
     // ==================== 前沿接口 ====================
+
+    // ==================== 增量更新接口 ====================
+    /**
+     * @brief 获取并清空前沿变化的子网格列表（专供 ViewpointManager）
+     * @param out_changed_ids 输出：前沿发生变化的子网格 ID 列表
+     * @return 变化的子网格数量
+     * 
+     * 注意：此接口与 getAndClearDirtySubGrids 不同
+     * - dirty_subgrids_ 在每帧 extractGlobalFrontierIncremental() 结束时被清空
+     * - frontier_changed_subgrids_ 由 ViewpointManager 调用此函数时清空
+     */
+    int getAndClearFrontierChangedSubGrids(std::vector<int>& out_changed_ids);
     
     /**
      * @brief 增量式前沿提取
@@ -418,6 +430,11 @@ protected:
     std::unordered_set<VoxelIndex, VoxelIndexHash> frontier_voxels_;
     std::unordered_set<int> current_frontier_subgrids_;
     std::unordered_set<int> dirty_subgrids_;
+    
+    // [新增] 前沿变化子网格（专供 ViewpointManager 使用）
+    // 在 extractGlobalFrontierIncremental() 中记录哪些子网格的前沿发生了变化
+    // 与 dirty_subgrids_ 不同，此集合由 ViewpointManager 调用 getAndClearFrontierChangedSubGrids() 时清空
+    std::unordered_set<int> frontier_changed_subgrids_;
     
     // 语义目标提取索引 (探索率达标但尚未分析的子网格)
     std::unordered_set<int> ready_for_analysis_subgrids_;

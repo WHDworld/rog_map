@@ -383,6 +383,24 @@ void GlobalMap::updateVoxelStateFromLiDAR(const VoxelIndex& idx, bool is_occupie
     }
 }
 
+// ==================== 增量更新接口实现 ====================
+
+int GlobalMap::getAndClearFrontierChangedSubGrids(std::vector<int>& out_changed_ids) {
+    std::lock_guard<std::mutex> lock(map_mutex_);
+    
+    out_changed_ids.clear();
+    out_changed_ids.reserve(frontier_changed_subgrids_.size());
+    
+    for (int sg_id : frontier_changed_subgrids_) {
+        out_changed_ids.push_back(sg_id);
+    }
+    
+    int count = static_cast<int>(frontier_changed_subgrids_.size());
+    frontier_changed_subgrids_.clear();  // 由 ViewpointManager 清空
+    
+    return count;
+}
+
 void GlobalMap::updateVoxelStateFromCamera(const VoxelIndex& encoded_pos, bool is_visited) {
     // 解码世界坐标（乘以 1000 编码的）
     Position pos;
@@ -705,6 +723,9 @@ void GlobalMap::extractGlobalFrontierIncremental() {
         sg.has_frontier = !sg.sub_grid_frontier_voxels_.empty();
         sg.frontier_count = static_cast<int>(sg.sub_grid_frontier_voxels_.size());
         sg.frontier_dirty = false;
+        
+        // [新增] 记录此子网格的前沿发生了变化（供 ViewpointManager 使用）
+        frontier_changed_subgrids_.insert(sg_id);
     }
     
     dirty_subgrids_.clear();

@@ -107,7 +107,9 @@ struct FrontierCluster {
     Eigen::Vector3f viewpoint_position;   // 视点位置
     float viewpoint_yaw;                  // 视点朝向
     float viewpoint_score;                // 视点评分
-
+    // ==================== [新增] 增量更新缓存标记 ====================
+    bool is_cached = false;        // 是否为缓存复用的簇（跳过重新处理）
+    bool viewpoint_cached = false; // 视点是否已缓存（跳过重新生成）
     // 备选视点列表 (New feature for robustness)
     struct CandidateViewpoint {
         Eigen::Vector3f position;
@@ -201,6 +203,11 @@ struct ViewpointManagerConfig {
     
     // 历史节点关联参数
     float node_frontier_radius = 20.0f;   // 节点关联前沿区域的最大半径 [m]
+
+    // ==================== [新增] 增量更新与ID继承参数 ====================
+    float cluster_match_dist = 1.0f;       // ID 继承距离阈值 [m]
+    bool enable_incremental_update = true; // 是否启用增量更新
+    bool enable_id_inheritance = true;     // 是否启用 ID 继承
 };
 
 // ==================== 主类 ====================
@@ -265,23 +272,6 @@ public:
      */
     void triggerUpdate();
     
-    /**
-     * @brief 检查是否有视点更新（供HistoryGraph调用）
-     * @return 是否有更新
-     */
-    bool hasViewpointUpdates() const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return viewpoints_updated_;
-    }
-    
-    /**
-     * @brief 清除视点更新标志（供HistoryGraph调用）
-     */
-    void clearViewpointUpdates() {
-        std::lock_guard<std::mutex> lock(mutex_);
-        viewpoints_updated_ = false;
-    }
-    
 private:
     // ==================== 定时器回调 ====================
     
@@ -315,6 +305,14 @@ private:
      * @param clusters 输入输出簇列表
      */
     void splitLargeClusters(std::vector<FrontierCluster>& clusters);
+    
+    /**
+     * @brief 局部 ID 继承匹配（增量更新用）
+     * @param new_clusters 新簇列表（会更新 cluster_id）
+     * @param old_clusters 上一帧的簇列表
+     */
+    void matchClustersLocal(std::vector<FrontierCluster>& new_clusters,
+                            const std::vector<FrontierCluster>& old_clusters);
     
     /**
      * @brief 为簇生成最佳视点
@@ -385,14 +383,6 @@ private:
      */
     void clusterByNormalSimilarity(const std::vector<SurfaceFrontierPoint>& surface_points,
                                    std::vector<FrontierCluster>& clusters);
-    
-    /**
-     * @brief 计算表面法向量（PCA）
-     * @param point 前沿点位置
-     * @param normal 输出法向量
-     * @return 是否成功计算
-     */
-    bool computeSurfaceNormal(const Eigen::Vector3f& point, Eigen::Vector3f& normal);
     
     /**
      * @brief 计算簇的主成分法向量
@@ -502,6 +492,38 @@ private:
     
     // 视点更新标志（供HistoryGraph轮询）
     bool viewpoints_updated_ = false;
+
+    // [缓存 A]: 子网格原始点云 (SubGrid Level Cache)
+    // 作用：只要子网格没脏，就直接复用点云，不用去 GlobalMap 遍历体素。
+    std::map<int, std::vector<Eigen::Vector3f>> subgrid_points_cache_;
+    
+    // [缓存 B]: 节点聚类结果 (Node Level Snapshot)
+    // 作用：用于下一帧做 ID 匹配；且如果某节点下属所有子网格都没变，直接整单复用。
+    std::map<int, std::vector<FrontierCluster>> prev_node_clusters_;    
+    // [缓存 C]: 历史节点关联的子网格列表
+    // Key: 历史节点 ID, Value: 关联的子网格 ID 列表
+    std::unordered_map<int, std::vector<int>> node_subgrid_mapping_;
+    
+    // 全局簇 ID 计数器（用于新发现的簇）
+    std::atomic<int> global_cluster_id_{0};
+
+    /**
+     * @brief 收集指定子网格列表的前沿点（带缓存）
+     * @param subgrid_ids 子网格 ID 列表
+     * @param dirty_set 脏子网格集合
+     * @param out_points 输出：合并后的前沿点
+     * @param out_any_changed 输出：是否有任何子网格发生变化
+     */
+    void collectSubGridPoints(const std::vector<int>& subgrid_ids,
+                              const std::unordered_set<int>& dirty_set,
+                              std::vector<Eigen::Vector3f>& out_points,
+                              bool& out_any_changed);
+    
+    /**
+     * @brief 更新历史节点与子网格的映射关系
+     */
+    void updateNodeSubGridMapping();
+
 };
 
 } // namespace rog_map

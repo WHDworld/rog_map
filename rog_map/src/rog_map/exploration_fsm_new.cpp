@@ -55,7 +55,13 @@ void ExplorationFSMNew::init(ros::NodeHandle& nh, MapManager::Ptr map_manager) {
     nh_.param<std::string>("rog_map/lidar_topic", config_.lidar_topic, "/cloud_registered");
     nh_.param<std::string>("rog_map/odom_topic", config_.odom_topic, "/uav_simulator/odometry");
 
-    
+    // ==================== [新增] 视点选择稳定性参数 ====================
+    nh_.param("exploration/hysteresis_gain", vp_selection_config_.hysteresis_gain, 1.2);
+    nh_.param("exploration/heading_penalty_weight", vp_selection_config_.heading_penalty_weight, 0.5);
+    nh_.param("exploration/min_switch_interval", vp_selection_config_.min_switch_interval, 0.5);
+    nh_.param("exploration/anchor_lock_distance", vp_selection_config_.anchor_lock_distance, 2.0);
+    nh_.param("exploration/velocity_threshold", vp_selection_config_.velocity_threshold, 0.3);
+    last_viewpoint_switch_time_ = ros::Time::now();
     // 创建模块
     history_graph_ = std::make_shared<HistoryGraph>();
     history_graph_->init(nh_, global_map_);
@@ -1258,11 +1264,23 @@ bool ExplorationFSMNew::selectBestViewpoint(int& selected_viewpoint_id, const Ei
     
     // 使用传入的 from_pos (预测位置) 或里程计位置
     Eigen::Vector3d current_pos;
-    if (from_pos) {
-        current_pos = *from_pos;
-    } else {
+    double current_yaw;
+    Eigen::Vector3d current_vel;
+    {
         std::lock_guard<std::mutex> lock(odom_mutex_);
-        current_pos = odom_pos_;
+        current_pos = from_pos ? *from_pos : odom_pos_;
+        current_yaw = odom_yaw_;
+        current_vel = odom_vel_;
+    }
+
+    // ==================== [新增] 计算当前航向向量 ====================
+    Eigen::Vector3d current_heading;
+    if (current_vel.norm() > vp_selection_config_.velocity_threshold) {
+        // 速度足够大时，使用速度方向作为航向（更能反映实际运动趋势）
+        current_heading = current_vel.normalized();
+    } else {
+        // 速度太小时，使用 Yaw 角作为航向
+        current_heading = Eigen::Vector3d(cos(current_yaw), sin(current_yaw), 0.0);
     }
 
     // 2. 预计算 Dijkstra (Caching)
@@ -1272,95 +1290,142 @@ bool ExplorationFSMNew::selectBestViewpoint(int& selected_viewpoint_id, const Ei
     std::unordered_set<int> target_anchors;
     for (const auto& c : clusters) {
         if (c.has_viewpoint && c.history_node_id != -1) {
-            // Eigen::Vector3d node_pos = history_graph_->getHistoryNodePos(c.history_node_id);
             target_anchors.insert(c.history_node_id);
-            // ROS_INFO("HistoryNodeID: %d, Node_position: (%.2f,%.2f,%.2f), Viewpoint_position: (%.2f,%.2f,%.2f)", c.history_node_id, node_pos.x(), node_pos.y(), node_pos.z(), c.viewpoint_position.x(), c.viewpoint_position.y(), c.viewpoint_position.z());
         }
     }
-    cached_dijkstra_result_ = DijkstraResult(); // Clear old cache
-    // 运行优化版 Dijkstra (只计算必要的 targets)
+    cached_dijkstra_result_ = DijkstraResult();
     if (start_node_id != -1 && !target_anchors.empty()) {
         history_graph_->computeDijkstraToTargets(start_node_id, target_anchors, cached_dijkstra_result_);
     } else {
-        ROS_WARN_THROTTLE(1.0, "[SelectVP] Dijkstra Skipped. StartNode: %d. Targets: %zu", start_node_id, target_anchors.size());
+        ROS_WARN_THROTTLE(1.0, "[SelectVP] Dijkstra Skipped. StartNode: %d. Targets: %zu", 
+                          start_node_id, target_anchors.size());
     }
+
+    // ==================== [新增] 检查是否允许切换 ====================
+    double time_since_last_switch = (ros::Time::now() - last_viewpoint_switch_time_).toSec();
+    bool allow_switch = (time_since_last_switch > vp_selection_config_.min_switch_interval);
 
     // 定义两阶段评估 Lambda
     auto runSelection = [&](double max_range, bool is_global_search) -> int {
         int local_best_id = -1;
         float local_best_score = -1.0f;
+        int local_best_anchor = -1;
 
         for (const auto& cluster : clusters) {
             if (!cluster.has_viewpoint) continue;
-            
-            // Skip blacklisted clusters
             if (blacklisted_clusters_.count(cluster.cluster_id)) continue;
 
             // 距离初筛
             double direct_dist = (cluster.viewpoint_position.cast<double>() - current_pos).norm();
             if (direct_dist > max_range) continue;
 
-            // [Robustness] Evaluate Multiple Anchors
-            // The pre-assigned cluster.history_node_id might be blocked.
-            // Search for other nearby nodes that might offer a valid path.
+            // 多锚点可达性评估
             double min_path_cost = std::numeric_limits<double>::max();
             int best_anchor = -1;
 
-            // Get candidates (search radius 15.0m covers typical gaps)
-            // Use cached `target_anchors` if they are in range? 
-            // Better to just search spatially.
-            auto candidate_anchors = history_graph_->findNodesInRange(cluster.viewpoint_position.cast<double>(), 10.0);
+            auto candidate_anchors = history_graph_->findNodesInRange(
+                cluster.viewpoint_position.cast<double>(), 10.0);
             
-            // Ensure the original ID is included if valid
+            // 确保原始锚点在候选列表中
             bool has_orig = false;
-            for(int id : candidate_anchors) if(id == cluster.history_node_id) has_orig = true;
-            if(!has_orig && cluster.history_node_id != -1) candidate_anchors.push_back(cluster.history_node_id);
+            for (int id : candidate_anchors) {
+                if (id == cluster.history_node_id) has_orig = true;
+            }
+            if (!has_orig && cluster.history_node_id != -1) {
+                candidate_anchors.push_back(cluster.history_node_id);
+            }
 
-            // Evaluate all candidates
-            for (int anchor_id : candidate_anchors) {
-                // If anchor is not reachable from StartNode, skip
-                if (cached_dijkstra_result_.dists.find(anchor_id) == cached_dijkstra_result_.dists.end() ||
-                    cached_dijkstra_result_.dists[anchor_id] >= std::numeric_limits<double>::max()) {
-                    continue;
+            // ==================== [新增] 锚点一致性锁定 ====================
+            // 如果该簇是上一帧选中的目标，优先使用上一帧的锚点
+            if (cluster.cluster_id == last_selected_cluster_id_ && 
+                last_selected_anchor_id_ != -1) {
+                auto it = cached_dijkstra_result_.dists.find(last_selected_anchor_id_);
+                if (it != cached_dijkstra_result_.dists.end() && 
+                    it->second < std::numeric_limits<double>::max()) {
+                    // 上一帧的锚点仍可达，检查距离是否合理
+                    Eigen::Vector3d anchor_pos = history_graph_->getHistoryNodePos(last_selected_anchor_id_);
+                    double anchor_to_vp = (anchor_pos - cluster.viewpoint_position.cast<double>()).norm();
+                    
+                    if (anchor_to_vp < vp_selection_config_.anchor_lock_distance) {
+                        // 锁定该锚点
+                        best_anchor = last_selected_anchor_id_;
+                        min_path_cost = history_graph_->evaluateViewpointCost(
+                            current_pos, best_anchor, 
+                            cluster.viewpoint_position.cast<double>(), 
+                            cached_dijkstra_result_, nullptr);
+                    }
                 }
+            }
 
-                double cost = history_graph_->evaluateViewpointCost(
-                    current_pos, 
-                    anchor_id, 
-                    cluster.viewpoint_position.cast<double>(), 
-                    cached_dijkstra_result_, 
-                    nullptr
-                );
-                
-                if (cost < min_path_cost) {
-                    min_path_cost = cost;
-                    best_anchor = anchor_id;
+            // 如果锚点锁定失败，正常遍历候选锚点
+            if (best_anchor == -1) {
+                for (int anchor_id : candidate_anchors) {
+                    if (cached_dijkstra_result_.dists.find(anchor_id) == cached_dijkstra_result_.dists.end() ||
+                        cached_dijkstra_result_.dists[anchor_id] >= std::numeric_limits<double>::max()) {
+                        continue;
+                    }
+
+                    double cost = history_graph_->evaluateViewpointCost(
+                        current_pos, anchor_id, 
+                        cluster.viewpoint_position.cast<double>(), 
+                        cached_dijkstra_result_, nullptr);
+                    
+                    if (cost < min_path_cost) {
+                        min_path_cost = cost;
+                        best_anchor = anchor_id;
+                    }
                 }
             }
 
             if (min_path_cost >= std::numeric_limits<double>::max()) {
-                ROS_WARN_THROTTLE(1.0, "[SelectVP] Cluster %d blocked (Tried %zu anchors). OrigNode: %d. StartNode: %d.", 
-                                  cluster.cluster_id, candidate_anchors.size(), cluster.history_node_id, start_node_id);
+                ROS_WARN_THROTTLE(1.0, "[SelectVP] Cluster %d blocked.", cluster.cluster_id);
                 continue;
             }
 
-            // [Important] Update the cluster's history node to the BEST one found
-            // This ensures subsequent planning uses the correct anchor
+            // 更新簇的锚点（供后续路径规划使用）
             const_cast<FrontierCluster&>(cluster).history_node_id = best_anchor;
 
             double path_cost = min_path_cost;
 
-            // 评分: 加大距离惩罚防止远距离抖动
-            // Score = Gain * 10 / (Cost + 1)
+            // ==================== [新增] 航向代价计算 ====================
+            Eigen::Vector3d dir_to_vp = (cluster.viewpoint_position.cast<double>() - current_pos);
+            if (dir_to_vp.norm() > 0.1) {
+                dir_to_vp.normalize();
+            } else {
+                dir_to_vp = current_heading;  // 太近时不计算航向惩罚
+            }
+            
+            double dot = current_heading.dot(dir_to_vp);  // 范围 [-1, 1]
+            
+            // 惩罚因子：
+            // dot = 1.0 (正前方) -> penalty = 0.0, factor = 1.0
+            // dot = 0.0 (侧方)   -> penalty = 0.25, factor = 1.25
+            // dot = -1.0 (正后方) -> penalty = 0.5, factor = 1.5
+            double heading_penalty = (1.0 - dot) * vp_selection_config_.heading_penalty_weight;
+            double heading_factor = 1.0 + heading_penalty;
+            
+            // 将航向代价融入总代价
+            double total_cost = path_cost * heading_factor;
+
+            // 评分公式: Score = Gain * 10 / (Cost + 1)
             float dist_weight = is_global_search ? 1.5f : 1.0f;
-            float cost_metric = static_cast<float>(path_cost) * dist_weight + 1.0f;
+            float cost_metric = static_cast<float>(total_cost) * dist_weight + 1.0f;
             float score = cluster.viewpoint_score * 10.0f / cost_metric;
+
+            // ==================== [新增] 迟滞机制 ====================
+            // 如果该簇是上一帧选中的目标，给予额外加分
+            if (last_selected_cluster_id_ != -1 && 
+                cluster.cluster_id == last_selected_cluster_id_) {
+                score *= static_cast<float>(vp_selection_config_.hysteresis_gain);
+            }
 
             if (score > local_best_score) {
                 local_best_score = score;
                 local_best_id = cluster.cluster_id;
+                local_best_anchor = best_anchor;
             }
         }
+        
         return local_best_id;
     };
 
@@ -1369,27 +1434,65 @@ bool ExplorationFSMNew::selectBestViewpoint(int& selected_viewpoint_id, const Ei
 
     // 第二轮：全图兜底 (Global Fallback)
     if (best_id == -1) {
-        ROS_WARN_THROTTLE(2.0, "[SELECT] No local VP within %.1fm. Trying GLOBAL.", config_.max_viewpoint_distance);
+        ROS_WARN_THROTTLE(2.0, "[SELECT] No local VP within %.1fm. Trying GLOBAL.", 
+                          config_.max_viewpoint_distance);
         best_id = runSelection(std::numeric_limits<double>::max(), true);
     }
 
     if (best_id < 0) return false;
 
-        // [新增] 稀疏快照采样逻辑
-    if (best_id != -1) {        
-        // 找回原始 cluster 数据指针
-        for (const auto& c : clusters) {
-            if (c.cluster_id == best_id) {
-                current_frontier_ = c.points;
-                current_viewpoint_centroid_ = c.centroid.cast<double>();
-                current_vp_pos_ = c.viewpoint_position.cast<double>();
-                current_vp_yaw_ = c.viewpoint_yaw;
-                current_frontier_history_id_ = c.history_node_id;
-                break;
+    // ==================== [新增] 目标切换检测与记录 ====================
+    if (best_id != last_selected_cluster_id_) {
+        if (allow_switch || last_selected_cluster_id_ == -1) {
+            // 允许切换
+            ROS_INFO("[SelectVP] Target switched: %d -> %d (%.2fs since last)", 
+                     last_selected_cluster_id_, best_id, time_since_last_switch);
+            last_selected_cluster_id_ = best_id;
+            last_viewpoint_switch_time_ = ros::Time::now();
+            
+            // 更新锚点锁定
+            for (const auto& c : clusters) {
+                if (c.cluster_id == best_id) {
+                    last_selected_anchor_id_ = c.history_node_id;
+                    break;
+                }
+            }
+        } else {
+            // 切换间隔太短，检查上一帧目标是否仍有效
+            bool prev_valid = false;
+            for (const auto& c : clusters) {
+                if (c.cluster_id == last_selected_cluster_id_ && c.has_viewpoint) {
+                    prev_valid = true;
+                    best_id = last_selected_cluster_id_;  // 强制使用上一帧目标
+                    break;
+                }
+            }
+            if (!prev_valid) {
+                // 上一帧目标已失效，允许切换
+                last_selected_cluster_id_ = best_id;
+                last_viewpoint_switch_time_ = ros::Time::now();
+                for (const auto& c : clusters) {
+                    if (c.cluster_id == best_id) {
+                        last_selected_anchor_id_ = c.history_node_id;
+                        break;
+                    }
+                }
             }
         }
-        
     }
+
+    // 更新 current_frontier_ 等信息
+    for (const auto& c : clusters) {
+        if (c.cluster_id == best_id) {
+            current_frontier_ = c.points;
+            current_viewpoint_centroid_ = c.centroid.cast<double>();
+            current_vp_pos_ = c.viewpoint_position.cast<double>();
+            current_vp_yaw_ = c.viewpoint_yaw;
+            current_frontier_history_id_ = c.history_node_id;
+            break;
+        }
+    }
+    
     selected_viewpoint_id = best_id;
     return true;
 }

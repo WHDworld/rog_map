@@ -97,7 +97,17 @@ void ViewpointManager::init(ros::NodeHandle& nh, GlobalMap::Ptr global_map,
     nh_.param("viewpoint_manager/vp_cluster_distance", config_.vp_cluster_distance, 3.0f);
     nh_.param("viewpoint_manager/vp_cluster_radius", config_.vp_cluster_radius, 5.0f);
     nh_.param("viewpoint_manager/vp_cluster_min_dist", config_.vp_cluster_min_dist, 6.0f);
-      
+
+    // [新增] 增量更新参数
+    nh_.param("viewpoint_manager/cluster_match_dist", config_.cluster_match_dist, 1.0f);
+    nh_.param("viewpoint_manager/enable_incremental_update", config_.enable_incremental_update, true);
+    nh_.param("viewpoint_manager/enable_id_inheritance", config_.enable_id_inheritance, true);
+    
+    VP_INFO("Incremental update: %s, ID inheritance: %s, match_dist: %.2fm",
+            config_.enable_incremental_update ? "ON" : "OFF",
+            config_.enable_id_inheritance ? "ON" : "OFF",
+            config_.cluster_match_dist);
+
     VP_INFO("Initialized: rate=%.1fHz, r=[%.1f,%.1f], strategies: surface=%d, spherical=%d, vp_cluster=%d",
             config_.update_rate, config_.candidate_rmin, config_.candidate_rmax,
             config_.use_surface_frontier, config_.use_spherical_sampling, config_.use_viewpoint_clustering);
@@ -149,7 +159,18 @@ void ViewpointManager::update() {
     
     // Step 0: 刷新 HistoryGraph 的子网格权属（确保新生成的节点接管附近的子网格）
     history_graph_->refreshSubGridOwnership();
+    // [新增] Step 0.5: 获取前沿变化的子网格列表（用于增量更新）
+    std::vector<int> changed_list;
+    std::unordered_set<int> changed_set;
+    
+    if (config_.enable_incremental_update) {
+        global_map_->getAndClearFrontierChangedSubGrids(changed_list);
+        for (int id : changed_list) {
+            changed_set.insert(id);
+        }
+    }
 
+    std::unordered_map<int, bool> node_changed_map;  // [新增] 节点变化追踪
     // Step 1 & 2: 从 HistoryGraph 获取活跃节点及其关联的前沿点
     // 替代了原来的全量 getFrontierPositionsBySubGrid
     ros::Time t_step1 = ros::Time::now();
@@ -161,21 +182,42 @@ void ViewpointManager::update() {
 
     size_t total_points = 0;
 
+
     for (int node_id : active_node_ids) {
         // 获取该节点管辖的子网格 ID
         std::vector<int> associated_sg_ids = history_graph_->getAssociatedSubGrids(node_id);
         if (associated_sg_ids.empty()) continue;
+        bool node_any_changed = false;  // [新增] 跟踪该节点是否有变化
 
         for (int sg_id : associated_sg_ids) {
             std::vector<Eigen::Vector3f> points;
+            bool use_cache = false;
+            
+            // [新增] 增量更新：检查子网格是否变化
+            if (config_.enable_incremental_update && changed_set.count(sg_id) == 0) {
+                // 该子网格未变化，尝试从缓存读取
+                auto it = subgrid_points_cache_.find(sg_id);
+                if (it != subgrid_points_cache_.end() && !it->second.empty()) {
+                    points = it->second;
+                    use_cache = true;
+                }
+            }
 
-            // B. [核心修改] 调用 GlobalMap 的新接口获取局部前沿数据
-            bool has_frontiers = global_map_->getSubGridFrontierPoints(sg_id, points);
-            // C. 闭环管理：如果 GlobalMap 说这个子网格没前沿了，通知 HistoryGraph 释放权属
-            if (!has_frontiers) 
-            {
-                history_graph_->releaseSubGrid(sg_id);
-                continue;
+            if (!use_cache) {
+                // 需要从 GlobalMap 重新获取
+                bool has_frontiers = global_map_->getSubGridFrontierPoints(sg_id, points);
+                
+                if (!has_frontiers) {
+                    history_graph_->releaseSubGrid(sg_id);
+                    subgrid_points_cache_.erase(sg_id);  // [新增] 清理缓存
+                    continue;
+                }
+                
+                // [新增] 更新缓存
+                if (!points.empty()) {
+                    subgrid_points_cache_[sg_id] = points;
+                    node_any_changed = true;  // 有新数据，需要重新聚类
+                }
             }
 
             if (points.empty()) continue;
@@ -183,18 +225,14 @@ void ViewpointManager::update() {
             total_points += points.size();
 
             // 存入 map
-            if (config_.use_surface_frontier) {
-                for (const auto& pt : points) {
-                    SurfaceFrontierPoint sfp(pt);
-                    sfp.has_normal = computeSurfaceNormal(pt, sfp.normal);
-                    node_surface_frontiers[node_id].push_back(sfp);
-                }
-            } else {
-                node_frontiers[node_id].insert(node_frontiers[node_id].end(),
+            node_frontiers[node_id].insert(node_frontiers[node_id].end(),
                                                points.begin(), points.end());
-            }
         }
+        // [新增] 记录该节点是否有变化
+        node_changed_map[node_id] = node_any_changed;
+
     }
+    
     
     double t_get_frontier = (ros::Time::now() - t_step1).toSec() * 1000.0;
     
@@ -208,39 +246,71 @@ void ViewpointManager::update() {
     ros::Time t_step3 = ros::Time::now();
     std::vector<FrontierCluster> all_clusters;
     
-    if (config_.use_surface_frontier) {
-        // ==================== SFExplorer策略：法向量相似性聚类 ====================
-        for (const auto& nf : node_surface_frontiers) {
-            int node_id = nf.first;
-            const auto& surface_points = nf.second;
+    // ==================== 空间距离聚类 ====================
+    for (const auto& nf : node_frontiers) {
+        int node_id = nf.first;
+        const auto& points = nf.second;
             
-            if (surface_points.size() < static_cast<size_t>(config_.min_cluster_size)) continue;
+        if (points.size() < static_cast<size_t>(config_.min_cluster_size)) continue;
             
-            std::vector<FrontierCluster> node_clusters;
-            clusterByNormalSimilarity(surface_points, node_clusters);
-            
-            for (auto& c : node_clusters) {
-                c.cluster_id = next_cluster_id_++;
-                c.history_node_id = node_id;
-                all_clusters.push_back(c);
+        std::vector<FrontierCluster> node_clusters;
+        // [新增] 增量更新：检查是否可以复用缓存
+        bool need_recluster = true;
+        if (config_.enable_incremental_update) {
+            auto it = node_changed_map.find(node_id);
+            if (it != node_changed_map.end() && !it->second) {
+                // 该节点下所有子网格都没变化，尝试复用上一帧结果
+                auto cache_it = prev_node_clusters_.find(node_id);
+                if (cache_it != prev_node_clusters_.end() && !cache_it->second.empty()) {
+                    node_clusters = cache_it->second;
+                    need_recluster = false;
+                    VP_DEBUG("Node %d: reusing %zu clusters (no change)", node_id, node_clusters.size());
+                }
             }
         }
-        VP_DEBUG("Surface frontier clustering: %lu clusters", all_clusters.size());
-    } else {
-        // ==================== 原有策略：空间距离聚类 ====================
-        for (const auto& nf : node_frontiers) {
-            int node_id = nf.first;
-            const auto& points = nf.second;
-            
-            if (points.size() < static_cast<size_t>(config_.min_cluster_size)) continue;
-            
-            std::vector<FrontierCluster> node_clusters;
+
+        if (need_recluster) 
+        {
+            // 需要重新聚类
             clusterByHistoryNode(points, node_id, node_clusters);
-            
-            for (auto& c : node_clusters) {
-                c.cluster_id = next_cluster_id_++;
+                
+            // [新增] ID 继承
+            if (config_.enable_id_inheritance && prev_node_clusters_.count(node_id) > 0) 
+            {
+                matchClustersLocal(node_clusters, prev_node_clusters_[node_id]);
+            } 
+            else 
+            {
+                for (auto& c : node_clusters) 
+                {
+                    c.cluster_id = next_cluster_id_++;
+                }
+            }  
+                // [新增] 更新缓存
+            prev_node_clusters_[node_id] = node_clusters;
+        }       
+
+        if (!need_recluster) 
+        {
+            // [新增] 设置缓存标记
+            for (auto& c : node_clusters) 
+            {
                 c.history_node_id = node_id;
-                all_clusters.push_back(c);
+                c.is_cached = true;    
+                c.viewpoint_cached = c.has_viewpoint;  // 如果已有视点则也标记缓存
+                all_clusters.push_back(c);   
+            }
+            
+        } 
+        else 
+        {
+            // 新聚类的簇清除缓存标记
+            for (auto& c : node_clusters) 
+            {
+                c.history_node_id = node_id;
+                c.is_cached = false;
+                c.viewpoint_cached = false;
+                all_clusters.push_back(c);   
             }
         }
     }
@@ -325,18 +395,29 @@ void ViewpointManager::update() {
     // Step 7: 为每个簇生成视点
     ros::Time t_step7 = ros::Time::now();
     int generated_count = 0;
-    
+    int cached_count = 0;  // [新增] 缓存复用计数
     for (auto& cluster : all_clusters) {
+        // [新增] 跳过已缓存视点的簇
+        if (cluster.viewpoint_cached && cluster.has_viewpoint) {
+            cached_count++;
+            generated_count++;  // 计入已生成视点数
+            continue;
+        }
+        
         if (generateBestViewpoint(cluster)) {
             generated_count++;
         }
     }
     
+    VP_DEBUG("Viewpoint generation: %d generated, %d cached", 
+             generated_count - cached_count, cached_count);
+    
     // Step 8: Yaw优化
     // optimizeViewpointYaw(all_clusters);
     
     // Step 9: 可选的增量视点聚类
-    if (config_.use_viewpoint_clustering && generated_count > 5) {
+    if (config_.use_viewpoint_clustering && generated_count > 5) 
+    {
         std::vector<FrontierCluster> unclustered;
         std::vector<ViewpointClusterInfo> vp_clusters;
         
@@ -578,81 +659,6 @@ void ViewpointManager::clusterByNormalSimilarity(
     }
 }
 
-// ==================== 计算表面法向量 ====================
-bool ViewpointManager::computeSurfaceNormal(const Eigen::Vector3f& point, Eigen::Vector3f& normal) {
-    if (!global_map_) return false;
-    
-    // 收集邻域内的 occupied 点
-    std::vector<Eigen::Vector3f> neighbor_points;
-    float search_radius = config_.cluster_eps;
-    float voxel_size = global_map_->getResolution();
-    int search_range = static_cast<int>(std::ceil(search_radius / voxel_size));
-    
-    star_mvf::GlobalVoxelIndex center_idx;
-    global_map_->posToIndex(point, center_idx);
-    
-    for (int dx = -search_range; dx <= search_range; ++dx) {
-        for (int dy = -search_range; dy <= search_range; ++dy) {
-            for (int dz = -search_range; dz <= search_range; ++dz) {
-                star_mvf::GlobalVoxelIndex nei_idx(center_idx.x + dx, center_idx.y + dy, center_idx.z + dz);
-                Eigen::Vector3f nei_pos;
-                global_map_->indexToPos(nei_idx, nei_pos);
-                
-                if ((nei_pos - point).norm() > search_radius) continue;
-                
-                if (global_map_->isOccupied(nei_pos)) {
-                    neighbor_points.push_back(nei_pos);
-                }
-            }
-        }
-    }
-    
-    // 需要至少3个点才能计算法向量
-    if (neighbor_points.size() < 3) {
-        Eigen::Vector3f uav_pos;
-        {
-            std::lock_guard<std::mutex> lock(uav_mutex_);
-            uav_pos = uav_position_;
-        }
-        Eigen::Vector3f to_point = point - uav_pos;
-        to_point.z() = 0.0f;
-        if (to_point.norm() > 0.1f) {
-            normal = to_point.normalized();
-        } else {
-            normal = Eigen::Vector3f::UnitX();
-        }
-        return false;
-    }
-    
-    // PCA 计算法向量
-    Eigen::Vector3f mean = Eigen::Vector3f::Zero();
-    for (const auto& p : neighbor_points) mean += p;
-    mean /= static_cast<float>(neighbor_points.size());
-    
-    Eigen::Matrix3f cov = Eigen::Matrix3f::Zero();
-    for (const auto& p : neighbor_points) {
-        Eigen::Vector3f diff = p - mean;
-        cov += diff * diff.transpose();
-    }
-    cov /= static_cast<float>(neighbor_points.size());
-    
-    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3f> solver(cov);
-    if (solver.info() != Eigen::Success) {
-        return false;
-    }
-    
-    // 最小特征值对应的特征向量（第一列）
-    normal = solver.eigenvectors().col(0);
-    
-    // 确保法向量指向未知区域
-    Eigen::Vector3f to_frontier = point - mean;
-    if (normal.dot(to_frontier) < 0) {
-        normal = -normal;
-    }
-    
-    return true;
-}
-
 void ViewpointManager::computeClusterPrincipalNormal(FrontierCluster& cluster) {
     if (cluster.surface_points.size() < 3) {
         cluster.principal_direction = Eigen::Vector3f::UnitX();
@@ -704,9 +710,16 @@ void ViewpointManager::splitLargeClusters(std::vector<FrontierCluster>& clusters
         std::vector<FrontierCluster> result;
         
         for (const auto& cluster : clusters) {
+            // [新增] 跳过已缓存的簇（它们上一帧已经分裂处理过了）
+            if (cluster.is_cached) {
+                result.push_back(cluster);
+                continue;
+            }
+
             if (cluster.extent > config_.cluster_split_threshold && 
                 !cluster.points.empty() && 
-                cluster.points.size() >= 4) {
+                cluster.points.size() >= 4) 
+            {
                 
                 // 交替使用X和Y坐标分裂
                 bool use_x = (iteration % 2 == 1);
@@ -823,11 +836,8 @@ bool ViewpointManager::generateBestViewpoint(FrontierCluster& cluster) {
     std::vector<float> scores;
     
     // 根据策略选择采样方法
-    if (config_.use_spherical_sampling) {
-        sampleViewpointsSpherical(cluster, positions, yaws, scores);
-    } else {
-        sampleViewpointsCircular(cluster, positions, yaws, scores);
-    }
+    sampleViewpointsCircular(cluster, positions, yaws, scores);
+
     
     if (positions.empty()) {
         cluster.has_viewpoint = false;
@@ -1000,123 +1010,6 @@ void ViewpointManager::sampleViewpointsCircular(
     
     VP_DEBUG("Cluster %d: best viewpoint score=%.3f (vis=%.2f, cov=%.2f)",
              cluster.cluster_id, best.total_score, best.visibility_score, best.coverage_score);
-}
-
-// ==================== 球扇形采样 ====================
-
-void ViewpointManager::sampleViewpointsSpherical(
-    const FrontierCluster& cluster,
-    std::vector<Eigen::Vector3f>& positions,
-    std::vector<float>& yaws,
-    std::vector<float>& scores) {
-    
-    positions.clear();
-    yaws.clear();
-    scores.clear();
-    
-    float r_min = config_.sensor_range_min;
-    float r_max = std::max(config_.sphere_sample_radius, config_.sensor_range_min + 1.0f);
-    float theta_max = config_.sphere_theta_max;
-    int sample_num = config_.sphere_sample_num * 3;
-    
-    // 构建局部坐标系：z轴沿主法线的反方向
-    Eigen::Vector3f z_axis = -cluster.normal.normalized();
-    
-    Eigen::Vector3f temp = (std::abs(z_axis.z()) < 0.9f) ? 
-                           Eigen::Vector3f::UnitZ() : Eigen::Vector3f::UnitX();
-    Eigen::Vector3f x_axis = z_axis.cross(temp).normalized();
-    Eigen::Vector3f y_axis = z_axis.cross(x_axis);
-    
-    Eigen::Matrix3f R;
-    R.col(0) = x_axis;
-    R.col(1) = y_axis;
-    R.col(2) = z_axis;
-    
-    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-    
-    struct Candidate {
-        Eigen::Vector3f position;
-        float yaw;
-        float score;
-    };
-    std::vector<Candidate> candidates;
-    
-    for (int i = 0; i < sample_num; ++i) {
-        float u1 = dist(rng_);
-        float u2 = dist(rng_);
-        float u3 = dist(rng_);
-        
-        // r 在 [r_min, r_max] 范围内均匀采样（体积均匀）
-        float r_min_cubed = r_min * r_min * r_min;
-        float r_max_cubed = r_max * r_max * r_max;
-        float r = std::cbrt(r_min_cubed + u1 * (r_max_cubed - r_min_cubed));
-        
-        // θ = arccos(1 - u2*(1 - cos(θ_max)))
-        float cos_theta = 1.0f - u2 * (1.0f - std::cos(theta_max));
-        float theta = std::acos(std::max(-1.0f, std::min(1.0f, cos_theta)));
-        
-        // φ = 2π * u3
-        float phi = 2.0f * PI * u3;
-        
-        // 球坐标转笛卡尔坐标
-        float sin_theta = std::sin(theta);
-        Eigen::Vector3f local_pos(
-            r * sin_theta * std::cos(phi),
-            r * sin_theta * std::sin(phi),
-            r * std::cos(theta)
-        );
-        
-        // 转换到世界坐标系
-        Eigen::Vector3f world_pos = cluster.centroid + R * local_pos;
-        
-        // 钳制高度
-        world_pos.z() = std::max(config_.viewpoint_height_min + 0.1f,
-                                 std::min(config_.viewpoint_height_max - 0.1f, world_pos.z()));
-        
-        // 安全检查
-        if (!isPositionSafeForExploration(world_pos)) continue;
-        
-        // 计算朝向
-        Eigen::Vector3f to_cluster = cluster.centroid - world_pos;
-        float yaw = std::atan2(to_cluster.y(), to_cluster.x());
-        
-        // 距离检查
-        float dist_to_cluster = to_cluster.norm();
-        if (dist_to_cluster < config_.sensor_range_min || 
-            dist_to_cluster > config_.sensor_range_max) continue;
-        
-        // 计算效用评分
-        float utility = computeUtilityScore(world_pos, cluster);
-        if (utility > 0.01f) {
-            candidates.push_back({world_pos, yaw, utility});
-        }
-    }
-    
-    if (candidates.empty()) return;
-    
-    // 按效用排序
-    std::sort(candidates.begin(), candidates.end(),
-              [](const Candidate& a, const Candidate& b) { return a.score > b.score; });
-    
-    // 对 top-K 进行可见性检查
-    int top_k = std::min(5, static_cast<int>(candidates.size()));
-    for (int i = 0; i < top_k; ++i) {
-        float visibility = computeVisibilityScore(candidates[i].position, cluster);
-        if (visibility >= config_.min_visibility_ratio) {
-            candidates[i].score = candidates[i].score * 0.7f + visibility * 0.3f;
-            positions.push_back(candidates[i].position);
-            yaws.push_back(candidates[i].yaw);
-            scores.push_back(candidates[i].score);
-            break;
-        }
-    }
-    
-    // 如果所有候选点可见性都不够，选择效用最高的
-    if (positions.empty() && !candidates.empty()) {
-        positions.push_back(candidates[0].position);
-        yaws.push_back(candidates[0].yaw);
-        scores.push_back(candidates[0].score);
-    }
 }
 
 // ==================== 效用评分 ====================
@@ -1594,5 +1487,91 @@ FrontierCluster* ViewpointManager::getClusterById(int id) {
     }
     return nullptr;
 }
+
+// ==================== [新增] 局部 ID 继承匹配 ====================
+void ViewpointManager::matchClustersLocal(std::vector<FrontierCluster>& new_clusters,
+                                          const std::vector<FrontierCluster>& old_clusters) {
+    if (!config_.enable_id_inheritance || old_clusters.empty()) {
+        // 不启用继承，或无历史数据，全部分配新 ID
+        for (auto& nc : new_clusters) {
+            nc.cluster_id = global_cluster_id_++;
+        }
+        return;
+    }
+    
+    // 标记已被匹配的旧簇（防止一对多）
+    std::vector<bool> old_matched(old_clusters.size(), false);
+    
+    for (auto& nc : new_clusters) {
+        float min_dist = std::numeric_limits<float>::max();
+        int best_match_idx = -1;
+        
+        // 找最近的未匹配旧簇
+        for (size_t i = 0; i < old_clusters.size(); ++i) {
+            if (old_matched[i]) continue;
+            
+            float dist = (nc.centroid - old_clusters[i].centroid).norm();
+            if (dist < min_dist) {
+                min_dist = dist;
+                best_match_idx = static_cast<int>(i);
+            }
+        }
+        
+        // 判断是否继承
+        if (best_match_idx >= 0 && min_dist < config_.cluster_match_dist) {
+            // 继承旧 ID（关键：数据用新的，ID 用旧的）
+            nc.cluster_id = old_clusters[best_match_idx].cluster_id;
+            old_matched[best_match_idx] = true;
+            
+            VP_DEBUG("Cluster inherited: new_centroid=(%.2f,%.2f,%.2f) -> old_id=%d, dist=%.3fm",
+                     nc.centroid.x(), nc.centroid.y(), nc.centroid.z(),
+                     nc.cluster_id, min_dist);
+        } else {
+            // 分配新 ID
+            nc.cluster_id = global_cluster_id_++;
+            
+            VP_DEBUG("Cluster new: centroid=(%.2f,%.2f,%.2f) -> new_id=%d",
+                     nc.centroid.x(), nc.centroid.y(), nc.centroid.z(),
+                     nc.cluster_id);
+        }
+    }
+}
+
+// ==================== [新增] 带缓存的子网格点云收集 ====================
+void ViewpointManager::collectSubGridPoints(const std::vector<int>& subgrid_ids,
+                                            const std::unordered_set<int>& dirty_set,
+                                            std::vector<Eigen::Vector3f>& out_points,
+                                            bool& out_any_changed) {
+    out_points.clear();
+    out_any_changed = false;
+    
+    for (int sg_id : subgrid_ids) {
+        bool is_dirty = (dirty_set.count(sg_id) > 0);
+        
+        if (is_dirty) {
+            // 子网格为脏，需要重新从 GlobalMap 提取
+            out_any_changed = true;
+            
+            std::vector<Eigen::Vector3f> sg_points;
+            if (global_map_->getSubGridFrontierPoints(sg_id, sg_points)) {
+                // 更新缓存
+                subgrid_points_cache_[sg_id] = sg_points;
+                
+                // 合并到输出
+                out_points.insert(out_points.end(), sg_points.begin(), sg_points.end());
+            } else {
+                // 该子网格无前沿点，清空缓存
+                subgrid_points_cache_.erase(sg_id);
+            }
+        } else {
+            // 子网格干净，直接读取缓存
+            auto it = subgrid_points_cache_.find(sg_id);
+            if (it != subgrid_points_cache_.end() && !it->second.empty()) {
+                out_points.insert(out_points.end(), it->second.begin(), it->second.end());
+            }
+        }
+    }
+}
+
 
 } // namespace rog_map
