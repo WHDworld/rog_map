@@ -319,6 +319,13 @@ void LocalMap::insertPointCloud(const sensor_msgs::PointCloud2& cloud, const Pos
         // 收集候选占据体素（但不更新概率）
         if (isInLocalMap(end_pos)) {
             int hash_id = posToHash(end_pos);
+            
+            // 终点去重机制（参考 FUEL 的 flag_rayend_）
+            // 如果该体素已经被本帧处理过，跳过
+            if (candidate_occupied_voxels.count(hash_id) > 0) {
+                continue;  // 跳过重复的终点，避免双层占据
+            }
+            
             candidate_occupied_voxels.insert(hash_id);
             valid_endpoints.emplace_back(end_pos, hash_id);
         }
@@ -510,27 +517,31 @@ void LocalMap::getUpdatedVoxels(std::vector<VoxelIndex>& occupied,
     occupied.clear();
     free_voxels.clear();
     
+    // 方案B修正：返回体素中心的世界坐标（用整数编码，避免浮点误差）
+    // GlobalMap 收到后使用自己的 posToIndex 计算正确的全局索引
+    // 这样可以适应 LocalMap 和 GlobalMap 使用不同的坐标原点
+    
     for (int hash_id : updated_occupied_) {
         Position pos;
-        hashToPos(hash_id, pos);
+        hashToPos(hash_id, pos);  // 获取体素中心的世界坐标
         
-        // 使用固定点数表示位置（乘以 1000 保留精度）
-        VoxelIndex global_idx;
-        global_idx.x = static_cast<int64_t>(pos.x() * 1000);
-        global_idx.y = static_cast<int64_t>(pos.y() * 1000);
-        global_idx.z = static_cast<int64_t>(pos.z() * 1000);
-        occupied.push_back(global_idx);
+        // 使用微米级精度编码世界坐标（乘以 10000 保留到 0.1mm）
+        VoxelIndex encoded_pos;
+        encoded_pos.x = static_cast<int64_t>(std::round(pos.x() * 10000));
+        encoded_pos.y = static_cast<int64_t>(std::round(pos.y() * 10000));
+        encoded_pos.z = static_cast<int64_t>(std::round(pos.z() * 10000));
+        occupied.push_back(encoded_pos);
     }
     
     for (int hash_id : updated_free_) {
         Position pos;
         hashToPos(hash_id, pos);
         
-        VoxelIndex global_idx;
-        global_idx.x = static_cast<int64_t>(pos.x() * 1000);
-        global_idx.y = static_cast<int64_t>(pos.y() * 1000);
-        global_idx.z = static_cast<int64_t>(pos.z() * 1000);
-        free_voxels.push_back(global_idx);
+        VoxelIndex encoded_pos;
+        encoded_pos.x = static_cast<int64_t>(std::round(pos.x() * 10000));
+        encoded_pos.y = static_cast<int64_t>(std::round(pos.y() * 10000));
+        encoded_pos.z = static_cast<int64_t>(std::round(pos.z() * 10000));
+        free_voxels.push_back(encoded_pos);
     }
 }
 
@@ -644,15 +655,17 @@ void LocalMap::getObservedVoxels(std::vector<VoxelIndex>& observed_voxels) {
     
     observed_voxels.clear();
     
+    // 方案B修正：使用 10000 倍编码世界坐标，与 getUpdatedVoxels 保持一致
     for (int hash_id : updated_observed_) {
         Position pos;
-        hashToPos(hash_id, pos);
+        hashToPos(hash_id, pos);  // 获取体素中心的世界坐标
         
-        VoxelIndex global_idx;
-        global_idx.x = static_cast<int64_t>(pos.x() * 1000);
-        global_idx.y = static_cast<int64_t>(pos.y() * 1000);
-        global_idx.z = static_cast<int64_t>(pos.z() * 1000);
-        observed_voxels.push_back(global_idx);
+        // 使用微米级精度编码世界坐标（乘以 10000 保留到 0.1mm）
+        VoxelIndex encoded_pos;
+        encoded_pos.x = static_cast<int64_t>(std::round(pos.x() * 10000));
+        encoded_pos.y = static_cast<int64_t>(std::round(pos.y() * 10000));
+        encoded_pos.z = static_cast<int64_t>(std::round(pos.z() * 10000));
+        observed_voxels.push_back(encoded_pos);
     }
 }
 

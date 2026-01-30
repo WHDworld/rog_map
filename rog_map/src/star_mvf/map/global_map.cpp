@@ -402,13 +402,13 @@ int GlobalMap::getAndClearFrontierChangedSubGrids(std::vector<int>& out_changed_
 }
 
 void GlobalMap::updateVoxelStateFromCamera(const VoxelIndex& encoded_pos, bool is_visited) {
-    // 解码世界坐标（乘以 1000 编码的）
+    // 方案B修正：解码世界坐标（除以 10000）
     Position pos;
-    pos.x() = encoded_pos.x / 1000.0f;
-    pos.y() = encoded_pos.y / 1000.0f;
-    pos.z() = encoded_pos.z / 1000.0f;
+    pos.x() = static_cast<float>(encoded_pos.x) / 10000.0f;
+    pos.y() = static_cast<float>(encoded_pos.y) / 10000.0f;
+    pos.z() = static_cast<float>(encoded_pos.z) / 10000.0f;
     
-    // 使用 posToIndex 正确计算全局索引
+    // 使用 GlobalMap 的 posToIndex 正确计算全局索引
     VoxelIndex idx;
     posToIndex(pos, idx);
     
@@ -446,16 +446,16 @@ void GlobalMap::updateOccupiedVoxels(const std::vector<VoxelIndex>& occupied_ind
     {
         std::lock_guard<std::mutex> lock(map_mutex_);
 
-        // 注意：传入的 occupied_indices 和 free_indices 实际上是编码的世界坐标
-        // 需要先解码为 Position，然后使用 posToIndex 转换为全局索引
+        // 方案B修正：传入的是用 10000 倍编码的世界坐标（0.1mm 精度）
+        // 解码后使用 GlobalMap 的 posToIndex 计算正确的全局索引
 
         for (const auto& encoded_pos : occupied_indices) 
         {
-            // 解码世界坐标（乘以 1000 编码的）
+            // 解码世界坐标（除以 10000）
             Position pos;
-            pos.x() = encoded_pos.x / 1000.0f;
-            pos.y() = encoded_pos.y / 1000.0f;
-            pos.z() = encoded_pos.z / 1000.0f;
+            pos.x() = static_cast<float>(encoded_pos.x) / 10000.0f;
+            pos.y() = static_cast<float>(encoded_pos.y) / 10000.0f;
+            pos.z() = static_cast<float>(encoded_pos.z) / 10000.0f;
             
             // 使用 GlobalMap 的 posToIndex 正确计算全局索引
             VoxelIndex idx;
@@ -507,11 +507,11 @@ void GlobalMap::updateOccupiedVoxels(const std::vector<VoxelIndex>& occupied_ind
 
         for (const auto& encoded_pos : free_indices) 
         {
-            // 解码世界坐标（乘以 1000 编码的）
+            // 解码世界坐标（除以 10000）
             Position pos;
-            pos.x() = encoded_pos.x / 1000.0f;
-            pos.y() = encoded_pos.y / 1000.0f;
-            pos.z() = encoded_pos.z / 1000.0f;
+            pos.x() = static_cast<float>(encoded_pos.x) / 10000.0f;
+            pos.y() = static_cast<float>(encoded_pos.y) / 10000.0f;
+            pos.z() = static_cast<float>(encoded_pos.z) / 10000.0f;
             
             // 使用 GlobalMap 的 posToIndex 正确计算全局索引
             VoxelIndex idx;
