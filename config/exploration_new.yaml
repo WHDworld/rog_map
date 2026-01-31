@@ -16,7 +16,7 @@ map_name: "octa_maze"
 
 rog_map:
   # 话题配置
-  lidar_topic: "/cloud_registered" #  /livox/lidar /cloud_registered
+  lidar_topic: "/cloud_registered_gt" #  /livox/lidar /cloud_registered
   odom_topic: "/ground_truth/odom" # /ground_truth/odom /uav_simulator/odometry
   camera_pose_topic: "/ground_truth/camera_pose"
   camera_rgb_topic: "/camera/color/image_raw"
@@ -33,7 +33,7 @@ rog_map:
   
   # ---------- 局部地图 ----------
   local_map:
-    half_size: [10.0, 10.0, 2.0]    # 局部地图半尺寸 [m]
+    half_size: [15.0, 15.0, 2.0]    # 局部地图半尺寸 [m]
     log_odds_hit: 0.85
     log_odds_miss: -0.4
     log_odds_min: -2.0
@@ -170,7 +170,7 @@ fsm:
   close_viewpoint_threshold: 5.0    # 近距离视点阈值 [m]
   
   # 探索控制
-  auto_start: true                 # 自动开始探索
+  auto_start: false                 # 自动开始探索
   enable_visualization: true        # 启用可视化
   
 # ========== 规划管理器 ==========

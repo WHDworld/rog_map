@@ -249,11 +249,10 @@ bool YawOptimizer::optimize(const poly_traj::Trajectory& xyz_traj,
   // Penalty: W_fix * (Pos(T) - end_yaw)^2
   
   // Use Hard Constraints by removing variables? No, simpler to use Soft Constraints with High Weights.
-  // [TV-YC 修复] 分离起点和终点约束权重
-  // 起点：较低权重，允许快速过渡到速度方向（TV-YC前期跟随速度）
-  // 终点：高权重，确保精确收敛到目标Yaw
-  double w_fix_start = 100.0;   // 起点约束进一步降低，让巡航阶段速度方向约束生效
-  double w_fix_end = 1000000.0;   // 终点约束保持不变
+  // [修复] 起止点约束使用相同高权重，确保 yaw 轨迹精确从 start_yaw 开始到 end_yaw 结束
+  // 之前 w_fix_start=100 太低导致 yaw 轨迹偏向速度方向，造成轨迹切换时的突变
+  double w_fix_start = 1000000.0;   // 起点约束与终点相同
+  double w_fix_end = 1000000.0;     // 终点约束保持不变
   
   // Start Pos: (P0 + 4P1 + P2)/6 = start
   // 1/6 * P0 + 4/6 * P1 + 1/6 * P2 - start = 0

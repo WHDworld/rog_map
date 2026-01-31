@@ -6,6 +6,7 @@ Panels:
       Expanded:
         - /Global Options1
         - /Status1
+        - /ENV1
         - /ROGMap1
         - /Global_map1
         - /planner1
@@ -181,7 +182,7 @@ Visualization Manager:
           Size (Pixels): 3
           Size (m): 0.10000000149011612
           Style: Boxes
-          Topic: /cloud_registered
+          Topic: /cloud_registered_gt
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
@@ -675,29 +676,34 @@ Visualization Manager:
           Use rainbow: true
           Value: false
         - Class: rviz/MarkerArray
-          Enabled: false
+          Enabled: true
           Marker Topic: /exploration/frontier_clusters
           Name: FrontierClusters
           Namespaces:
-            {}
+            cluster_centers: true
+            cluster_extent: true
+            cluster_labels: true
+            frontier_points: true
           Queue Size: 100
-          Value: false
+          Value: true
         - Class: rviz/MarkerArray
-          Enabled: false
+          Enabled: true
           Marker Topic: /exploration/viewpoints
           Name: Viewpoints
           Namespaces:
-            {}
+            view_directions: true
+            viewpoint_labels: true
+            viewpoints: true
           Queue Size: 100
-          Value: false
+          Value: true
         - Class: rviz/MarkerArray
-          Enabled: false
+          Enabled: true
           Marker Topic: /exploration/frustums
           Name: Frustums
           Namespaces:
-            {}
+            frustum_lines: true
           Queue Size: 100
-          Value: false
+          Value: true
         - Class: rviz/MarkerArray
           Enabled: false
           Marker Topic: /exploration/info
@@ -929,7 +935,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/XYOrbit
-      Distance: 30.229724884033203
+      Distance: 22.352455139160156
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -937,17 +943,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 4.908690452575684
-        Y: 6.473055839538574
-        Z: -4.1029605199582875e-05
+        X: -0.3048379421234131
+        Y: -13.604994773864746
+        Z: -5.541112841456197e-05
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.8647971749305725
+      Pitch: 0.4047975540161133
       Target Frame: perfect_drone
-      Yaw: 1.2085535526275635
+      Yaw: 2.138554096221924
     Saved:
       - Class: rviz/ThirdPersonFollower
         Distance: 17.48538589477539

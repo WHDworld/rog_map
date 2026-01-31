@@ -644,6 +644,34 @@ void GlobalMap::extractGlobalFrontierIncremental() {
 
         // 获取当前探索率
         float exploration_rate = sg.getExplorationRate();
+        
+        // [DEBUG] 详细日志：每个子网格的状态
+        size_t free_count = sg.free_voxels_list_.size();
+        size_t unk_count = sg.unknown_voxels_list_.size();
+        // 只输出 Free 列表非空但很小的子网格（可能有问题）
+        if (free_count > 0 && free_count < 50) {
+            ROS_INFO_THROTTLE(2.0, "[Frontier] sg=%d, exp_rate=%.2f, free_list=%zu, unk_list=%zu",
+                              sg_id, exploration_rate, free_count, unk_count);
+        }
+        
+        // [DEBUG] 一致性检查：统计 voxels_ 中实际的 Free 体素数量
+        size_t actual_free_in_voxels = 0;
+        for (int k = sg.global_min_idx.z; k <= sg.global_max_idx.z; ++k) {
+            for (int j = sg.global_min_idx.y; j <= sg.global_max_idx.y; ++j) {
+                for (int i = sg.global_min_idx.x; i <= sg.global_max_idx.x; ++i) {
+                    VoxelIndex idx(i, j, k);
+                    auto it = voxels_.find(idx);
+                    if (it != voxels_.end() && VoxelStateBits::isFree(it->second)) {
+                        actual_free_in_voxels++;
+                    }
+                }
+            }
+        }
+        if (actual_free_in_voxels != free_count) {
+            ROS_WARN("[Frontier] sg=%d MISMATCH: free_list=%zu, actual_free=%zu",
+                     sg_id, free_count, actual_free_in_voxels);
+        }
+        
         // ==================== 策略分支 ====================
         
         if (exploration_rate < 0.5f) {

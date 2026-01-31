@@ -210,6 +210,7 @@ void ViewpointManager::update() {
                 if (!has_frontiers) {
                     history_graph_->releaseSubGrid(sg_id);
                     subgrid_points_cache_.erase(sg_id);  // [新增] 清理缓存
+                    node_any_changed = true;  // [修复] 子网格前沿被清空也算变化，需要重新聚类
                     continue;
                 }
                 
@@ -251,7 +252,11 @@ void ViewpointManager::update() {
         int node_id = nf.first;
         const auto& points = nf.second;
             
-        if (points.size() < static_cast<size_t>(config_.min_cluster_size)) continue;
+        if (points.size() < static_cast<size_t>(config_.min_cluster_size)) {
+            // [修复] 点数不足时清理该节点的缓存，避免后续复用过期簇
+            prev_node_clusters_.erase(node_id);
+            continue;
+        }
             
         std::vector<FrontierCluster> node_clusters;
         // [新增] 增量更新：检查是否可以复用缓存
@@ -312,6 +317,17 @@ void ViewpointManager::update() {
                 c.viewpoint_cached = false;
                 all_clusters.push_back(c);   
             }
+        }
+    }
+    
+    // [修复] 清理不再活跃的节点缓存（节点已无前沿点或不在活跃列表中）
+    std::unordered_set<int> active_node_ids_set(active_node_ids.begin(), active_node_ids.end());
+    for (auto it = prev_node_clusters_.begin(); it != prev_node_clusters_.end(); ) {
+        // 如果该节点不再活跃，或者 node_frontiers 中没有该节点的数据，清理缓存
+        if (active_node_ids_set.count(it->first) == 0 || node_frontiers.count(it->first) == 0) {
+            it = prev_node_clusters_.erase(it);
+        } else {
+            ++it;
         }
     }
     

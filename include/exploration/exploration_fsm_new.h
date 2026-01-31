@@ -347,6 +347,12 @@ private:
     bool prev_use_yaw_traj_ = false;         // [新增] 旧轨迹是否使用Yaw B样条
     double prev_last_yaw_ = 0.0;             // [新增] 保存旧轨迹时的last_yaw_
 
+    // ==================== [新增] Yaw 轨迹切换平滑过渡 ====================
+    double yaw_offset_at_switch_ = 0.0;      // 轨迹切换时 yaw 偏差
+    double yaw_switch_time_ = 0.0;           // 轨迹切换时刻
+    int yaw_switch_traj_id_ = -1;            // 已处理的轨迹 ID
+    static constexpr double kYawBlendDuration = 0.5; // 混合持续时间 (秒)
+
     // ==================== [新增] 轨迹日志记录 ====================
     std::ofstream traj_log_file_;         // 轨迹日志文件流
     bool enable_traj_logging_ = true;     // 是否启用轨迹日志

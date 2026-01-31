@@ -1899,10 +1899,42 @@ std::pair<double, double> ExplorationFSMNew::calculate_yaw(double t_cur, Eigen::
         if (t_eval < 0) t_eval = 0;
         if (t_eval > local_data.duration) t_eval = local_data.duration;
 
-        double yaw = ego_planner::YawOptimizer::evaluateYaw(
+        double yaw_raw = ego_planner::YawOptimizer::evaluateYaw(
             local_data.yaw_ctrl_pts, t_eval, local_data.duration);
         double yaw_dot = ego_planner::YawOptimizer::evaluateYawDot(
             local_data.yaw_ctrl_pts, t_eval, local_data.duration);
+
+        // ============ [新增] 轨迹切换平滑过渡 ============
+        // 检测新轨迹到来（通过 traj_id 变化检测）
+        int current_traj_id = local_data.traj_id;
+        if (current_traj_id != yaw_switch_traj_id_) {
+            // 新轨迹！计算切换时刻的偏差
+            double yaw_at_zero = ego_planner::YawOptimizer::evaluateYaw(
+                local_data.yaw_ctrl_pts, 0.0, local_data.duration);
+            
+            // 计算当前 last_yaw_ 与新轨迹起点的偏差（走最短路径）
+            double diff = last_yaw_ - yaw_at_zero;
+            while (diff > M_PI) diff -= 2 * M_PI;
+            while (diff < -M_PI) diff += 2 * M_PI;
+            
+            yaw_offset_at_switch_ = diff;
+            yaw_switch_time_ = ros::Time::now().toSec();
+            yaw_switch_traj_id_ = current_traj_id;
+            
+            // [DEBUG] 详细日志
+            ROS_INFO("[YawBlend] Traj switch: traj_id=%d, last_yaw=%.2f, yaw(0)=%.2f, offset=%.2f deg",
+                     current_traj_id, last_yaw_, yaw_at_zero, diff * 180.0 / M_PI);
+        }
+        
+        // 计算混合因子：从 1.0 线性衰减到 0.0
+        double time_since_switch = ros::Time::now().toSec() - yaw_switch_time_;
+        double blend_factor = 0.0;
+        if (time_since_switch < kYawBlendDuration && time_since_switch >= 0) {
+            blend_factor = 1.0 - time_since_switch / kYawBlendDuration;
+        }
+        
+        // 应用偏差补偿
+        double yaw = yaw_raw + blend_factor * yaw_offset_at_switch_;
 
         last_yaw_ = yaw;
         last_yaw_dot_ = yaw_dot;
