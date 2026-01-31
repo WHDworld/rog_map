@@ -165,6 +165,7 @@ target_link_libraries(map_test_node
 # 新架构探索规划节点 (4-State FSM + Integrated Planner)
 # ===========================================================
 add_executable(exploration_planner_node_new 
+        src/exploration_core/exploration_planner_node_new.cpp
         src/exploration_core/exploration_fsm_new.cpp
         src/exploration_core/viewpoint_manager.cpp
         src/exploration_core/history_graph.cpp
