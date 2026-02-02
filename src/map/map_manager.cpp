@@ -16,8 +16,7 @@ namespace star_mvf {
 
 MapManager::MapManager(ros::NodeHandle& nh, ros::NodeHandle& nh_private)
     : nh_(nh), nh_private_(nh_private) {
-    local_map_ = std::make_shared<LocalMap>();
-    // GlobalMap 稍后在 initFromROS 中初始化
+    // LocalMap 已移除：GlobalMap 在 initFromROS 中初始化
 }
 
 void MapManager::initFromROS(const std::string& name_space) {
@@ -41,40 +40,15 @@ void MapManager::initFromROS(const std::string& name_space) {
         config_.visualization_range = Position(viz_range[0], viz_range[1], viz_range[2]);
     }
     
-    // 读取分辨率
+    // 读取分辨率（只配置 global_config）
     float resolution;
     nh_private_.param(name_space + "/resolution", resolution, 0.1f);
-    config_.local_config.resolution = resolution;
-    config_.local_config.resolution_inv = 1.0f / resolution;
     config_.global_config.resolution = resolution;
     config_.global_config.resolution_inv = 1.0f / resolution;
     
-    // 读取局部地图配置（半尺寸）
-    std::vector<float> local_half_size;
-    nh_private_.param(name_space + "/local_map/half_size", local_half_size, std::vector<float>{10.0f, 10.0f, 3.0f});
-    if (local_half_size.size() == 3) {
-        config_.local_config.local_half_size = Position(local_half_size[0], local_half_size[1], local_half_size[2]);
-    }
+    // LocalMap 配置已移除：LocalMap 参数现在不再需要存储在 MapManagerConfig 中
+    // GlobalMap 直接从 ROS 参数读取
     
-    double log_hit, log_miss, log_min, log_max, occ_thresh;
-    nh_private_.param(name_space + "/local_map/log_odds_hit", log_hit, 0.85);
-    nh_private_.param(name_space + "/local_map/log_odds_miss", log_miss, -0.4);
-    nh_private_.param(name_space + "/local_map/log_odds_min", log_min, -2.0);
-    nh_private_.param(name_space + "/local_map/log_odds_max", log_max, 3.5);
-    nh_private_.param(name_space + "/local_map/log_odds_occ_thresh", occ_thresh, 0.0);
-    config_.local_config.log_odds_hit = static_cast<float>(log_hit);
-    config_.local_config.log_odds_miss = static_cast<float>(log_miss);
-    config_.local_config.log_odds_min = static_cast<float>(log_min);
-    config_.local_config.log_odds_max = static_cast<float>(log_max);
-    config_.local_config.log_odds_occ_thresh = static_cast<float>(occ_thresh);
-
-    bool use_raycast;
-    double raycast_step;
-    nh_private_.param(name_space + "/local_map/use_raycast", use_raycast, true);
-    nh_private_.param(name_space + "/local_map/raycast_step", raycast_step, 0.1);
-    config_.local_config.use_raycast = use_raycast;
-    config_.local_config.raycast_step = static_cast<float>(raycast_step);
-
     // [Added] Load Intrinsics
     nh_private_.param(name_space + "/sensor/camera_intrinsics/fx", config_.fx, 320.0);
     nh_private_.param(name_space + "/sensor/camera_intrinsics/fy", config_.fy, 320.0);
@@ -101,36 +75,7 @@ void MapManager::initFromROS(const std::string& name_space) {
         config_.body_R_cam << 0, 0, 1, -1, 0, 0, 0, -1, 0;
     }
 
-
-
-    double lidar_sensor_max, lidar_sensor_min;
-    double camera_sensor_max, camera_sensor_min;
-    nh_private_.param(name_space + "/sensor/lidar_max_range", lidar_sensor_max, 20.0);
-    nh_private_.param(name_space + "/sensor/lidar_min_range", lidar_sensor_min, 0.2);
-    int lidar_downsample_filter;
-    nh_private_.param(name_space + "/sensor/lidar_downsample_filter", lidar_downsample_filter, 1);
-
-    nh_private_.param(name_space + "/sensor/camera_max_range", camera_sensor_max, 5.0);
-    nh_private_.param(name_space + "/sensor/camera_min_range", camera_sensor_min, 0.5);
-    double camera_fov_h_deg, camera_fov_v_deg;
-    nh_private_.param(name_space + "/sensor/camera_fov_h_deg", camera_fov_h_deg, 90.0);
-    nh_private_.param(name_space + "/sensor/camera_fov_v_deg", camera_fov_v_deg, 60.0);
-    double camera_ray_step, camera_angular_resolution_deg;
-    nh_private_.param(name_space + "/sensor/camera_ray_step", camera_ray_step, 0.1);
-    nh_private_.param(name_space + "/sensor/camera_angular_resolution_deg", camera_angular_resolution_deg, 3.0);  // 推荐值
-    config_.local_config.lidar_max_range = static_cast<float>(lidar_sensor_max);
-    config_.local_config.lidar_min_range = static_cast<float>(lidar_sensor_min);
-    config_.local_config.lidar_downsample_filter = lidar_downsample_filter;
-    config_.local_config.camera_max_range = static_cast<float>(camera_sensor_max);
-    config_.local_config.camera_min_range = static_cast<float>(camera_sensor_min);
-    config_.local_config.camera_fov_h_deg = static_cast<float>(camera_fov_h_deg);
-    config_.local_config.camera_fov_v_deg = static_cast<float>(camera_fov_v_deg);
-    config_.local_config.camera_ray_step = static_cast<float>(raycast_step);
-    config_.local_config.camera_angular_resolution_deg = static_cast<float>(camera_angular_resolution_deg);
-
-    
-    // 初始化局部地图
-    local_map_->init(config_.local_config);
+    // LocalMap 已移除：射线投射直接在 GlobalMap 中处理
     
     // 初始化全局地图（使用私有NodeHandle确保话题带节点前缀）
     global_map_ = std::make_shared<GlobalMap>(nh_private_, name_space);
@@ -141,11 +86,6 @@ void MapManager::initFromROS(const std::string& name_space) {
     camera_pose_sub_ = nh_.subscribe(config_.camera_pose_topic, 10, &MapManager::cameraOdomCallback, this);
     camera_rgb_sub_ = nh_.subscribe(config_.camera_rgb_topic, 10, &MapManager::cameraRgbCallback, this);
     depth_sub_ = nh_.subscribe(config_.depth_topic, 10, &MapManager::depthCallback, this); // [Added]
-    
-    // 初始化局部地图可视化（由 LocalMap 自己管理发布器）
-    if (config_.visualization_en) {
-        local_map_->initVisualization(nh_private_, config_.frame_id);
-    }
     
     ROS_INFO("[MapManager] Initialized with lidar_topic=%s, odom_topic=%s",
              config_.lidar_topic.c_str(), config_.odom_topic.c_str());
@@ -184,15 +124,14 @@ void MapManager::lidarCallback(const sensor_msgs::PointCloud2ConstPtr& msg) {
         sensor_pos = current_position_;
     }
     
-    // === 新架构：在lidarCallback中完成所有地图更新 ===
+    // === 简化架构：直接在 GlobalMap 中处理 ===
     
-    // Step 1: 先更新局部地图（LiDAR 点云 → 占据体素）
+    // Step 1: 直接在 GlobalMap 中插入点云（射线投射 + 状态更新）
     auto t1 = ros::Time::now();
-    local_map_->insertPointCloud(*msg, sensor_pos);
+    global_map_->insertPointCloud(*msg, sensor_pos);
     auto t2 = ros::Time::now();
     
-    // Step 2: 再更新相机可视域（标记已观测的占据体素）
-    // 必须在 insertPointCloud 之后，因为要先有占据体素才能标记观测
+    // Step 2: 更新相机位姿（用于视觉状态更新）
     if (has_camera_pose_) {
         Position cam_pos;
         Quaternion cam_rot;
@@ -201,25 +140,20 @@ void MapManager::lidarCallback(const sensor_msgs::PointCloud2ConstPtr& msg) {
             cam_pos = current_camera_position_;
             cam_rot = current_camera_rotation_;
         }
-        local_map_->updateCameraFrustum(cam_pos, cam_rot);
+        global_map_->updateCameraPose(cam_pos, cam_rot);
     }
     
-    // Step 3: 同步到全局地图
-    syncLocalToGlobal();
+    // Step 3: 提取前沿
+    global_map_->extractGlobalFrontierIncremental();
     auto t3 = ros::Time::now();
     
-    // Step 4: 提取前沿
-    global_map_->extractGlobalFrontierIncremental();
-    auto t4 = ros::Time::now();
-    
     // 性能日志（每10帧输出一次）
-    // if (lidar_count % 10 == 0) {
-    //     ROS_INFO("[MapManager] LiDAR #%d: insert=%.1fms, sync=%.1fms, frontier=%.1fms",
-    //              lidar_count,
-    //              (t2 - t1).toSec() * 1000.0,
-    //              (t3 - t2).toSec() * 1000.0,
-    //              (t4 - t3).toSec() * 1000.0);
-    // }
+    if (lidar_count % 100 == 0) {
+        ROS_INFO_THROTTLE(2.0, "[MapManager] LiDAR #%d: insert=%.1fms, frontier=%.1fms",
+                 lidar_count,
+                 (t2 - t1).toSec() * 1000.0,
+                 (t3 - t2).toSec() * 1000.0);
+    }
 }
 
 void MapManager::odomCallback(const nav_msgs::OdometryConstPtr& msg) {
@@ -249,14 +183,10 @@ void MapManager::odomCallback(const nav_msgs::OdometryConstPtr& msg) {
     Eigen::Matrix3f rot_mat = current_rotation_.toRotationMatrix();
     robot_state_.yaw = std::atan2(rot_mat(1, 0), rot_mat(0, 0));
     
-    // 地图滑动（使用循环数组，只清除超出范围的体素）
-    local_map_->mapSliding(current_position_);
+    // LocalMap 滑动窗口已移除：GlobalMap 是全局地图，不需要滑动
     
-    // 如果启用相机地图，更新全局地图的相机位姿
-    if (global_map_->enable_camera_map_) {
-        global_map_->current_cam_origin_ = current_position_;
-        global_map_->current_cam_rot_ = current_rotation_;
-    }
+    // 相机位姿更新已移至 lidarCallback -> updateCameraPose()
+    // 避免 odom 和 camera_pose 两个数据源导致的跳变
 }
 
 // 添加相机位姿回调函数（仅存储位姿，视域在lidarCallback中与点云同频更新）
@@ -309,7 +239,7 @@ void MapManager::depthCallback(const sensor_msgs::ImageConstPtr& msg) {
     const double cy = config_.cy;
     const int margin = config_.depth_filter_margin;
     const int skip = config_.skip_pixel;
-    const double max_range = config_.local_config.camera_max_range;
+    const double max_range = config_.global_config.camera_max_dist;  // 使用 global_config
     const double scale = config_.depth_scale;
 
     pcl::PointCloud<pcl::PointXYZ> cloud_obstacle;
@@ -391,22 +321,13 @@ void MapManager::depthCallback(const sensor_msgs::ImageConstPtr& msg) {
         pcl::toROSMsg(cloud_obstacle, cloud_msg);
         cloud_msg.header = msg->header;
         cloud_msg.header.frame_id = config_.frame_id;
-        local_map_->insertPointCloud(cloud_msg, cam_pos);
+        global_map_->insertPointCloud(cloud_msg, cam_pos);
     }
     
-    // 2. Process Clearing Points (Clearing Only, No Occupancy at Endpoint)
-    if (!cloud_clearing.empty()) {
-        sensor_msgs::PointCloud2 cloud_msg;
-        pcl::toROSMsg(cloud_clearing, cloud_msg);
-        cloud_msg.header = msg->header;
-        cloud_msg.header.frame_id = config_.frame_id;
-        local_map_->insertClearingCloud(cloud_msg, cam_pos);
-    }
+    // 2. Clearing Points 现在由 insertPointCloud 内部的射线投射处理
+    // 不再需要单独的 insertClearingCloud 调用
 
-    // Sync to global
-    syncLocalToGlobal();
-    
-    // Extract Frontier
+    // 3. Extract Frontier
     global_map_->extractGlobalFrontierIncremental();
 }
 
@@ -418,8 +339,7 @@ void MapManager::vizTimerCallback(const ros::TimerEvent& event) {
     
     auto t_start = ros::Time::now();
     
-    // 局部地图可视化（由 LocalMap 管理，内部检查订阅者）
-    local_map_->visualize();
+    // LocalMap 可视化已移除
     
     // 全局地图可视化（由 GlobalMap 管理，内部检查订阅者）
     global_map_->visualize();
@@ -430,34 +350,7 @@ void MapManager::vizTimerCallback(const ros::TimerEvent& event) {
     //          viz_count, global_map_->getVoxelCount(), (t_end - t_start).toSec() * 1000.0);
 }
 
-void MapManager::syncLocalToGlobal() {
-    // 获取局部地图更新
-    std::vector<VoxelIndex> occupied, free_voxels;
-    local_map_->getUpdatedVoxels(occupied, free_voxels);
-
-    // 获取相机观测的体素
-    std::vector<VoxelIndex> observed_voxels;
-    if (has_camera_pose_) {
-        local_map_->getObservedVoxels(observed_voxels);
-    }
-    
-    if (occupied.empty() && free_voxels.empty()) return;
-    
-    // Step 1: 先批量更新全局地图（创建占据体素）
-    global_map_->updateOccupiedVoxels(occupied, free_voxels);
-    
-    // Step 2: 再更新语义状态（标记占据体素为 VISITED）
-    // 必须在 updateOccupiedVoxels 之后，因为要先有占据体素
-    if (!observed_voxels.empty()) {
-        for (const auto& idx : observed_voxels) {
-            global_map_->updateVoxelStateFromCamera(idx, true);
-        }
-    }
-
-    // 清除局部地图缓存（包括观测缓存）
-    local_map_->clearUpdateCache();
-    local_map_->clearObservedCache();  // 新增：清除观测缓存
-}
+// syncLocalToGlobal 已移除：现在直接在 GlobalMap::insertPointCloud 中处理
 
 }  // namespace star_mvf
 

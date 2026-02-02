@@ -1,7 +1,7 @@
 # ===========================================================
 # STAR-Searcher 新架构探索系统参数配置
 # ===========================================================
-# 
+#
 # 架构特点：
 # 1. 地图更新在 lidarCallback 中完成（~10Hz）
 # 2. 视点生成由 ViewpointManager 定时器处理（5Hz）
@@ -22,31 +22,31 @@ rog_map:
   camera_rgb_topic: "/camera/color/image_raw"
   # depth_topic: "/uav_simulator/depth_image"
   frame_id: "map"
-  
+
   # 分辨率
   resolution: 0.2
-  
+
   # 可视化（只保留 vizTimer）
-  viz_rate: 5.0              # Hz
+  viz_rate: 5.0 # Hz
   visualization_en: true
   visualization_range: [20.0, 20.0, 6.0]
-  
+
   # ---------- 局部地图 ----------
   local_map:
-    half_size: [15.0, 15.0, 2.0]    # 局部地图半尺寸 [m]
+    half_size: [15.0, 15.0, 2.0] # 局部地图半尺寸 [m]
     log_odds_hit: 0.85
     log_odds_miss: -0.4
     log_odds_min: -2.0
     log_odds_max: 3.5
     log_odds_occ_thresh: 0.0
     use_raycast: true
-    raycast_step: 0.2              # 使用老参数的0.1
-  
+    raycast_step: 0.2 # 使用老参数的0.1
+
   # ---------- 传感器 ----------
   sensor:
     lidar_max_range: 25.0
     lidar_min_range: 0.2
-    lidar_downsample_filter: 1     # 降采样因子
+    lidar_downsample_filter: 1 # 降采样因子
     camera_max_range: 5.0
     camera_min_range: 0.2
     camera_fov_h_deg: 90.0
@@ -55,193 +55,188 @@ rog_map:
     # Camera Extrinsics (Rotation from Optical to Body-FLU)
     # Default: Z forward -> X forward, X right -> Y left, Y down -> Z down
     camera_extrinsics:
-      rotation: [0.0, 0.0, 1.0, 
-                 -1.0, 0.0, 0.0, 
-                 0.0, -1.0, 0.0]
-  
+      rotation: [0.0, 0.0, 1.0, -1.0, 0.0, 0.0, 0.0, -1.0, 0.0]
+
   # ---------- 全局地图 ----------
   global_map:
     map_size: [50, 50, 2.0]
     map_model: 0
-    ground_height: 0.0
+    ground_height: -0.01
     sub_grid_xy: 0.08
-    frontier_height_min: 0.3
-    frontier_height_max: 1.6
-  
+    frontier_height_min: 0.1
+    frontier_height_max: 1.8
+
   # ---------- 膨胀地图 ----------
   inflation:
     enable: true
-    inflation_step: 1                 # 膨胀步长（格子数）[Fix: Increase for safety]
-
-
+    inflation_step: 1 # 膨胀步长（格子数）[Fix: Increase for safety]
 
 # ========== ViewpointManager (5Hz) ==========
 viewpoint_manager:
-  update_rate: 5.0                  # Hz
-  
-  # ---------- 安全参数 ----------
-  uav_radius: 0.3                   # 无人机机身半径 [m]
-  safety_margin: 0.25                # 额外安全边距 [m]
+  update_rate: 5.0 # Hz
 
+  # ---------- 安全参数 ----------
+  uav_radius: 0.3 # 无人机机身半径 [m]
+  safety_margin: 0.25 # 额外安全边距 [m]
 
   # ---------- 传感器参数 ----------
-  sensor_range_min: 2.0             # 最小感知距离 [m]
-  sensor_range_max: 5.0             # 最大感知距离 [m]
-  sensor_fov_h: 1.57                # 水平FOV [rad] (~90°)
-  sensor_fov_v: 1.15                # 垂直FOV [rad] (~66°)
-  
+  sensor_range_min: 2.0 # 最小感知距离 [m]
+  sensor_range_max: 5.0 # 最大感知距离 [m]
+  sensor_fov_h: 1.57 # 水平FOV [rad] (~90°)
+  sensor_fov_v: 1.15 # 垂直FOV [rad] (~66°)
+
   # ---------- 视点采样 ----------
-  viewpoint_height: 1.0             # 视点基准高度 [m]
-  viewpoint_height_min: 1.0         # 视点最小采样高度 [m]
-  viewpoint_height_max: 2.0         # 视点最大采样高度 [m]
-  viewpoint_height_num: 1           # 高度采样数量
-  candidate_rmin: 2.0               # 最小采样半径 [m]
-  candidate_rmax: 6.0               # 最大采样半径 [m]
-  candidate_rnum: 5                 # 半径采样数量
-  candidate_dphi: 0.25              # 角度采样间隔 [rad] (~14°)
-  optimal_distance: 3.5             # 最优观测距离 [m]
-  
+  viewpoint_height: 1.0 # 视点基准高度 [m]
+  viewpoint_height_min: 1.0 # 视点最小采样高度 [m]
+  viewpoint_height_max: 2.0 # 视点最大采样高度 [m]
+  viewpoint_height_num: 1 # 高度采样数量
+  candidate_rmin: 2.0 # 最小采样半径 [m]
+  candidate_rmax: 6.0 # 最大采样半径 [m]
+  candidate_rnum: 5 # 半径采样数量
+  candidate_dphi: 0.25 # 角度采样间隔 [rad] (~14°)
+  optimal_distance: 3.5 # 最优观测距离 [m]
+
   # ---------- 前沿聚类 ----------
-  cluster_eps: 0.75                 # 聚类半径 [m]
-  min_cluster_size: 50              # 最小簇大小
-  cluster_split_threshold: 10.0      # 簇分裂阈值 [m]
-  max_clusters: 10                  # 最大簇数量
-  
+  cluster_eps: 0.75 # 聚类半径 [m]
+  min_cluster_size: 50 # 最小簇大小
+  cluster_split_threshold: 10.0 # 簇分裂阈值 [m]
+  max_clusters: 8 # 最大簇数量
+
   # ---------- 滤波参数 ----------
-  min_viewpoint_distance: 1.5       # 视点最小间距 [m]
-  min_coverage_score: 0.3           # 最小覆盖评分 [0,1]
-  min_visibility_ratio: 0.70        # 最小可见性比例 [0,1]
-  
+  min_viewpoint_distance: 1.5 # 视点最小间距 [m]
+  min_coverage_score: 0.3 # 最小覆盖评分 [0,1]
+  min_visibility_ratio: 0.70 # 最小可见性比例 [0,1]
+
   # ---------- 前沿点过滤 ----------
-  overhead_height_threshold: 0.3    # 头顶高度阈值 [m]
-  overhead_distance_threshold: 3.0  # 头顶水平距离阈值 [m]
+  overhead_height_threshold: 0.3 # 头顶高度阈值 [m]
+  overhead_distance_threshold: 3.0 # 头顶水平距离阈值 [m]
 
   # ---------- 策略开关 ----------
-  use_surface_frontier: false       # 是否使用表面前沿聚类（基于法向量相似性）
-  use_spherical_sampling: false    # 是否使用球扇形均匀采样（false则使用圆周采样）
-  use_viewpoint_clustering: false   # 是否使用增量视点聚类（生成锚点）
+  use_surface_frontier: false # 是否使用表面前沿聚类（基于法向量相似性）
+  use_spherical_sampling: false # 是否使用球扇形均匀采样（false则使用圆周采样）
+  use_viewpoint_clustering: false # 是否使用增量视点聚类（生成锚点）
   # ---------- 表面前沿聚类参数 ----------
-  normal_angle_threshold: 0.785     # 法向量聚类角度阈值 [rad] (~45°)
-  normal_pca_k: 10                  # PCA计算法向量时的邻域点数
+  normal_angle_threshold: 0.785 # 法向量聚类角度阈值 [rad] (~45°)
+  normal_pca_k: 10 # PCA计算法向量时的邻域点数
   # ---------- 球扇形采样参数 ----------
-  sphere_sample_radius: 2.5         # 球扇形采样半径 [m]
-  sphere_theta_max: 0.785           # 最大极角 [rad] (~45°)
-  sphere_sample_num: 20             # 球扇形内采样点数 
+  sphere_sample_radius: 2.5 # 球扇形采样半径 [m]
+  sphere_theta_max: 0.785 # 最大极角 [rad] (~45°)
+  sphere_sample_num: 20 # 球扇形内采样点数
   # ---------- 增量视点聚类参数 ----------
-  vp_cluster_distance: 3.0          # 视点聚类距离阈值 [m]
-  vp_cluster_radius: 5.0            # 视点聚类外接圆半径阈值 [m]
-  vp_cluster_min_dist: 6.0          # 视点需要聚类的最小距离 [m]
+  vp_cluster_distance: 3.0 # 视点聚类距离阈值 [m]
+  vp_cluster_radius: 5.0 # 视点聚类外接圆半径阈值 [m]
+  vp_cluster_min_dist: 6.0 # 视点需要聚类的最小距离 [m]
 
 # ========== HistoryGraph (2Hz) ==========
 history_graph:
-  update_rate: 2.0                  # Hz
-  node_spacing: 3.0                 # 节点间距 [m]
-  max_assoc_dist: 30.0              # 最大关联距离 [m]
+  update_rate: 2.0 # Hz
+  node_spacing: 4.0 # 节点间距 [m]
+  max_assoc_dist: 30.0 # 最大关联距离 [m]
 
 # ========== 探索状态机 (100Hz) ==========
 fsm:
   # 频率
-  fsm_frequency: 100.0              # FSM主循环频率 [Hz]
-  
+  fsm_frequency: 100.0 # FSM主循环频率 [Hz]
+
   # 仿真模式
-  sim_mode: 1                       # 0=Gazebo, 1=Open3D, 2=Real
-  
+  sim_mode: 1 # 0=Gazebo, 1=Open3D, 2=Real
+
   # 起飞参数
-  takeoff_height: 1.0               # 起飞高度 [m]
-  takeoff_timeout: 10.0             # 起飞超时 [s]
-  init_wait_time: 2.0               # 初始化等待时间 [s]
-  
+  takeoff_height: 1.0 # 起飞高度 [m]
+  takeoff_timeout: 10.0 # 起飞超时 [s]
+  init_wait_time: 2.0 # 初始化等待时间 [s]
+
   # 到达判断
-  reach_threshold: 0.5              # 到达最终视点位置阈值 [m]
-  yaw_threshold: 0.3                # 到达最终视点偏航阈值 [rad]
-  
+  reach_threshold: 0.5 # 到达最终视点位置阈值 [m]
+  yaw_threshold: 0.3 # 到达最终视点偏航阈值 [rad]
+
   # 重规划触发
-  replan_check_interval: 1.0        # 重规划检查间隔 [s]
-  waypoint_approach_dist: 1.0       # 航点接近距离 [m]
-  trajectory_timeout: 10.0          # 轨迹超时 [s]
-  coverage_trigger_ratio: 0.3       # 覆盖触发比例
-  
+  replan_check_interval: 1.0 # 重规划检查间隔 [s]
+  waypoint_approach_dist: 1.0 # 航点接近距离 [m]
+  trajectory_timeout: 10.0 # 轨迹超时 [s]
+  coverage_trigger_ratio: 0.3 # 覆盖触发比例
+
   # 碰撞检测
-  collision_check_interval: 0.05    # 碰撞检查间隔 [s]
-  collision_lookahead: 1.0          # 碰撞前瞻时间 [s]
-  
+  collision_check_interval: 0.05 # 碰撞检查间隔 [s]
+  collision_lookahead: 1.0 # 碰撞前瞻时间 [s]
+
   # 视点选择
-  max_viewpoint_distance: 15.0      # 最大视点距离 [m]
-  close_viewpoint_threshold: 5.0    # 近距离视点阈值 [m]
-  
+  max_viewpoint_distance: 15.0 # 最大视点距离 [m]
+  close_viewpoint_threshold: 5.0 # 近距离视点阈值 [m]
+
   # 探索控制
-  auto_start: false                 # 自动开始探索
-  enable_visualization: true        # 启用可视化
-  
+  auto_start: true # 自动开始探索
+  enable_visualization: true # 启用可视化
+
 # ========== 规划管理器 ==========
 manager:
   # 动力学约束
-  max_vel: 1.0                      # 最大速度 [m/s]
-  max_acc: 0.8                      # 最大加速度 [m/s²]
-  max_yaw_rate: 0.25                # 最大偏航角速度 [rad/s]
-  max_yaw_acc: 0.25                 # 最大偏航角加速度 [rad/s²]
-  
+  max_vel: 1.0 # 最大速度 [m/s]
+  max_acc: 0.8 # 最大加速度 [m/s²]
+  max_yaw_rate: 0.25 # 最大偏航角速度 [rad/s]
+  max_yaw_acc: 0.25 # 最大偏航角加速度 [rad/s²]
+
   # 其他参数
-  feasibility_tolerance: 0.05       # 可行性容差
-  polyTraj_piece_length: 1.0        # 多项式轨迹段长度 [m]
-  planning_horizon: 7.5            # 规划视野 [m] 
-  use_distinctive_trajs: true       # 使用多拓扑轨迹搜索
-  
+  feasibility_tolerance: 0.05 # 可行性容差
+  polyTraj_piece_length: 1.0 # 多项式轨迹段长度 [m]
+  planning_horizon: 7.5 # 规划视野 [m]
+  use_distinctive_trajs: true # 使用多拓扑轨迹搜索
+
 # ========== 轨迹优化 ==========
 optimization:
   # 约束点
-  constraint_points_perPiece: 3     # 每段轨迹的约束点数
-  
+  constraint_points_perPiece: 3 # 每段轨迹的约束点数
+
   # 优化权重
-  weight_obstacle: 10000.0          # 障碍物代价权重
-  weight_obstacle_soft: 5000.0      # 软约束障碍物权重
-  weight_feasibility: 10000.0       # 可行性约束权重
-  weight_sqrvariance: 3000.0        # 段长度方差权重
-  weight_time: 50.0                # 时间优化权重
-  
+  weight_obstacle: 10000.0 # 障碍物代价权重
+  weight_obstacle_soft: 5000.0 # 软约束障碍物权重
+  weight_feasibility: 10000.0 # 可行性约束权重
+  weight_sqrvariance: 3000.0 # 段长度方差权重
+  weight_time: 50.0 # 时间优化权重
+
   # 安全距离
-  obstacle_clearance: 0.5          # 硬约束安全距离 [m]
-  obstacle_clearance_soft: 0.8     # 软约束安全距离 [m]
-  
+  obstacle_clearance: 0.5 # 硬约束安全距离 [m]
+  obstacle_clearance_soft: 0.8 # 软约束安全距离 [m]
+
   # 高度保持（用于室内/走廊场景）
-  enable_height_keeping: true       # 是否启用高度保持
-  weight_height: 500000.0           # 高度保持权重
-  height_tolerance: 0.1             # 高度容差 [m]
+  enable_height_keeping: true # 是否启用高度保持
+  weight_height: 500000.0 # 高度保持权重
+  height_tolerance: 0.1 # 高度容差 [m]
 
 # ========== 轨迹服务器 ==========
 traj_server:
-  time_forward: 1.0                 # Yaw规划前向时间 [s]
+  time_forward: 1.0 # Yaw规划前向时间 [s]
 
 # ========== 语义目标提取器 (SemanticTargetExtractor) ==========
 semantic_extractor:
   # ---------- 触发阈值 ----------
-  exploration_threshold: 0.90       # 探索率超过此值触发分析 [0.0-1.0]
-  
+  exploration_threshold: 0.90 # 探索率超过此值触发分析 [0.0-1.0]
+
   # ---------- PCA 分析参数 ----------
-  pca_check_interval: 20            # 每生长多少个点检测一次
-  planarity_threshold: 0.85         # 平面度阈值 (>此值判为墙壁) [0.0-1.0]
-  wall_size_threshold: 1.0          # 大于此尺寸的平面才判为墙壁 [m]
-  
+  pca_check_interval: 20 # 每生长多少个点检测一次
+  planarity_threshold: 0.85 # 平面度阈值 (>此值判为墙壁) [0.0-1.0]
+  wall_size_threshold: 1.0 # 大于此尺寸的平面才判为墙壁 [m]
+
   # ---------- 混合 PCA 参数 ----------
-  local_pca_radius: 0.3             # 局部 PCA 邻域半径 [m]
-  local_planarity_threshold: 0.7    # 局部平面度阈值（低于此值为异常点）
-  hybrid_switch_threshold: 0.6      # 全局平面度低于此值时使用混合分析
-  
+  local_pca_radius: 0.3 # 局部 PCA 邻域半径 [m]
+  local_planarity_threshold: 0.7 # 局部平面度阈值（低于此值为异常点）
+  hybrid_switch_threshold: 0.6 # 全局平面度低于此值时使用混合分析
+
   # ---------- 目标筛选参数 ----------
-  min_voxel_count: 30               # 最小体素数（过滤噪声）
-  max_target_height: 2.5            # 目标最大高度 [m]（过滤天花板/高物体）
-  min_target_height: 0.5            # 目标最小高度 [m]（过滤地面噪声）
-  max_target_width: 2.0             # 目标最大宽度 [m]（过滤宽大物体）
-  
+  min_voxel_count: 30 # 最小体素数（过滤噪声）
+  max_target_height: 2.5 # 目标最大高度 [m]（过滤天花板/高物体）
+  min_target_height: 0.5 # 目标最小高度 [m]（过滤地面噪声）
+  max_target_width: 2.0 # 目标最大宽度 [m]（过滤宽大物体）
+
   # ---------- 相机观测排除 ----------
-  observed_reject_ratio: 0.15       # 边界 occ_observed 比例阈值（超过则排除）
-  
+  observed_reject_ratio: 0.15 # 边界 occ_observed 比例阈值（超过则排除）
+
   # ---------- 自清洁 ----------
-  enable_self_cleaning: true        # 是否将识别的墙面标记为已观测
-  
+  enable_self_cleaning: true # 是否将识别的墙面标记为已观测
+
   # ---------- 更新频率 ----------
-  process_rate: 2.0                 # 分析处理频率 [Hz]
-  vis_rate: 1.0                     # 可视化更新频率 [Hz]
+  process_rate: 2.0 # 分析处理频率 [Hz]
+  vis_rate: 1.0 # 可视化更新频率 [Hz]
 
 # ========== 目标重建模块 (TargetReconstructor) ==========
 target_recon:
@@ -250,88 +245,86 @@ target_recon:
   #   - obstacle_cloud: 使用 rog_map/lidar_topic
   #   - odom: 使用 rog_map/odom_topic
   # 专用话题:
-  target_cloud_topic: "/target_pointcloud"             # 目标点云话题
-  target_detection_topic: "/target_detection/confirmed_targets"  # 目标检测话题
-  
+  target_cloud_topic: "/target_pointcloud" # 目标点云话题
+  target_detection_topic: "/target_detection/confirmed_targets" # 目标检测话题
+
   # ---------- 采样策略 ----------
-  sampling_mode: 3                    # 0=spherical, 1=cylindrical, 2=hemisphere
+  sampling_mode: 3 # 0=spherical, 1=cylindrical, 2=hemisphere
   sampling_strategy: "spherical"
-  
+
   # ---------- 安全走廊参数 ----------
-  corridor_radius: 2.0                # 走廊半径 [m]
-  local_bbox_x: 4.0                   # 以目标中心为中心的搜索区域半尺寸 [m]
-  local_bbox_y: 4.0                   # 以目标中心为中心的搜索区域半尺寸 [m]
-  local_bbox_z: 3.0                   # 以目标中心为中心的搜索区域半尺寸 [m]
-  obstacle_search_radius: 5.0        # 障碍物搜索半径 [m]
-  min_ground_height: 0.2              # 最小飞行高度 [m]
-  
+  corridor_radius: 2.0 # 走廊半径 [m]
+  local_bbox_x: 4.0 # 以目标中心为中心的搜索区域半尺寸 [m]
+  local_bbox_y: 4.0 # 以目标中心为中心的搜索区域半尺寸 [m]
+  local_bbox_z: 3.0 # 以目标中心为中心的搜索区域半尺寸 [m]
+  obstacle_search_radius: 5.0 # 障碍物搜索半径 [m]
+  min_ground_height: 0.2 # 最小飞行高度 [m]
+
   # ---------- 球面采样参数 ----------
   spherical:
-    min_distance: 2.0                 # 最小采样距离 [m]
-    max_distance: 4.0                 # 最大采样距离 [m]
-    num_layers: 5                     # 采样层数
-    min_elevation: 15.0               # 最小仰角 [deg]
-    max_elevation: 60.0               # 最大仰角 [deg]
-    points_per_layer: 8              # 每层采样点数
-  
+    min_distance: 2.0 # 最小采样距离 [m]
+    max_distance: 4.0 # 最大采样距离 [m]
+    num_layers: 5 # 采样层数
+    min_elevation: 15.0 # 最小仰角 [deg]
+    max_elevation: 60.0 # 最大仰角 [deg]
+    points_per_layer: 8 # 每层采样点数
+
   # ---------- 圆柱采样参数 ----------
   cylindrical:
-    radius: 2.5                       # 圆柱半径 [m]
-    min_height: 0.3                   # 最小高度 [m]
-    max_height: 2.0                   # 最大高度 [m]
-    num_height_layers: 5              # 高度层数
-    points_per_circle: 10             # 每圈采样点数
-  
+    radius: 2.5 # 圆柱半径 [m]
+    min_height: 0.3 # 最小高度 [m]
+    max_height: 2.0 # 最大高度 [m]
+    num_height_layers: 5 # 高度层数
+    points_per_circle: 10 # 每圈采样点数
+
   # ---------- 半球采样参数 ----------
   hemisphere:
-    min_distance: 1.5                 # 最小采样距离 [m]
-    max_distance: 3.0                 # 最大采样距离 [m]
-    num_layers: 2                     # 采样层数
-    min_elevation: 20.0               # 最小仰角 [deg]
-    max_elevation: 75.0               # 最大仰角 [deg]
-    points_per_layer: 12              # 每层采样点数
-  
+    min_distance: 1.5 # 最小采样距离 [m]
+    max_distance: 3.0 # 最大采样距离 [m]
+    num_layers: 2 # 采样层数
+    min_elevation: 20.0 # 最小仰角 [deg]
+    max_elevation: 75.0 # 最大仰角 [deg]
+    points_per_layer: 12 # 每层采样点数
+
   # ---------- [新增] 螺旋采样参数 (Multi-Layer Helix, 高度自适应) ----------
   helix:
-    min_distance: 1.0                 # 最近距离 [m]
-    max_distance: 3.0                 # 最远距离 [m]
-    num_revolutions: 3                # 螺旋圈数（绕几圈）
-    points_per_rev: 8                 # 每圈点数
-    height_margin: 0.2                # 高度边距 [m]（相对于目标BBox）
-  
+    min_distance: 1.0 # 最近距离 [m]
+    max_distance: 3.0 # 最远距离 [m]
+    num_revolutions: 3 # 螺旋圈数（绕几圈）
+    points_per_rev: 8 # 每圈点数
+    height_margin: 0.2 # 高度边距 [m]（相对于目标BBox）
+
   # ---------- 滤波参数 ----------
-  safety_margin: 0.3                  # 安全边距 [m]
-  min_visibility_ratio: 0.1           # 最小可见性比例
-  
+  safety_margin: 0.3 # 安全边距 [m]
+  min_visibility_ratio: 0.1 # 最小可见性比例
+
   # ---------- 评分权重 ----------
-  coverage_weight: 0.40               # 覆盖率权重
-  angle_weight: 0.3                  # 角度权重
-  distance_weight: 0.20               # 距离权重
-  safety_weight: 0.3                 # 安全权重
-  normal_weight: 0.30                 # 法向量权重
-  optimal_distance: 2.5               # 最优观测距离 [m]
-  
+  coverage_weight: 0.40 # 覆盖率权重
+  angle_weight: 0.3 # 角度权重
+  distance_weight: 0.20 # 距离权重
+  safety_weight: 0.3 # 安全权重
+  normal_weight: 0.30 # 法向量权重
+  optimal_distance: 2.5 # 最优观测距离 [m]
+
   # ---------- Octree参数 ----------
-  octree_resolution: 0.1              # Octree分辨率 [m]
-  octree_hit_threshold: 3             # 重建质量阈值
-  
+  octree_resolution: 0.1 # Octree分辨率 [m]
+  octree_hit_threshold: 3 # 重建质量阈值
+
   # ---------- TSP优化 ----------
-  max_2opt_iterations: 100            # 2-opt最大迭代次数
-  
+  max_2opt_iterations: 100 # 2-opt最大迭代次数
+
   # ---------- 重建完成判定 ----------
-  coverage_complete_threshold: 0.85   # 覆盖率完成阈值
-  max_viewpoints: 10                  # 最大视点数
-  min_viewpoints: 6                   # 最小视点数
-  
+  coverage_complete_threshold: 0.85 # 覆盖率完成阈值
+  max_viewpoints: 10 # 最大视点数
+  min_viewpoints: 6 # 最小视点数
+
   # ---------- 到达判定 ----------
-  position_tolerance: 0.3             # 位置容差 [m]
-  yaw_tolerance: 0.15                 # Yaw容差 [rad]
-  
+  position_tolerance: 0.3 # 位置容差 [m]
+  yaw_tolerance: 0.15 # Yaw容差 [rad]
+
   # ---------- 更新频率 ----------
-  update_rate: 2.0                    # 视点优化更新频率 [Hz]
+  update_rate: 2.0 # 视点优化更新频率 [Hz]
 
 extrin_calib:
-  Rcl: [0, 1, 0,
-        0, 0, -1,
-        -1, 0, 0]
+  Rcl: [0, 1, 0, 0, 0, -1, -1, 0, 0]
   Pcl: [0.0, -0.075, -0.05]

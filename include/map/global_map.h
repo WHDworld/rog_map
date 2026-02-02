@@ -50,6 +50,8 @@ struct GlobalMapConfig {
     float fov_v_deg = 60.0f;
     float camera_max_dist = 5.0f;
     float camera_min_dist = 0.3f;
+    float camera_ray_step = 0.1f;          // 射线步进距离
+    float camera_angular_res_deg = 3.0f;   // 角分辨率（度）
     
     // 前沿参数
     float frontier_height_min = 0.9f;
@@ -61,6 +63,13 @@ struct GlobalMapConfig {
     
     // 膨胀地图配置
     InflationConfig inflation_config;
+    
+    // Log-Odds 概率更新参数（参考 FUEL sdf_map）
+    float p_hit = 0.70f;       // 命中概率
+    float p_miss = 0.35f;      // 未命中概率
+    float p_min = 0.12f;       // 概率下限
+    float p_max = 0.97f;       // 概率上限
+    float p_occ = 0.80f;       // 占据判定阈值
     
     // ESDF配置
     ESDFConfig esdf_config;
@@ -126,6 +135,11 @@ public:
     bool isInGlobalMapRange(const VoxelIndex& idx) const;
     
     /**
+     * @brief 将超出范围的点裁剪到地图边界（参考 FUEL closetPointInMap）
+     */
+    Position clipToMapBoundary(const Position& pt, const Position& sensor_pos) const;
+    
+    /**
      * @brief 位置与索引转换
      */
     void posToIndex(const Position& pos, VoxelIndex& idx) const;
@@ -162,12 +176,21 @@ public:
      * @brief 从相机更新视觉状态
      */
     void updateVoxelStateFromCamera(const VoxelIndex& idx, bool is_visited);
+        
+    // ==================== LiDAR 点云处理（从 LocalMap 移植）====================
     
     /**
-     * @brief 批量更新占据状态
+     * @brief 插入点云并更新地图（直接射线投射）
+     * @param cloud LiDAR 点云
+     * @param sensor_pos 传感器位置
      */
-    void updateOccupiedVoxels(const std::vector<VoxelIndex>& occupied_indices,
-                              const std::vector<VoxelIndex>& free_indices);
+    void insertPointCloud(const sensor_msgs::PointCloud2& cloud, const Position& sensor_pos);
+    
+    /**
+     * @brief 统一的体素几何状态更新接口
+     * 同时更新 voxels_ 哈希表和子网格列表，保证同步
+     */
+    void setVoxelGeoState(const VoxelIndex& idx, VoxelState new_geo);
     
     // ==================== 子网格接口 ====================
     
@@ -464,6 +487,10 @@ protected:
     Position local_map_origin_;
     Position local_map_size_ = Position(20.0f, 20.0f, 6.0f);
     
+    // LiDAR 射线投射参数（从 LocalMap 移植）
+    float raycast_step_ = 0.15f;
+    int lidar_downsample_filter_ = 3;
+    
     // 机器人状态
     RobotState robot_state_;
     
@@ -478,6 +505,47 @@ protected:
     ros::Publisher camera_frustum_pub_;
     ros::Publisher inflation_pub_;
     ros::Publisher esdf_pub_;
+    
+    /**
+     * @brief 射线投射确认占据（从 LocalMap 移植，内部使用）
+     * @deprecated 被 Log-Odds 机制替代
+     */
+    bool raycastWithConfirm(const Position& start, const Position& end,
+                            const std::unordered_set<VoxelIndex, VoxelIndexHash>& candidate_occupied,
+                            std::unordered_set<VoxelIndex, VoxelIndexHash>& confirmed_occupied);
+    
+    // ==================== Log-Odds 概率更新 ====================
+    std::unordered_map<VoxelIndex, float, VoxelIndexHash> occupancy_buffer_;  // Log-Odds 概率缓冲
+    float prob_hit_log_ = 0.0f;      // logit(p_hit)
+    float prob_miss_log_ = 0.0f;     // logit(p_miss)
+    float clamp_min_log_ = 0.0f;     // logit(p_min)
+    float clamp_max_log_ = 0.0f;     // logit(p_max)
+    float min_occupancy_log_ = 0.0f; // logit(p_occ)
+    float unknown_flag_ = 0.01f;     // 未知标志
+    
+    // 帧内缓存（避免重复处理）
+    std::unordered_map<VoxelIndex, int8_t, VoxelIndexHash> frame_cache_;  // 本帧更新缓存
+    int raycast_frame_id_ = 0;  // 当前帧 ID
+    
+    /**
+     * @brief 设置帧内缓存占据状态
+     */
+    void setCacheOccupancy(const VoxelIndex& idx, int8_t occ);
+    
+    /**
+     * @brief 射线投射标记 miss（沿途所有体素）
+     */
+    void raycastAndMarkMiss(const Position& start, const Position& end, const VoxelIndex& end_idx);
+    
+    /**
+     * @brief 应用帧内缓存到概率缓冲区
+     */
+    void applyFrameCache();
+    
+    /**
+     * @brief 状态变化时更新子网格统计
+     */
+    void updateSubGridOnStateChange(const VoxelIndex& idx, VoxelState old_geo, VoxelState new_geo);
     
     // 辅助函数
     bool isInGlobalRange(const VoxelIndex& idx, 

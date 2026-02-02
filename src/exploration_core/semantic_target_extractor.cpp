@@ -255,6 +255,10 @@ void SemanticTargetExtractor::analyzeSubGrid(star_mvf::SubGrid& sg) {
     int merged_count = 0;
     int invalid_count = 0;
     
+    // [调试] 打印子网格信息
+    ROS_INFO("[SemanticAnalyze] SubGrid: occ_unobserved=%zu, occupied_count=%d",
+             sg.occ_unobserved_list_.size(), sg.occupied_count);
+        
     // 遍历该子网格内所有未观测占据体素
     for (const auto& seed : sg.occ_unobserved_list_) {
         seed_count++;
@@ -300,12 +304,10 @@ void SemanticTargetExtractor::analyzeSubGrid(star_mvf::SubGrid& sg) {
                 new_target_count++;
                 
                 // 详细打印新目标
-                // ROS_INFO("  [New Target %d] voxels=%zu, centroid=(%.2f,%.2f,%.2f), "
-                //          "height=%.2f, width=%.2f",
-                //          assigned_id,
-                //          cluster.voxels.size(),
-                //          cluster.centroid.x(), cluster.centroid.y(), cluster.centroid.z(),
-                //          cluster.getHeight(), cluster.getWidth());
+                ROS_INFO("[SemanticAnalyze] New Target %d: voxels=%zu, centroid=(%.2f,%.2f,%.2f)",
+                         assigned_id,
+                         cluster.voxels.size(),
+                         cluster.centroid.x(), cluster.centroid.y(), cluster.centroid.z());
             }
         } else {
             invalid_count++;
@@ -320,8 +322,17 @@ void SemanticTargetExtractor::analyzeSubGrid(star_mvf::SubGrid& sg) {
         }
     }
     
-    // ROS_INFO("  SubGrid stats: seeds=%d, skipped=%d, walls=%d, new=%d, merged=%d, invalid=%d",
-    //          seed_count, skipped_assigned, wall_count, new_target_count, merged_count, invalid_count);
+    // 打印分析统计
+    if (seed_count > 0) {
+        ROS_INFO("[SemanticAnalyze] Stats: seeds=%d, walls=%d, new_targets=%d, merged=%d, invalid=%d",
+                 seed_count, wall_count, new_target_count, merged_count, invalid_count);
+        
+        // [调试] 如果有 invalid，打印配置参数
+        if (invalid_count > 0) {
+            ROS_WARN_THROTTLE(5.0, "[SemanticAnalyze] Config: min_voxel=%d, height=[%.2f,%.2f]",
+                     config_.min_voxel_count, config_.min_target_height, config_.max_target_height);
+        }
+    }
 }
 
 // ==================== 增量更新函数 ====================
@@ -567,6 +578,17 @@ bool SemanticTargetExtractor::growRegion(const star_mvf::VoxelIndex& seed,
         }
         
         cluster.is_valid = isValidTarget(cluster);
+        
+        // [调试] 打印验证失败原因
+        if (!cluster.is_valid) {
+            float height = cluster.getHeight();
+            float width = cluster.getWidth();
+            ROS_WARN_THROTTLE(2.0, "[GrowRegion] Invalid: voxels=%d, h=%.2f(need:%.2f-%.2f), w=%.2f",
+                     count, height, config_.min_target_height, config_.max_target_height, width);
+        }
+    } else {
+        // [调试] 体素数量太少
+        ROS_DEBUG_THROTTLE(2.0, "[GrowRegion] Too few voxels: %d < %d", count, config_.min_voxel_count);
     }
     
     return cluster.is_valid;

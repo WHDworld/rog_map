@@ -178,8 +178,8 @@ double HistoryGraph::evaluateViewpointCost(const Eigen::Vector3d& curr_pos,
 
   double euclidean_dist = (curr_pos - vp_pos).norm();
 
-  // 1. 近场快速通道 (< 5m)
-  if (euclidean_dist < 5.0) {
+  // 1. 近场快速通道 (< 10m) [优化: 扩大阈值解决绕行问题]
+  if (euclidean_dist < 10.0) {
     // A. 射线检测 [Fix]: strict collision check
     if (global_map_ && global_map_->isPathSafe(curr_pos.cast<float>(), vp_pos.cast<float>(), config_.uav_radius + 0.15)) {
       if (out_path) *out_path = {curr_pos, vp_pos};
@@ -189,16 +189,22 @@ double HistoryGraph::evaluateViewpointCost(const Eigen::Vector3d& curr_pos,
     auto direct_path = runLocalAStarInternal(curr_pos, vp_pos);
     if (!direct_path.empty()) {
       double len = calculatePathLengthInternal(direct_path);
-      if (len < 10.0) {
+      if (len < euclidean_dist * 1.5) {  // A* 路径不超过直线距离 1.5 倍
         if (out_path) *out_path = shortcutPathInternal(curr_pos, direct_path);
         return len;
       }
     }
+    // 近场失败，继续尝试远场通道
   }
 
   // 2. 远场通道
-  if (nodes_.find(anchor_node_id) == nodes_.end()) return std::numeric_limits<double>::max();
+  if (nodes_.find(anchor_node_id) == nodes_.end()) {
+    ROS_WARN_THROTTLE(1.0, "[EvalVP] BLOCKED: anchor %d not in nodes_", anchor_node_id);
+    return std::numeric_limits<double>::max();
+  }
   if (cached_dijkstra.dists.find(anchor_node_id) == cached_dijkstra.dists.end()) {
+    ROS_WARN_THROTTLE(1.0, "[EvalVP] BLOCKED: anchor %d not in dijkstra (start=%d)", 
+                      anchor_node_id, cached_dijkstra.start_node_id);
     return std::numeric_limits<double>::max();
   }
 
@@ -214,7 +220,11 @@ double HistoryGraph::evaluateViewpointCost(const Eigen::Vector3d& curr_pos,
     // [Fixed] Relaxed A* for viewpoint evaluation (User Request)
     // "Just a simple A* path is enough, not necessarily safe obstacle-avoidance path"
     exit_path = runLocalAStarInternal(anchor_pos, vp_pos, true); 
-    if (exit_path.empty()) return std::numeric_limits<double>::max();
+    if (exit_path.empty()) {
+      ROS_WARN_THROTTLE(1.0, "[EvalVP] BLOCKED: A* from anchor(%d) (%.2f,%.2f) to vp (%.2f,%.2f) failed",
+                        anchor_node_id, anchor_pos.x(), anchor_pos.y(), vp_pos.x(), vp_pos.y());
+      return std::numeric_limits<double>::max();
+    }
   }
 
   double cost_exit = calculatePathLengthInternal(exit_path);

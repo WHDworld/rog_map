@@ -212,16 +212,17 @@ struct SubGrid {
     std::vector<VoxelIndex> occ_unobserved_list_;
     std::unordered_map<VoxelIndex, int, VoxelIndexHash> occ_unobserved_map_;
     
-    // ==================== 4. 语义目标提取状态机 (SemanticTargetExtractor 使用) ====================
     /**
      * @brief 语义分析状态
      * UNKNOWN: 未探索
      * ACCUMULATING: 正在建图（有体素但探索未完成）
+     * READY: 已达到探索率阈值，等待分析
      * ANALYZED: 已分析完成（永不再处理）
      */
     enum class SemanticStatus {
         UNKNOWN,       // 未探索
         ACCUMULATING,  // 正在建图
+        READY,         // 等待分析
         ANALYZED       // 已分析完成
     };
     

@@ -24,7 +24,7 @@
 #include <atomic>
 #include <geometry_msgs/PoseStamped.h>
 #include <sensor_msgs/Image.h>
-#include "map/local_map.h"
+// LocalMap 已移除：射线投射直接在 GlobalMap 中处理
 #include "map/global_map.h"
 
 namespace star_mvf {
@@ -73,8 +73,7 @@ struct MapManagerConfig {
     bool visualization_en = true;
     Position visualization_range = Position(20.0f, 20.0f, 6.0f);
     
-    // 子模块配置
-    LocalMapConfig local_config;
+    // 子模块配置（LocalMapConfig 已移除）
     GlobalMapConfig global_config;
 };
 
@@ -114,11 +113,7 @@ public:
     GlobalMap::Ptr getGlobalMap() { return global_map_; }
     GlobalMap::ConstPtr getGlobalMap() const { return global_map_; }
     
-    /**
-     * @brief 获取局部地图
-     */
-    LocalMap::Ptr getLocalMap() { return local_map_; }
-    LocalMap::ConstPtr getLocalMap() const { return local_map_; }
+    // LocalMap 接口已移除：射线投射直接在 GlobalMap 中处理
     
     // ==================== 统一查询接口（委托给GlobalMap） ====================
     
@@ -270,8 +265,7 @@ protected:
     ros::NodeHandle nh_private_;
     MapManagerConfig config_;
     
-    // 子模块
-    LocalMap::Ptr local_map_;
+    // 子模块（LocalMap 已移除）
     GlobalMap::Ptr global_map_;
     
     // ROS接口
@@ -306,8 +300,7 @@ protected:
     void depthCallback(const sensor_msgs::ImageConstPtr& msg); // [Added]
     void vizTimerCallback(const ros::TimerEvent& event);
     
-    // 同步局部地图到全局地图
-    void syncLocalToGlobal();
+    // syncLocalToGlobal 已移除：射线投射直接在 GlobalMap 中处理
     
 };
 
