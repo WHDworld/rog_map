@@ -77,7 +77,7 @@ void GlobalMap::initFromROS(const std::string& name_space) {
     tan_half_fov_v_ = std::tan(fov_v_rad_ / 2.0f);
     
     // 前沿参数
-    nh_.param(name_space + "/global_map/frontier_height_min", config_.frontier_height_min, 0.9f);
+    nh_.param(name_space + "/global_map/frontier_height_min", config_.frontier_height_min, 0.2f);
     nh_.param(name_space + "/global_map/frontier_height_max", config_.frontier_height_max, 2.3f);
     
     // 膨胀配置
@@ -93,14 +93,14 @@ void GlobalMap::initFromROS(const std::string& name_space) {
              config_.inflation_config.inflation_radius);
     
     // LiDAR 射线投射参数（从 LocalMap 移植）
-    nh_.param(name_space + "/local_map/raycast_step", raycast_step_, 0.15f);
+    nh_.param(name_space + "/local_map/raycast_step", raycast_step_, 0.1f);
     nh_.param(name_space + "/local_map/lidar_downsample_filter", lidar_downsample_filter_, 3);
     ROS_INFO("[GlobalMap] LiDAR raycast: step=%.2f, downsample=%d", 
              raycast_step_, lidar_downsample_filter_);
     
     // Log-Odds 概率更新参数
-    nh_.param(name_space + "/global_map/p_hit", config_.p_hit, 0.70f);
-    nh_.param(name_space + "/global_map/p_miss", config_.p_miss, 0.35f);
+    nh_.param(name_space + "/global_map/p_hit", config_.p_hit, 0.75f);
+    nh_.param(name_space + "/global_map/p_miss", config_.p_miss, 0.45f);
     nh_.param(name_space + "/global_map/p_min", config_.p_min, 0.12f);
     nh_.param(name_space + "/global_map/p_max", config_.p_max, 0.97f);
     nh_.param(name_space + "/global_map/p_occ", config_.p_occ, 0.80f);
@@ -488,6 +488,29 @@ void GlobalMap::updateVoxelStateFromCamera(const VoxelIndex& encoded_pos, bool i
     }
 }
 
+void GlobalMap::setVoxelVisitedDirect(const VoxelIndex& idx, bool is_visited) {
+    if (!isInGlobalMapRange(idx)) return;
+    
+    std::lock_guard<std::mutex> lock(map_mutex_);
+    
+    auto it = voxels_.find(idx);
+    if (it != voxels_.end()) {
+        VoxelState& state = it->second;
+        bool was_visited = VoxelStateBits::isVisited(state);
+        VoxelStateBits::setVisited(state, is_visited);
+        
+        // 如果是 OCCUPIED 体素且刚被标记为 VISITED，从未观测列表移除
+        if (is_visited && !was_visited && VoxelStateBits::isOccupied(state)) {
+            SubGridIndex sg_idx;
+            voxelToSubGrid(idx, sg_idx);
+            int linear_idx = subGridToLinearIndex(sg_idx);
+            if (linear_idx >= 0 && linear_idx < static_cast<int>(sub_grids_.size())) {
+                sub_grids_[linear_idx].markOccObserved(idx);
+            }
+        }
+    }
+}
+
 // ==================== 子网格操作 ====================
 
 void GlobalMap::posToSubGrid(const Position& pos, SubGridIndex& sg_idx) const {
@@ -561,7 +584,8 @@ void GlobalMap::extractGlobalFrontierIncremental() {
     std::lock_guard<std::mutex> lock(map_mutex_);
     
     // 只处理脏子网格
-    for (int sg_id : dirty_subgrids_) {
+    for (int sg_id : dirty_subgrids_) 
+    {
         if (sg_id < 0 || sg_id >= static_cast<int>(sub_grids_.size())) continue;
         
         SubGrid& sg = sub_grids_[sg_id];
@@ -575,20 +599,6 @@ void GlobalMap::extractGlobalFrontierIncremental() {
 
         // 获取当前探索率
         float exploration_rate = sg.getExplorationRate();
-                
-        // [DEBUG] 一致性检查：统计 voxels_ 中实际的 Free 体素数量
-        size_t actual_free_in_voxels = 0;
-        for (int k = sg.global_min_idx.z; k <= sg.global_max_idx.z; ++k) {
-            for (int j = sg.global_min_idx.y; j <= sg.global_max_idx.y; ++j) {
-                for (int i = sg.global_min_idx.x; i <= sg.global_max_idx.x; ++i) {
-                    VoxelIndex idx(i, j, k);
-                    auto it = voxels_.find(idx);
-                    if (it != voxels_.end() && VoxelStateBits::isFree(it->second)) {
-                        actual_free_in_voxels++;
-                    }
-                }
-            }
-        }
         
         // ==================== 策略分支 ====================
         
@@ -675,11 +685,12 @@ void GlobalMap::extractGlobalFrontierIncremental() {
         
         // [新增] 语义分析触发：探索率达到阈值且未分析过
         if (exploration_rate >= semantic_exploration_threshold_ && 
-            sg.semantic_status_ == SubGrid::SemanticStatus::UNKNOWN) {
+            (sg.semantic_status_ == SubGrid::SemanticStatus::UNKNOWN ||
+             sg.semantic_status_ == SubGrid::SemanticStatus::ACCUMULATING)) {
             ready_for_analysis_subgrids_.insert(sg_id);
             sg.semantic_status_ = SubGrid::SemanticStatus::READY;
-            ROS_INFO_THROTTLE(2.0, "[GlobalMap] SubGrid %d ready for semantic analysis (exploration_rate=%.2f)", 
-                              sg_id, exploration_rate);
+            ROS_INFO("[GlobalMap] SubGrid %d ready for semantic analysis (exploration_rate=%.2f), occ_unobserved_list_ size: %d", 
+                              sg_id, exploration_rate, sg.occ_unobserved_list_.size());
         }
     }
     
@@ -1868,10 +1879,6 @@ void GlobalMap::updateSubGridOnStateChange(const VoxelIndex& idx, VoxelState old
         Position voxel_pos = indexToPos(idx);
         float height_thresh = config_.ground_height + 0.2f;
         
-        // [调试] 统计高度过滤
-        static int total_occ = 0, above_ground = 0, below_ground = 0;
-        total_occ++;
-        
         if (voxel_pos.z() > height_thresh) 
         {
             auto it = voxels_.find(idx);
@@ -1879,18 +1886,8 @@ void GlobalMap::updateSubGridOnStateChange(const VoxelIndex& idx, VoxelState old
             if(!is_visited)
             {
                 sg.addOccUnobserved(idx);
-                above_ground++;
             }
         } 
-        else 
-        {
-            below_ground++;
-        }
-        
-        if (total_occ % 500 == 0) {
-            ROS_INFO_THROTTLE(3.0, "[OccUnobserved] total_occ=%d, above=%d, below=%d, thresh=%.2f, sg_list=%zu", 
-                     total_occ, above_ground, below_ground, height_thresh, sg.occ_unobserved_list_.size());
-        }
     }
 }
 
@@ -1947,44 +1944,6 @@ bool GlobalMap::raycastWithConfirm(const Position& start, const Position& end,
     }
     
     return true;
-}
-
-void GlobalMap::setVoxelGeoState(const VoxelIndex& idx, VoxelState new_geo) {
-    std::lock_guard<std::mutex> lock(map_mutex_);
-    
-    VoxelState& state = voxels_[idx];
-    VoxelState old_geo = VoxelStateBits::getGeoState(state);
-    
-    if (old_geo == new_geo) return;  // 无变化
-    
-    VoxelStateBits::setGeoState(state, new_geo);
-    
-    // 更新子网格列表（保证同步）
-    SubGridIndex sg_idx;
-    voxelToSubGrid(idx, sg_idx);
-    int linear_idx = subGridToLinearIndex(sg_idx);
-    
-    if (linear_idx >= 0 && linear_idx < static_cast<int>(sub_grids_.size())) {
-        SubGrid& sg = sub_grids_[linear_idx];
-        dirty_subgrids_.insert(linear_idx);
-        sg.frontier_dirty = true;
-        
-        // 移除旧状态
-        if (old_geo == VoxelStateBits::GEO_UNKNOWN) {
-            sg.removeUnknownVoxel(idx);
-        } else if (old_geo == VoxelStateBits::GEO_FREE) {
-            sg.removeFreeVoxel(idx);
-        } else if (old_geo == VoxelStateBits::GEO_OCCUPIED) {
-            sg.occupied_count--;
-        }
-        
-        // 添加新状态
-        if (new_geo == VoxelStateBits::GEO_FREE) {
-            sg.addFreeVoxel(idx);
-        } else if (new_geo == VoxelStateBits::GEO_OCCUPIED) {
-            sg.occupied_count++;
-        }
-    }
 }
 
 }  // namespace star_mvf

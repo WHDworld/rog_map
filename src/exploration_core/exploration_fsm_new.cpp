@@ -263,8 +263,8 @@ void ExplorationFSMNew::transitState(ExplorationState new_state, const std::stri
         default: new_state_str = "UNKNOWN"; break;
     }
     
-    ROS_INFO("[FSM_NEW] TRANSIT: %s -> %s (%s)", 
-             old_state_str.c_str(), new_state_str.c_str(), reason.c_str());
+    // ROS_INFO("[FSM_NEW] TRANSIT: %s -> %s (%s)", 
+    //          old_state_str.c_str(), new_state_str.c_str(), reason.c_str());
     
     // [新增] 速度缩放处理：重建任务使用 0.5 倍速，探索任务使用 1.0 倍速
     bool is_recon_state = (new_state == ExplorationState::RECON_PLAN || 

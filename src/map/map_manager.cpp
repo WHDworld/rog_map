@@ -148,12 +148,12 @@ void MapManager::lidarCallback(const sensor_msgs::PointCloud2ConstPtr& msg) {
     auto t3 = ros::Time::now();
     
     // 性能日志（每10帧输出一次）
-    if (lidar_count % 100 == 0) {
-        ROS_INFO_THROTTLE(2.0, "[MapManager] LiDAR #%d: insert=%.1fms, frontier=%.1fms",
-                 lidar_count,
-                 (t2 - t1).toSec() * 1000.0,
-                 (t3 - t2).toSec() * 1000.0);
-    }
+    // if (lidar_count % 100 == 0) {
+    //     ROS_INFO_THROTTLE(2.0, "[MapManager] LiDAR #%d: insert=%.1fms, frontier=%.1fms",
+    //              lidar_count,
+    //              (t2 - t1).toSec() * 1000.0,
+    //              (t3 - t2).toSec() * 1000.0);
+    // }
 }
 
 void MapManager::odomCallback(const nav_msgs::OdometryConstPtr& msg) {

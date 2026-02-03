@@ -54,7 +54,7 @@ struct GlobalMapConfig {
     float camera_angular_res_deg = 3.0f;   // 角分辨率（度）
     
     // 前沿参数
-    float frontier_height_min = 0.9f;
+    float frontier_height_min = 0.2f;
     float frontier_height_max = 2.3f;
     float ground_height = 0.0f;  // 地面高度，低于此高度+0.2m的体素不参与语义分析
     
@@ -124,10 +124,10 @@ public:
         return ready_for_analysis_subgrids_; 
     }
     void markSubGridAnalyzed(int linear_idx);
-    void setSemanticExplorationThreshold(float threshold) { 
-        semantic_exploration_threshold_ = threshold; 
+    void setSemanticExplorationThreshold(float exploration_threshold)
+    {
+        semantic_exploration_threshold_ = exploration_threshold;
     }
-    
     /**
      * @brief 检查位置是否在地图范围内
      */
@@ -176,6 +176,11 @@ public:
      * @brief 从相机更新视觉状态
      */
     void updateVoxelStateFromCamera(const VoxelIndex& idx, bool is_visited);
+
+    /**
+     * @brief 直接设置体素 VISITED 状态 (输入为 Grid Index)
+     */
+    void setVoxelVisitedDirect(const VoxelIndex& idx, bool is_visited);
         
     // ==================== LiDAR 点云处理（从 LocalMap 移植）====================
     
@@ -185,15 +190,7 @@ public:
      * @param sensor_pos 传感器位置
      */
     void insertPointCloud(const sensor_msgs::PointCloud2& cloud, const Position& sensor_pos);
-    
-    /**
-     * @brief 统一的体素几何状态更新接口
-     * 同时更新 voxels_ 哈希表和子网格列表，保证同步
-     */
-    void setVoxelGeoState(const VoxelIndex& idx, VoxelState new_geo);
-    
-    // ==================== 子网格接口 ====================
-    
+            
     /**
      * @brief 位置到子网格转换
      */
@@ -431,6 +428,7 @@ public:
     Quaternion current_cam_rot_ = Quaternion::Identity();
     bool enable_camera_map_ = true;
     
+    float getGroundHeight() const { return config_.ground_height; }
 protected:
     // 配置
     GlobalMapConfig config_;
@@ -461,7 +459,7 @@ protected:
     
     // 语义目标提取索引 (探索率达标但尚未分析的子网格)
     std::unordered_set<int> ready_for_analysis_subgrids_;
-    float semantic_exploration_threshold_ = 0.9f;  // 探索率阈值
+    float semantic_exploration_threshold_ = 0.8f;  // 探索率阈值
     
     // 地图索引范围
     VoxelIndex global_min_idx_;

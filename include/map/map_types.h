@@ -345,27 +345,6 @@ struct SubGrid {
         removeOccUnobserved(idx);
     }
     
-    /**
-     * @brief 检查体素是否在未观测占据列表中
-     */
-    bool isOccUnobserved(const VoxelIndex& idx) const {
-        return occ_unobserved_map_.find(idx) != occ_unobserved_map_.end();
-    }
-    
-    /**
-     * @brief 检查体素是否在FREE列表中
-     */
-    bool isFreeVoxel(const VoxelIndex& idx) const {
-        return free_to_list_pos_.find(idx) != free_to_list_pos_.end();
-    }
-    
-    /**
-     * @brief 检查体素是否在UNKNOWN列表中
-     */
-    bool isUnknownVoxel(const VoxelIndex& idx) const {
-        return unknown_to_list_pos_.find(idx) != unknown_to_list_pos_.end();
-    }
-    
     float getExplorationRate() const {
         if (total_voxels == 0) return 0.0f;
         int explored = free_count + occupied_count;

@@ -35,9 +35,6 @@ void SemanticTargetExtractor::init(ros::NodeHandle& nh, star_mvf::GlobalMap* glo
     vis_timer_ = nh_.createTimer(
         ros::Duration(1.0 / config_.vis_rate),
         &SemanticTargetExtractor::visualizationTimerCallback, this);
-    
-    // ROS_INFO("[SemanticTargetExtractor] Initialized: process_rate=%.1fHz, vis_rate=%.1fHz, exploration_threshold=%.2f",
-    //          config_.process_rate, config_.vis_rate, config_.exploration_threshold);
 }
 
 void SemanticTargetExtractor::loadConfig(const ros::NodeHandle& nh, const std::string& ns) {
@@ -254,11 +251,7 @@ void SemanticTargetExtractor::analyzeSubGrid(star_mvf::SubGrid& sg) {
     int new_target_count = 0;
     int merged_count = 0;
     int invalid_count = 0;
-    
-    // [调试] 打印子网格信息
-    ROS_INFO("[SemanticAnalyze] SubGrid: occ_unobserved=%zu, occupied_count=%d",
-             sg.occ_unobserved_list_.size(), sg.occupied_count);
-        
+            
     // 遍历该子网格内所有未观测占据体素
     for (const auto& seed : sg.occ_unobserved_list_) {
         seed_count++;
@@ -284,7 +277,8 @@ void SemanticTargetExtractor::analyzeSubGrid(star_mvf::SubGrid& sg) {
             pruned_wall_count_++;
             wall_count++;
             assigned_id = -1;  // 墙
-        } else if (is_target && cluster.is_valid) {
+        } 
+        else if (is_target && cluster.is_valid) {
             if (!adjacent_target_ids.empty()) {
                 // 至少有一个相邻目标
                 int first_target_id = *adjacent_target_ids.begin();
@@ -298,7 +292,8 @@ void SemanticTargetExtractor::analyzeSubGrid(star_mvf::SubGrid& sg) {
                 mergeToTarget(first_target_id, cluster);
                 assigned_id = first_target_id;
                 merged_count++;
-            } else {
+            } 
+            else {
                 // 创建新目标
                 assigned_id = createNewTarget(cluster);
                 new_target_count++;
@@ -309,7 +304,8 @@ void SemanticTargetExtractor::analyzeSubGrid(star_mvf::SubGrid& sg) {
                          cluster.voxels.size(),
                          cluster.centroid.x(), cluster.centroid.y(), cluster.centroid.z());
             }
-        } else {
+        } 
+        else {
             invalid_count++;
             // 注意：小簇体素保持 assigned_id = -2（未分配），等待后续重新聚类
         }
@@ -326,12 +322,6 @@ void SemanticTargetExtractor::analyzeSubGrid(star_mvf::SubGrid& sg) {
     if (seed_count > 0) {
         ROS_INFO("[SemanticAnalyze] Stats: seeds=%d, walls=%d, new_targets=%d, merged=%d, invalid=%d",
                  seed_count, wall_count, new_target_count, merged_count, invalid_count);
-        
-        // [调试] 如果有 invalid，打印配置参数
-        if (invalid_count > 0) {
-            ROS_WARN_THROTTLE(5.0, "[SemanticAnalyze] Config: min_voxel=%d, height=[%.2f,%.2f]",
-                     config_.min_voxel_count, config_.min_target_height, config_.max_target_height);
-        }
     }
 }
 
@@ -509,6 +499,10 @@ bool SemanticTargetExtractor::growRegion(const star_mvf::VoxelIndex& seed,
     std::vector<star_mvf::VoxelIndex> neighbors;
     neighbors.reserve(6);
     
+    // [贪婪墙生长] 用于记录"上一次确认为墙的边界索引"
+    int last_wall_boundary_idx = -1;  // -1 表示尚未检测到墙
+    bool was_wall_last_check = false;
+    
     while (!q.empty()) {
         star_mvf::VoxelIndex curr = q.front();
         q.pop();
@@ -521,34 +515,55 @@ bool SemanticTargetExtractor::growRegion(const star_mvf::VoxelIndex& seed,
         
         updatePCAStats(pos, sum_pos, sum_sq, count);
         
-        // Early Rejection 检查
+        // 定期 PCA 检查
         if (count > 0 && count % config_.pca_check_interval == 0) {
             computePCAFeatures(sum_pos, sum_sq, count, cluster.pca_features);
             
-            if (isWallOrFloor(cluster.pca_features, cluster)) {
-                cluster.is_wall = true;
-                cluster.is_valid = false;
-                
-                // 将队列中剩余的体素也加入 cluster，确保它们都被标记为墙
-                while (!q.empty()) {
-                    cluster.voxels.push_back(q.front());
-                    q.pop();
+            float max_ext = cluster.getMaxExtent();
+            ROS_INFO("[PCA Check] count=%d, planarity=%.3f, curvature=%.3f, max_extent=%.2f",
+                     count, cluster.pca_features.planarity, cluster.pca_features.curvature, max_ext);
+            
+            bool is_wall_now = isWallOrFloor(cluster.pca_features, cluster);
+            
+            if (is_wall_now) {
+                // 检测到墙 → 记录边界，但继续生长
+                last_wall_boundary_idx = static_cast<int>(cluster.voxels.size()) - 1;
+                was_wall_last_check = true;
+            } else {
+                // 检测到非墙
+                if (was_wall_last_check && last_wall_boundary_idx >= 0) {
+                    // 之前是墙，现在不是 → 将 [0, last_wall_boundary] 标记为已观测墙壁
+                    ROS_INFO("[GreedyWall] Wall->NonWall transition at idx=%d. Marking wall segment.", last_wall_boundary_idx);
+                    for (int i = 0; i <= last_wall_boundary_idx; ++i) {
+                        const auto& wall_voxel = cluster.voxels[i];
+                        global_map_->updateVoxelStateFromCamera(wall_voxel, true);
+                    }
+                    // 从 cluster 中移除已标记的墙体素，将剩余部分作为新的潜在目标继续分析
+                    std::vector<star_mvf::VoxelIndex> remaining_voxels(
+                        cluster.voxels.begin() + last_wall_boundary_idx + 1, cluster.voxels.end());
+                    cluster.voxels = std::move(remaining_voxels);
+                    
+                    // 重置状态
+                    last_wall_boundary_idx = -1;
+                    was_wall_last_check = false;
+                    
+                    // 如果剩余体素太少，可能不值得继续
+                    if (static_cast<int>(cluster.voxels.size()) < config_.min_voxel_count) {
+                        cluster.is_valid = false;
+                        return false;
+                    }
                 }
-                return false;
             }
         }
         
         getNeighbors6(curr, neighbors);
         
         for (const auto& nei : neighbors) {
-            // 检查邻居是否已分配给某个目标
             int nei_target_id = getVoxelTargetId(nei);
             if (nei_target_id >= 0) {
-                // 发现邻居属于某目标，添加到相邻目标集合
                 adjacent_target_ids.insert(nei_target_id);
             }
             
-            // 检查邻居是否是相机已观测的占据体素
             star_mvf::VoxelState nei_state = global_map_->getVoxelState(nei);
             bool is_occ = star_mvf::VoxelStateBits::isOccupied(nei_state);
             bool is_vis = star_mvf::VoxelStateBits::isVisited(nei_state);
@@ -556,9 +571,8 @@ bool SemanticTargetExtractor::growRegion(const star_mvf::VoxelIndex& seed,
                 adjacent_observed_count++;
             }
             
-            // 未分配的占据未观测体素加入生长
             if (local_visited.find(nei) == local_visited.end() && 
-                nei_target_id == -2 &&  // -2 表示未分配
+                nei_target_id == -2 &&
                 isOccupiedUnobserved(nei)) {
                 local_visited.insert(nei);
                 q.push(nei);
@@ -566,29 +580,55 @@ bool SemanticTargetExtractor::growRegion(const star_mvf::VoxelIndex& seed,
         }
     }
     
+    // 生长自然结束 → 重新计算最终 PCA 并做最终判定
     if (count >= config_.min_voxel_count) {
         cluster.centroid = sum_pos / static_cast<float>(count);
         computePCAFeatures(sum_pos, sum_sq, count, cluster.pca_features);
         
-        // 检查是否被相机部分观测（排除树/柱子等）
+        // 最终检查：如果整体还是墙，全部标记
+        if (isWallOrFloor(cluster.pca_features, cluster)) {
+            ROS_INFO("[GreedyWall] Final check: is_wall=true. Marking all %d voxels.", count);
+            cluster.is_wall = true;
+            cluster.is_valid = false;
+            return false;
+        }
+        
+        // 如果之前有未处理的墙段
+        if (was_wall_last_check && last_wall_boundary_idx >= 0) {
+            ROS_INFO("[GreedyWall] Growth ended with pending wall. Marking [0,%d] as wall.", last_wall_boundary_idx);
+            for (int i = 0; i <= last_wall_boundary_idx; ++i) {
+                global_map_->updateVoxelStateFromCamera(cluster.voxels[i], true);
+            }
+            std::vector<star_mvf::VoxelIndex> remaining_voxels(
+                cluster.voxels.begin() + last_wall_boundary_idx + 1, cluster.voxels.end());
+            cluster.voxels = std::move(remaining_voxels);
+            
+            if (static_cast<int>(cluster.voxels.size()) < config_.min_voxel_count) {
+                cluster.is_valid = false;
+                return false;
+            }
+            // 重新计算剩余部分的 PCA
+            // 注意：这里简化处理，直接返回 false 因为剩余部分需要作为新种子重新生长
+            // 更精确的做法是对剩余部分重新计算，但这会增加复杂度
+        }
+        
+        // 检查相机观测
         float ratio = static_cast<float>(adjacent_observed_count) / static_cast<float>(count);
         if (ratio > config_.observed_reject_ratio) {
-            cluster.is_valid = false;  // 排除：相机已部分观测
+            cluster.is_valid = false;
             return false;
         }
         
         cluster.is_valid = isValidTarget(cluster);
         
-        // [调试] 打印验证失败原因
         if (!cluster.is_valid) {
             float height = cluster.getHeight();
             float width = cluster.getWidth();
-            ROS_WARN_THROTTLE(2.0, "[GrowRegion] Invalid: voxels=%d, h=%.2f(need:%.2f-%.2f), w=%.2f",
+            ROS_INFO("[GrowRegion] Invalid: voxels=%d, h=%.2f(need:%.2f-%.2f), w=%.2f",
                      count, height, config_.min_target_height, config_.max_target_height, width);
         }
     } else {
-        // [调试] 体素数量太少
-        ROS_DEBUG_THROTTLE(2.0, "[GrowRegion] Too few voxels: %d < %d", count, config_.min_voxel_count);
+        ROS_INFO("[GrowRegion] Too few voxels: %d < %d", count, config_.min_voxel_count);
     }
     
     return cluster.is_valid;
@@ -633,6 +673,7 @@ void SemanticTargetExtractor::computePCAFeatures(const Eigen::Vector3f& sum_pos,
     features.planarity = 2.0f * (evals(1) - evals(2)) / sum_evals;
     features.sphericity = evals(2) / lambda1;
     features.linearity = (evals(0) - evals(1)) / lambda1;
+    features.curvature = evals(2) / sum_evals; // [新增] 表面变化率 (Surface Variation)
     features.normal = evecs.col(2);
 }
 
@@ -641,10 +682,24 @@ bool SemanticTargetExtractor::isWallOrFloor(const ClusterPCAFeatures& features,
                                              const SemanticCluster& cluster) {
     float max_extent = cluster.getMaxExtent();
     
+    // 1. 标准平面判定 (适合普通方正墙面)
     if (features.planarity > config_.planarity_threshold && 
         max_extent > config_.wall_size_threshold) {
         return true;
     }
+    
+    // 2. [Robust] 曲率判定 (适合长条形/巨大墙面)
+    // 即使 Planarity 低 (因为 Linearity 高)，只要 Curvature 很低 (说明极薄)，就是墙
+    if (features.curvature < config_.curvature_threshold && 
+        max_extent > config_.wall_size_threshold) {
+        return true;
+    }
+    
+    // 3. [Safety] 强制尺寸剔除 (兜底策略)
+    if (max_extent > 2.5f) {
+        return true;
+    }
+
     return false;
 }
 
@@ -673,7 +728,8 @@ void SemanticTargetExtractor::pruneWallVoxels(const SemanticCluster& cluster) {
     if (!global_map_) return;
     
     for (const auto& idx : cluster.voxels) {
-        global_map_->updateVoxelStateFromCamera(idx, true);
+        // [修正] 使用直接设置索引的方法，避免 updateVoxelStateFromCamera 将 idx 解析为坐标
+        global_map_->setVoxelVisitedDirect(idx, true);
     }
 }
 
@@ -708,6 +764,13 @@ void SemanticTargetExtractor::getNeighbors6(const star_mvf::VoxelIndex& idx,
 
 bool SemanticTargetExtractor::isOccupiedUnobserved(const star_mvf::VoxelIndex& idx) const {
     if (!global_map_) return false;
+    
+    // 高度过滤
+    Eigen::Vector3f pos = global_map_->indexToPos(idx);
+    float height_thresh = global_map_->getGroundHeight() + 0.2f;
+    if (pos.z() <= height_thresh) {
+        return false;  // 过滤地面
+    }
     
     star_mvf::VoxelState state = global_map_->getVoxelState(idx);
     

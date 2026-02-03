@@ -38,6 +38,7 @@ struct SemanticExtractorConfig {
     // PCA 分析参数
     int pca_check_interval = 20;        // 每生长多少个点检测一次
     float planarity_threshold = 0.85f;  // 平面度阈值 (>此值判为墙壁)
+    float curvature_threshold = 0.06f;  // 曲率阈值 (<此值判为墙壁) [Robust Metric]
     float wall_size_threshold = 1.0f;   // 大于此尺寸的平面才判为墙壁 (m)
     
     // 混合 PCA 参数
@@ -69,6 +70,7 @@ struct ClusterPCAFeatures {
     float planarity;                    // 平面度 2*(λ2-λ3)/(λ1+λ2+λ3)
     float sphericity;                   // 散乱度 λ3/λ1
     float linearity;                    // 线性度 (λ1-λ2)/λ1
+    float curvature;                    // 曲率/表面变化率 λ3/Σλ
     Eigen::Vector3f normal;             // 主法线 (对应 λ3 的特征向量)
     
     ClusterPCAFeatures() {
@@ -77,6 +79,7 @@ struct ClusterPCAFeatures {
         planarity = 0.0f;
         sphericity = 0.0f;
         linearity = 0.0f;
+        curvature = 0.0f;
         normal.setZero();
     }
 };
