@@ -154,16 +154,27 @@ public:
     /**
      * @brief 获取指定范围内的目标
      */
+    /**
+     * @brief 获取指定范围内的目标
+     */
     void getTargetsInRange(const Eigen::Vector3f& center, float radius,
                            std::vector<TargetMetadata>& out_targets) const;
+                           
+    /**
+     * @brief 获取所有未观测的目标（返回指针以便修改状态）
+     */
+    void getUnobservedTargets(std::vector<TargetMetadata*>& out_targets);
+    
+    /**
+     * @brief 标记目标为已观测
+     */
+    void markTargetObserved(int target_id);
     
     /**
      * @brief 根据种子点重新生成完整的 Cluster 几何
      */
     bool regenerateCluster(const TargetMetadata& meta, SemanticCluster& out_cluster);
-    
-    const SemanticExtractorConfig& getConfig() const { return config_; }
-    
+        
     int getTotalTargetCount() const;
     int getAnalyzedSubGridCount() const { return analyzed_count_; }
     int getPrunedWallCount() const { return pruned_wall_count_; }

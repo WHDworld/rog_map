@@ -217,9 +217,8 @@ double HistoryGraph::evaluateViewpointCost(const Eigen::Vector3d& curr_pos,
   if (global_map_ && global_map_->isPathSafe(anchor_pos.cast<float>(), vp_pos.cast<float>(), config_.uav_radius + 0.15)) {
     exit_path = {anchor_pos, vp_pos};
   } else {
-    // [Fixed] Relaxed A* for viewpoint evaluation (User Request)
     // "Just a simple A* path is enough, not necessarily safe obstacle-avoidance path"
-    exit_path = runLocalAStarInternal(anchor_pos, vp_pos, true); 
+    exit_path = runLocalAStarInternal(anchor_pos, vp_pos, 10000, true); 
     if (exit_path.empty()) {
       ROS_WARN_THROTTLE(1.0, "[EvalVP] BLOCKED: A* from anchor(%d) (%.2f,%.2f) to vp (%.2f,%.2f) failed",
                         anchor_node_id, anchor_pos.x(), anchor_pos.y(), vp_pos.x(), vp_pos.y());
@@ -263,8 +262,9 @@ int HistoryGraph::findNearestNode(const Eigen::Vector3d& pos) {
 }
 
 std::vector<Eigen::Vector3d> HistoryGraph::runLocalAStar(const Eigen::Vector3d& start,
-                                                         const Eigen::Vector3d& end) {
-  return runLocalAStarInternal(start, end, false);
+                                                         const Eigen::Vector3d& end,
+                                                         int max_steps) {
+  return runLocalAStarInternal(start, end, max_steps, false);
 }
 
 std::vector<Eigen::Vector3d> HistoryGraph::shortcutPath(const Eigen::Vector3d& start,
@@ -380,7 +380,7 @@ std::vector<Eigen::Vector3d> HistoryGraph::computeSimplifiedPathInternal(const E
   if (global_map_ && global_map_->isPathSafe(start.cast<float>(), end.cast<float>(), config_.uav_radius + 0.15f)) {
       return {start, end};
   }
-  auto raw = runLocalAStarInternal(start, end, true);
+  auto raw = runLocalAStarInternal(start, end, 10000, true);
   if (raw.size() < 2) return {};
   return simplifyPathInternal(raw);
 }
@@ -423,6 +423,7 @@ std::vector<Eigen::Vector3d> HistoryGraph::shortcutPathInternal(const Eigen::Vec
 
 std::vector<Eigen::Vector3d> HistoryGraph::runLocalAStarInternal(const Eigen::Vector3d& start,
                                                                  const Eigen::Vector3d& end,
+                                                                 int max_steps,
                                                                  bool relaxed) {
   if (!global_map_) return {};
 
@@ -448,7 +449,6 @@ std::vector<Eigen::Vector3d> HistoryGraph::runLocalAStarInternal(const Eigen::Ve
 
   std::vector<Eigen::Vector3d> path;
   int steps = 0;
-  int max_steps = 3000;
 
   while (!open_list.empty()) {
     AStarNode* curr = open_list.top();

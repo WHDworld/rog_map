@@ -133,7 +133,6 @@ public:
     // 前沿接口
     void extractGlobalFrontierIncremental() { global_map_->extractGlobalFrontierIncremental(); }
     void getFrontierSubGrids(std::vector<int>& ids) const { global_map_->getFrontierSubGrids(ids); }
-    void getFrontierPositions(std::vector<Position>& positions) const { global_map_->getFrontierPositions(positions); }
     void getFrontierPositionsBySubGrid(std::vector<SubGridFrontierInfo>& info) const {
         global_map_->getFrontierPositionsBySubGrid(info);
     }

@@ -1078,6 +1078,26 @@ bool SemanticTargetExtractor::checkRayVisibility(const Eigen::Vector3f& start,
     return true;
 }
 
+void SemanticTargetExtractor::getUnobservedTargets(std::vector<TargetMetadata*>& out_targets) {
+    out_targets.clear();
+    for (auto& target : all_targets_) {
+        if (!target.is_observed && target.has_viewpoint) {
+            out_targets.push_back(&target);
+        }
+    }
+}
+
+void SemanticTargetExtractor::markTargetObserved(int target_id) {
+    for (auto& target : all_targets_) {
+        if (target.id == target_id) {
+            target.is_observed = true;
+            ROS_INFO("[SemanticTargetExtractor] Target %d marked as OBSERVED", target_id);
+            return;
+        }
+    }
+    ROS_WARN("[SemanticTargetExtractor] markTargetObserved: Target %d not found", target_id);
+}
+
 }  // namespace rog_map
 
 

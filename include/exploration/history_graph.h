@@ -102,7 +102,7 @@ class HistoryGraph {
   int findNearestNode(const Eigen::Vector3d& pos);
   
   std::vector<int> findNodesInRange(const Eigen::Vector3d& pos, double range);
-  std::vector<Eigen::Vector3d> runLocalAStar(const Eigen::Vector3d& start, const Eigen::Vector3d& end);
+  std::vector<Eigen::Vector3d> runLocalAStar(const Eigen::Vector3d& start, const Eigen::Vector3d& end, int max_steps = 10000);
 
   double evaluateViewpointCost(const Eigen::Vector3d& curr_pos,
                                int anchor_node_id,
@@ -144,7 +144,7 @@ class HistoryGraph {
   std::vector<Eigen::Vector3d> simplifyPathInternal(const std::vector<Eigen::Vector3d>& path);
   std::vector<Eigen::Vector3d> shortcutPathInternal(const Eigen::Vector3d& start,
                                                     const std::vector<Eigen::Vector3d>& path);
-  std::vector<Eigen::Vector3d> runLocalAStarInternal(const Eigen::Vector3d& start, const Eigen::Vector3d& end, bool relaxed = false);
+  std::vector<Eigen::Vector3d> runLocalAStarInternal(const Eigen::Vector3d& start, const Eigen::Vector3d& end, int max_steps = 10000, bool relaxed = false);
 
   void runDijkstraInternal(int target_id,
                            std::unordered_map<int, double>& dists,

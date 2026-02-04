@@ -119,10 +119,6 @@ void ViewpointManager::start() {
                               &ViewpointManager::timerCallback, this);
 }
 
-void ViewpointManager::stop() {
-    timer_.stop();
-}
-
 void ViewpointManager::updateUAVState(const Eigen::Vector3f& position, float yaw) {
     std::lock_guard<std::mutex> lock(uav_mutex_);
     uav_position_ = position;
@@ -348,63 +344,107 @@ void ViewpointManager::update() {
     // Step 5: 过滤头顶区域簇
     filterOverheadClusters(all_clusters);
     
-    // Step 6: 限制簇数量（按距离排序保留最近的）
-    // Step 6: 限制簇数量（基于打分 + NMS空间抑制）
-    // 目的：避免路口处生成大量重复视点，同时保留远处的的高收益区域
+    // Step 6: 限制簇数量（双轨筛选策略：本地保留 + 最优增益）
+    // 目的：
+    // 1. 保留高增益的全局目标（即便是远处的）
+    // 2. 保留本地的有效目标（防止在当前房间未探索完就跳走）
     if (all_clusters.size() > 0) {
-        // 1. 计算评分
-        struct ScoredCluster {
+        // A. 计算所有簇的探索增益
+        for (auto& cluster : all_clusters) {
+            cluster.exploration_gain = calculateClusterGain(cluster);
+        }
+
+        // B. 构建双队列
+        struct CandidateRef {
             int index;
-            float score;
             float dist;
+            float gain;
         };
-        std::vector<ScoredCluster> scored_clusters;
-        for (size_t i = 0; i < all_clusters.size(); ++i) 
-        {
+        std::vector<CandidateRef> candidates;
+        for (size_t i = 0; i < all_clusters.size(); ++i) {
             float dist = (all_clusters[i].centroid - uav_pos).head<2>().norm();
-            float size_score = static_cast<float>(all_clusters[i].point_count); // 点数增益
-            
-            // Score = Size * exp(-lambda * dist)
-            // lambda=0.15意味着每增加5米，权重衰减一半 (exp(-0.75)=0.47)
-            // lambda=0.1意味着每增加7米，权重衰减一半
-            float dist_weight = std::exp(-0.15f * std::max(0.0f, dist - 2.0f)); // 2m内不衰减
-            scored_clusters.push_back({static_cast<int>(i), size_score * dist_weight, dist});
+            candidates.push_back({static_cast<int>(i), dist, all_clusters[i].exploration_gain});
         }
         
-        // 2. 按分数降序排列
-        std::sort(scored_clusters.begin(), scored_clusters.end(), 
-                 [](const ScoredCluster& a, const ScoredCluster& b){
-                     return a.score > b.score;
-                 });
-                 
-        // 3. NMS 筛选
-        std::vector<FrontierCluster> selected_clusters;
-        std::vector<bool> suppressed(all_clusters.size(), false);
-        const float nms_radius = 5.0f; // 4米抑制半径
+        std::vector<int> selected_indices;
+        std::vector<bool> is_selected(all_clusters.size(), false);
         
-        for (const auto& sc : scored_clusters) {
-            if (suppressed[sc.index]) continue;
+        // --- 队列 1: 本地队列 (Local Queue) ---
+        // 策略：按距离升序，保留最近的 Top 5，且增益不能太小
+        std::vector<CandidateRef> local_q = candidates;
+        std::sort(local_q.begin(), local_q.end(), [](const CandidateRef& a, const CandidateRef& b){
+            return a.dist < b.dist;
+        });
+        
+        int local_count = 0;
+        const int MAX_LOCAL = 5;
+        const float MIN_LOCAL_GAIN = 5.0f; // 至少能看到5个新格子
+        
+        for (const auto& c : local_q) {
+            if (local_count >= MAX_LOCAL) break;
+            if (c.gain < MIN_LOCAL_GAIN) continue; // 忽略纯噪点
             
-            if (selected_clusters.size() >= static_cast<size_t>(config_.max_clusters)) break;
-            
-            // 选中当前分数最高的
-            const auto& best_cluster = all_clusters[sc.index];
-            selected_clusters.push_back(best_cluster);
-            
-            // 抑制周围簇
-            for (const auto& other : scored_clusters) {
-                if (suppressed[other.index]) continue;
-                
-                float d = (all_clusters[other.index].centroid - best_cluster.centroid).norm();
-                if (d < nms_radius) {
-                    suppressed[other.index] = true;
-                }
+            if (!is_selected[c.index]) {
+                selected_indices.push_back(c.index);
+                is_selected[c.index] = true;
+                local_count++;
             }
         }
         
+        // --- 队列 2: 全局队列 (Global Queue) ---
+        // 策略：按增益降序，保留增益最高的 Top 15
+        std::vector<CandidateRef> global_q = candidates;
+        std::sort(global_q.begin(), global_q.end(), [](const CandidateRef& a, const CandidateRef& b){
+            return a.gain > b.gain;
+        });
+        
+        int global_count = 0;
+        const int MAX_GLOBAL = 15;
+        
+        for (const auto& c : global_q) {
+            if (global_count >= MAX_GLOBAL) break;
+            
+            if (!is_selected[c.index]) {
+                selected_indices.push_back(c.index);
+                is_selected[c.index] = true;
+                global_count++;
+            }
+        }
+        
+        // C. NMS 空间抑制与最终合并
+        // 为了保证 NMS 的效果，我们将选中的索引按 增益 降序排列，优先保留高增益的
+        std::sort(selected_indices.begin(), selected_indices.end(), [&](int a, int b){
+            return all_clusters[a].exploration_gain > all_clusters[b].exploration_gain;
+        });
+        
+        std::vector<FrontierCluster> final_clusters;
+        std::vector<bool> suppressed(all_clusters.size(), false);
+        const float nms_radius = 2.5f; // 缩小的抑制半径（避免误杀相邻房间）
+        
+        for (int idx : selected_indices) {
+            if (suppressed[idx]) continue;
+            
+            if (final_clusters.size() >= static_cast<size_t>(config_.max_clusters)) break;
+            
+            const auto& best_cluster = all_clusters[idx];
+            final_clusters.push_back(best_cluster);
+            
+            // 抑制周围簇
+            for (int other_idx : selected_indices) {
+                if (idx == other_idx) continue;
+                if (suppressed[other_idx]) continue;
+                
+                float d = (all_clusters[other_idx].centroid - best_cluster.centroid).norm();
+                if (d < nms_radius) {
+                    suppressed[other_idx] = true;
+                }
+            }
+        }
+
         // 更新 all_clusters
-        all_clusters = selected_clusters;
-        // ROS_INFO("[VP_MGR] NMS Selected %zu clusters from %zu candidates.", all_clusters.size(), scored_clusters.size());
+        all_clusters = final_clusters;
+        // ROS_INFO("[VP_MGR] Selected %zu clusters (Local:%d, Global:%d, NMS Filtered)", 
+        //          all_clusters.size(), local_count, global_count);
     }
     
     double t_filter = (ros::Time::now() - t_step4).toSec() * 1000.0;
@@ -1590,5 +1630,60 @@ void ViewpointManager::collectSubGridPoints(const std::vector<int>& subgrid_ids,
     }
 }
 
+
+
+float ViewpointManager::calculateClusterGain(const FrontierCluster& cluster) {
+    if (cluster.points.empty()) return 0.0f;
+    
+    // 扩展参数
+    const int max_expand_step = 6;  // 6 * 0.1m = 0.6m
+    std::unordered_set<star_mvf::VoxelIndex, star_mvf::VoxelIndexHash> visited;
+    std::queue<std::pair<star_mvf::VoxelIndex, int>> q;
+    
+    // 初始化
+    for (const auto& pt : cluster.points) {
+        star_mvf::VoxelIndex idx = global_map_->posToIndex(pt);
+        if (visited.count(idx)) continue;
+        visited.insert(idx);
+        q.push({idx, 0});
+    }
+    
+    int unknown_count = 0;
+    std::vector<star_mvf::VoxelIndex> neighbors;
+    
+    // BFS 6-neighbor expansion
+    while (!q.empty()) {
+        auto curr = q.front();
+        q.pop();
+        
+        star_mvf::VoxelIndex curr_idx = curr.first;
+        int depth = curr.second;
+        
+        if (depth >= max_expand_step) continue;
+        
+        // 扩展6邻域 (Explicit)
+        const int dx[6] = {1, -1, 0, 0, 0, 0};
+        const int dy[6] = {0, 0, 1, -1, 0, 0};
+        const int dz[6] = {0, 0, 0, 0, 1, -1};
+
+        for (int i = 0; i < 6; ++i) {
+            star_mvf::VoxelIndex n_idx = curr_idx;
+            n_idx.x += dx[i];
+            n_idx.y += dy[i];
+            n_idx.z += dz[i];
+            
+            if (visited.count(n_idx)) continue;
+            
+            // 关键：只向 未知 区域扩展
+            if (global_map_->isUnknown(n_idx)) {
+                unknown_count++;
+                visited.insert(n_idx);
+                q.push({n_idx, depth + 1});
+            }
+        }
+    }
+    
+    return static_cast<float>(unknown_count);
+}
 
 } // namespace rog_map

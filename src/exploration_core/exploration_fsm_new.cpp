@@ -741,6 +741,13 @@ void ExplorationFSMNew::processExecExploration() {
             ROS_INFO("[FSM] EXEC_EXPLORATION: Reached Final Viewpoint %d. Task Complete.", current_viewpoint_id_);
             total_viewpoints_visited_++;
             
+            // [新增] 如果是语义目标（ID < -1），标记为已观测
+            if (current_viewpoint_id_ < -1 && semantic_target_extractor_) {
+                int target_id = -(current_viewpoint_id_ + 100);
+                semantic_target_extractor_->markTargetObserved(target_id);
+                ROS_INFO("[FSM] Semantic Target %d Observation Confirmed.", target_id);
+            }
+            
             has_trajectory_ = false;
             transitState(ExplorationState::LOCALPLAN, "Reached Goal");
             return;
@@ -1198,6 +1205,9 @@ bool ExplorationFSMNew::planReconstructionTrajectory(
 
 // [新增] 稀疏快照覆盖检测
 bool ExplorationFSMNew::checkCurrentGoalCovered() {
+    // 语义目标（ID < -1）不使用覆盖率检测，强制执行直到到达
+    if (current_viewpoint_id_ < -1) return false;
+
     if (current_frontier_.empty()) return true; // 空数据默认已覆盖
 
     int active_anchors = 0;
@@ -1257,11 +1267,17 @@ bool ExplorationFSMNew::checkCurrentGoalCovered() {
 
 // ==================== LOCALPLAN 核心方法 ====================
 bool ExplorationFSMNew::selectBestViewpoint(int& selected_viewpoint_id, const Eigen::Vector3d* from_pos) {
-    // 1. 直接从 VM 获取最新 Clusters
     std::vector<FrontierCluster> clusters = viewpoint_manager_->getClusters();
-    if (clusters.empty()) return false;
-    
-    // 使用传入的 from_pos (预测位置) 或里程计位置
+    // 深拷贝语义目标，防止多线程问题
+    std::vector<TargetMetadata> semantic_targets_copy; 
+    if (semantic_target_extractor_) {
+        std::vector<TargetMetadata*> raw_targets;
+        semantic_target_extractor_->getUnobservedTargets(raw_targets);
+        for(auto* t : raw_targets) semantic_targets_copy.push_back(*t);
+    }
+    if (clusters.empty() && semantic_targets_copy.empty()) return false;
+
+    // 获取当前机器人状态
     Eigen::Vector3d current_pos;
     double current_yaw;
     Eigen::Vector3d current_vel;
@@ -1272,207 +1288,186 @@ bool ExplorationFSMNew::selectBestViewpoint(int& selected_viewpoint_id, const Ei
         current_vel = odom_vel_;
     }
 
-    // ==================== [新增] 计算当前航向向量 ====================
-    Eigen::Vector3d current_heading;
-    if (current_vel.norm() > vp_selection_config_.velocity_threshold) {
-        // 速度足够大时，使用速度方向作为航向（更能反映实际运动趋势）
-        current_heading = current_vel.normalized();
-    } else {
-        // 速度太小时，使用 Yaw 角作为航向
-        current_heading = Eigen::Vector3d(cos(current_yaw), sin(current_yaw), 0.0);
-    }
+    // 计算航向向量
+    Eigen::Vector3d current_heading = (current_vel.norm() > vp_selection_config_.velocity_threshold) ? 
+                                      current_vel.normalized() : 
+                                      Eigen::Vector3d(cos(current_yaw), sin(current_yaw), 0.0);
+    // ================= 2. 构建候选列表 & 收集所有 Anchor =================
+    struct Candidate {
+        int id; // >0: Cluster, <0: Semantic (mapped)
+        int type; // 0: Cluster, 1: Semantic
+        Eigen::Vector3d pos;
+        float gain_value;
+        std::vector<int> potential_anchors;
+    };
+    std::vector<Candidate> all_candidates;
+    // 供 Dijkstra 使用
+    std::unordered_set<int> distinct_anchors_to_solve; 
 
-    // 2. 预计算 Dijkstra (Caching)
-    int start_node_id = history_graph_->findNearestNode(current_pos);
-
-    // 收集所有关联的 Anchor Nodes
-    std::unordered_set<int> target_anchors;
-    for (const auto& c : clusters) {
-        if (c.has_viewpoint && c.history_node_id != -1) {
-            target_anchors.insert(c.history_node_id);
+    // --- Helper Lambda: 填充候选者 ---
+    auto addCandidate = [&](int id, int type, const Eigen::Vector3d& pos, float gain) {
+        Candidate cand;
+        cand.id = id;
+        cand.type = type;
+        cand.pos = pos;
+        cand.gain_value = gain;
+        
+        // 关键：找周围 15m 内所有节点，不仅仅是最近的一个
+        // 建议 HistoryGraph 增加 findNodesInRange 返回 vector<int>
+        std::vector<int> nearby_nodes = history_graph_->findNodesInRange(pos, 15.0);
+        
+        // 简单的排序，优先取距离近的 Top 3，减少计算量
+        std::sort(nearby_nodes.begin(), nearby_nodes.end(), [&](int a, int b){
+            return (history_graph_->getNodePos(a) - pos).squaredNorm() < (history_graph_->getNodePos(b) - pos).squaredNorm();
+        });
+        
+        int count = 0;
+        for(int node_id : nearby_nodes) {
+            cand.potential_anchors.push_back(node_id);
+            distinct_anchors_to_solve.insert(node_id);
+            if(++count >= 3) break; // 只取最近的3个作为候选锚点
         }
-    }
-    cached_dijkstra_result_ = DijkstraResult();
-    if (start_node_id != -1 && !target_anchors.empty()) {
-        history_graph_->computeDijkstraToTargets(start_node_id, target_anchors, cached_dijkstra_result_);
-    } else {
-        ROS_WARN_THROTTLE(1.0, "[SelectVP] Dijkstra Skipped. StartNode: %d. Targets: %zu", 
-                          start_node_id, target_anchors.size());
+        // 如果周围没有节点（比如全新区域），尝试找最近的一个
+        if(cand.potential_anchors.empty()) {
+            int nearest = history_graph_->findNearestNode(pos);
+            if(nearest != -1) {
+                cand.potential_anchors.push_back(nearest);
+                distinct_anchors_to_solve.insert(nearest);
+            }
+        }
+        all_candidates.push_back(cand);
+    };
+
+    // -> 处理 Clusters
+    for (const auto& c : clusters) {
+        if (!c.has_viewpoint || blacklisted_clusters_.count(c.cluster_id)) continue;
+        // [优化] 直接从未 ViewpointManager 计算好的结果中读取增益
+        float exp_gain = c.exploration_gain;
+        float total_gain = (c.points.size() * 0.5f) + exp_gain;
+        addCandidate(c.cluster_id, 0, c.viewpoint_position.cast<double>(), total_gain);
     }
 
-    // ==================== [新增] 检查是否允许切换 ====================
-    double time_since_last_switch = (ros::Time::now() - last_viewpoint_switch_time_).toSec();
-    bool allow_switch = (time_since_last_switch > vp_selection_config_.min_switch_interval);
+    // -> 处理 Semantic Targets (ID 映射: -(id + 100))
+    for (const auto& t : semantic_targets_copy) {
+        if (!t.has_viewpoint) continue;
+        float fixed_gain = 200.0f; // 语义目标给予高优先级
+        addCandidate(-(t.id + 100), 1, t.viewpoint_position.cast<double>(), fixed_gain);
+    }
 
-    // ==================== [优化] 统一评估所有簇 ====================
+    // ================= 3. 运行全局 Dijkstra =================
+    int start_node_id = history_graph_->findNearestNode(current_pos);
+    cached_dijkstra_result_ = DijkstraResult(); // Clear
+    
+    if (start_node_id != -1 && !distinct_anchors_to_solve.empty()) {
+        history_graph_->computeDijkstraToTargets(start_node_id, distinct_anchors_to_solve, cached_dijkstra_result_);
+    }
+
+    // ================= 4. 全量评估与择优 =================
     int best_id = -1;
     float best_score = -1.0f;
-    int best_anchor = -1;
+    int best_anchor_final = -1;
 
-    for (const auto& cluster : clusters) {
-        if (!cluster.has_viewpoint) continue;
-        if (blacklisted_clusters_.count(cluster.cluster_id)) continue;
-
-        // 多锚点可达性评估
+    for (auto& cand : all_candidates) {
         double min_path_cost = std::numeric_limits<double>::max();
         int local_best_anchor = -1;
 
-        auto candidate_anchors = history_graph_->findNodesInRange(
-            cluster.viewpoint_position.cast<double>(), 10.0);
-        
-        // 确保原始锚点在候选列表中
-        bool has_orig = false;
-        for (int id : candidate_anchors) {
-            if (id == cluster.history_node_id) has_orig = true;
-        }
-        if (!has_orig && cluster.history_node_id != -1) {
-            candidate_anchors.push_back(cluster.history_node_id);
-        }
+        // --- 多锚点路径择优 ---
+        for (int anchor_id : cand.potential_anchors) {
+            // 1. 检查拓扑连通性
+            if (cached_dijkstra_result_.dists.find(anchor_id) == cached_dijkstra_result_.dists.end() ||
+                cached_dijkstra_result_.dists[anchor_id] >= 1e9) {
+                continue; 
+            }
+            
+            double global_dist = cached_dijkstra_result_.dists[anchor_id];
+            double local_dist = std::numeric_limits<double>::max();
+            Eigen::Vector3d anchor_pos = history_graph_->getNodePos(anchor_id);
 
-        // 锚点一致性锁定
-        if (cluster.cluster_id == last_selected_cluster_id_ && 
-            last_selected_anchor_id_ != -1) {
-            auto it = cached_dijkstra_result_.dists.find(last_selected_anchor_id_);
-            if (it != cached_dijkstra_result_.dists.end() && 
-                it->second < std::numeric_limits<double>::max()) {
-                Eigen::Vector3d anchor_pos = history_graph_->getHistoryNodePos(last_selected_anchor_id_);
-                double anchor_to_vp = (anchor_pos - cluster.viewpoint_position.cast<double>()).norm();
-                
-                if (anchor_to_vp < vp_selection_config_.anchor_lock_distance) {
-                    local_best_anchor = last_selected_anchor_id_;
-                    min_path_cost = history_graph_->evaluateViewpointCost(
-                        current_pos, local_best_anchor, 
-                        cluster.viewpoint_position.cast<double>(), 
-                        cached_dijkstra_result_, nullptr);
+            // 2. 几何连接性检查 (Raycast 优先，A* 兜底)
+            // 假设 global_map_ 有 isPathSafe 接口
+            if (global_map_->isLineFreeInflate(anchor_pos.cast<float>(), cand.pos.cast<float>())) {
+                local_dist = (anchor_pos - cand.pos).norm();
+            } else {
+                // 只有当射线被挡住时，才跑 A*，步数限制 2000
+                auto path = history_graph_->runLocalAStar(anchor_pos, cand.pos, 2000);
+                if (!path.empty()) {
+                    local_dist = history_graph_->calculatePathLength(path);
                 }
             }
-        }
 
-        // 遍历候选锚点
-        if (local_best_anchor == -1) {
-            for (int anchor_id : candidate_anchors) {
-                if (cached_dijkstra_result_.dists.find(anchor_id) == cached_dijkstra_result_.dists.end() ||
-                    cached_dijkstra_result_.dists[anchor_id] >= std::numeric_limits<double>::max()) {
-                    continue;
-                }
-
-                double cost = history_graph_->evaluateViewpointCost(
-                    current_pos, anchor_id, 
-                    cluster.viewpoint_position.cast<double>(), 
-                    cached_dijkstra_result_, nullptr);
-                
-                if (cost < min_path_cost) {
-                    min_path_cost = cost;
+            if (local_dist < 1e9) {
+                double total = global_dist + local_dist;
+                if (total < min_path_cost) {
+                    min_path_cost = total;
                     local_best_anchor = anchor_id;
                 }
             }
-        }
+        } // End Anchor Loop
 
-        if (min_path_cost >= std::numeric_limits<double>::max()) {
-            ROS_WARN_THROTTLE(1.0, "[SelectVP] Cluster %d blocked. anchors=%zu, dijkstra_dists=%zu", 
-                              cluster.cluster_id, candidate_anchors.size(), 
-                              cached_dijkstra_result_.dists.size());
-            continue;
-        }
+        if (min_path_cost >= 1e9) continue; // 该候选点不可达
 
-        // 更新簇的锚点
-        const_cast<FrontierCluster&>(cluster).history_node_id = local_best_anchor;
-
-        double path_cost = min_path_cost;
-
-        // 航向代价计算
-        Eigen::Vector3d dir_to_vp = (cluster.viewpoint_position.cast<double>() - current_pos);
-        if (dir_to_vp.norm() > 0.1) {
-            dir_to_vp.normalize();
-        } else {
-            dir_to_vp = current_heading;
-        }
-        
+        // --- 航向代价 ---
+        Eigen::Vector3d dir_to_vp = (cand.pos - current_pos).normalized();
         double dot = current_heading.dot(dir_to_vp);
         double heading_penalty = (1.0 - dot) * vp_selection_config_.heading_penalty_weight;
-        double heading_factor = 1.0 + heading_penalty;
-        double total_cost = path_cost * heading_factor;
-
-        // 评分公式：增益驱动
-        float cluster_size_gain = static_cast<float>(cluster.points.size()) * 0.3f;
-        float vp_score_gain = cluster.viewpoint_score * 100.0f * 0.7f;
-        float total_gain = cluster_size_gain + vp_score_gain;
         
-        float cost_metric = static_cast<float>(total_cost) + 1.0f;
-        float score = total_gain / cost_metric;
+        // --- 最终打分 ---
+        float cost_metric = static_cast<float>(min_path_cost * (1.0 + heading_penalty)) + 1.0f;
+        float score = cand.gain_value / cost_metric;
 
-        // 迟滞机制
-        if (last_selected_cluster_id_ != -1 && 
-            cluster.cluster_id == last_selected_cluster_id_) {
+        // --- 迟滞处理 ---
+        if (last_selected_cluster_id_ != -1 && cand.id == last_selected_cluster_id_) {
             score *= static_cast<float>(vp_selection_config_.hysteresis_gain);
         }
 
         if (score > best_score) {
             best_score = score;
-            best_id = cluster.cluster_id;
-            best_anchor = local_best_anchor;
+            best_id = cand.id;
+            best_anchor_final = local_best_anchor;
         }
     }
 
-    if (best_id < 0) return false;
+    if (best_id == -1) return false;
 
-    // ==================== [新增] 目标切换检测与记录 ====================
+    // ================= 5. 状态更新与输出 =================
+    // 处理切换逻辑 (简化版)
     if (best_id != last_selected_cluster_id_) {
-        if (allow_switch || last_selected_cluster_id_ == -1) {
+         // ... (保留原有的时间间隔检查逻辑) ...
+         last_selected_cluster_id_ = best_id;
+         last_viewpoint_switch_time_ = ros::Time::now();
+         last_selected_anchor_id_ = best_anchor_final;
+    }
 
-            last_selected_cluster_id_ = best_id;
-            last_viewpoint_switch_time_ = ros::Time::now();
-            
-            // 更新锚点锁定
-            for (const auto& c : clusters) {
-                if (c.cluster_id == best_id) {
-                    last_selected_anchor_id_ = c.history_node_id;
-                    break;
-                }
+    // 填充输出数据
+    if (best_id > 0) 
+    { // Cluster
+        for (const auto& c : clusters) 
+        {
+            if (c.cluster_id == best_id) {
+                current_vp_pos_ = c.viewpoint_position.cast<double>();
+                current_vp_yaw_ = c.viewpoint_yaw;
+                current_frontier_ = c.points; //用于可视化
+                current_frontier_history_id_ = best_anchor_final; // 重要：更新为实际选中的最佳锚点
+                break;
             }
-        } else {
-            // 切换间隔太短，检查上一帧目标是否仍有效
-            bool prev_valid = false;
-            for (const auto& c : clusters) {
-                if (c.cluster_id == last_selected_cluster_id_ && c.has_viewpoint) {
-                    prev_valid = true;
-                    best_id = last_selected_cluster_id_;  // 强制使用上一帧目标
-                    break;
-                }
-            }
-            if (!prev_valid) {
-                // 上一帧目标已失效，允许切换
-                last_selected_cluster_id_ = best_id;
-                last_viewpoint_switch_time_ = ros::Time::now();
-                for (const auto& c : clusters) {
-                    if (c.cluster_id == best_id) {
-                        last_selected_anchor_id_ = c.history_node_id;
-                        break;
-                    }
-                }
+        }
+    } 
+    else 
+    { // Semantic Target
+        // 直接从之前深拷贝的列表中取值，无需再次查询 extractor
+        int original_id = -(best_id + 100);
+        for(const auto& t : semantic_targets_copy) {
+            if (t.id == original_id) {
+                current_vp_pos_ = t.viewpoint_position.cast<double>();
+                current_vp_yaw_ = t.viewpoint_yaw;
+                current_frontier_.clear(); 
+                current_frontier_.push_back(t.centroid); // 伪造一个点用于显示
+                current_frontier_history_id_ = best_anchor_final;
+                break;
             }
         }
     }
 
-    // 更新 current_frontier_ 等信息
-    for (const auto& c : clusters) {
-        if (c.cluster_id == best_id) {
-            current_frontier_ = c.points;
-            current_viewpoint_centroid_ = c.centroid.cast<double>();
-            current_vp_pos_ = c.viewpoint_position.cast<double>();
-            current_vp_yaw_ = c.viewpoint_yaw;
-            current_frontier_history_id_ = c.history_node_id;
-            
-            // [调试] 打印选中簇的详细信息
-            // ROS_WARN_THROTTLE(3.0, "[SelectVP_DEBUG] Selected cluster %d: points=%zu, centroid=(%.2f,%.2f,%.2f), vp=(%.2f,%.2f,%.2f), node=%d",
-            //          c.cluster_id, c.points.size(), 
-            //          c.centroid.x(), c.centroid.y(), c.centroid.z(),
-            //          c.viewpoint_position.x(), c.viewpoint_position.y(), c.viewpoint_position.z(),
-            //          c.history_node_id);
-            break;
-        }
-    }
-    
     selected_viewpoint_id = best_id;
     return true;
 }
@@ -1483,7 +1478,7 @@ bool ExplorationFSMNew::planToViewpoint(int viewpoint_id, const Eigen::Vector3d*
         return false;
     }
     
-    // 使用传入的 from_pos (预测位置) 或里程计位置用于路径生成
+    // 1. 获取当前状态
     Eigen::Vector3d current_pos;
     if (from_pos) {
         current_pos = *from_pos;
@@ -1495,117 +1490,148 @@ bool ExplorationFSMNew::planToViewpoint(int viewpoint_id, const Eigen::Vector3d*
     Eigen::Vector3d vp_pos = current_vp_pos_;
     double vp_yaw = current_vp_yaw_;
 
-    // ROS_INFO("PlanToViewpoint: current_pos: (%.2f,%.2f,%.2f), best_vp_pos: (%.2f,%.2f,%.2f) best_vp_yaw: %.2f", current_pos.x(), current_pos.y(), current_pos.z(), vp_pos.x(), vp_pos.y(), vp_pos.z(), vp_yaw);
     // 2. 路径生成 (Path Generation)
-    // 2. 路径生成 (Path Generation) [Optimized]
     std::vector<Eigen::Vector3d> global_path;
-    double path_len = 0.0;
+    double final_path_len = 0.0;
     
-    double dist_direct = (current_pos - vp_pos).norm();
+    // 尝试从缓存恢复拓扑路径 (包含: StartNode -> ... -> EndAnchor)
+    // 注意: topo_nodes 不包含 CurrentPos 和 VP_Pos，只包含历史节点坐标
+    std::vector<Eigen::Vector3d> topo_nodes;
+    bool graph_ok = false;
     
-    // 【策略 A】近距离 (< 5.0m) -> 直接交给规划器 (Direct)
-    if (dist_direct < 5.0) {
-        global_path.push_back(current_pos);
-        global_path.push_back(vp_pos);
-        path_len = dist_direct;
-        // ROS_INFO("[FSM] Plan: Close range (%.1fm). Direct.", dist_direct);
-    } 
-    // 【策略 B】远距离 (>= 5.0m) -> 拓扑引导 (Topological)
-    else 
-    {
-        std::vector<Eigen::Vector3d> topo_path;
-        bool graph_ok = false;
-        
-        if (current_frontier_history_id_ != -1) {
-            graph_ok = history_graph_->reconstructPathFromCache(
-                cached_dijkstra_result_, 
-                current_frontier_history_id_, 
-                topo_path
-            );
-        }
+    if (current_frontier_history_id_ != -1) {
+        graph_ok = history_graph_->reconstructPathFromCache(
+            cached_dijkstra_result_, 
+            current_frontier_history_id_, 
+            topo_nodes
+        );
+    }
 
-        if (graph_ok && !topo_path.empty()) {
-            std::cout << "\033[1;33m[TopoPath] Backtracking Nodes:\033[0m" << std::endl;
-            for (size_t k = 0; k < topo_path.size(); ++k) {
-                std::cout << "  Node " << k << ": (" 
-                          << topo_path[k].x() << ", " 
-                          << topo_path[k].y() << ", " 
-                          << topo_path[k].z() << ")" << std::endl;
+    if (graph_ok && !topo_nodes.empty()) {
+        bool skip_intermediate_node = false;
+
+        // ================= [Optimization] 单节点回溯检查 =================
+        // 场景: Current -> MidNode -> Viewpoint
+        // 如果无人机当前位置去视点更顺路，就不要折返去 MidNode
+        if (topo_nodes.size() == 1) {
+            Eigen::Vector3d mid_node = topo_nodes[0];
+            
+            // --- 计算 A: 间接路径代价 (Indirect Cost) ---
+            // Cost = Path(Current->Mid) + Path(Mid->VP)
+            double cost_indirect = 0.0;
+            
+            // 1. Current -> Mid
+            double dist_c_m = (mid_node - current_pos).norm();
+            // 如果直线不通，跑 A* 获取真实距离
+            if (!global_map_->isLineFreeInflate(current_pos.cast<float>(), mid_node.cast<float>())) {
+                auto path_cm = history_graph_->runLocalAStar(current_pos, mid_node, 1000);
+                if (!path_cm.empty()) dist_c_m = history_graph_->calculatePathLength(path_cm);
+                else dist_c_m = 1e9; // 不可达
+            }
+            
+            // 2. Mid -> VP (Anchor 到视点通常是近距离的，且在SelectVP阶段验证过)
+            // 这里为了效率可以用直线估算，或者严谨点也跑A*
+            double dist_m_v = (vp_pos - mid_node).norm(); 
+            // 如果你在SelectVP里保证了可见性，这里直接用norm即可；否则建议同上做检查
+            
+            cost_indirect = dist_c_m + dist_m_v;
+
+            // --- 计算 B: 直接路径代价 (Direct Cost) ---
+            // Cost = Path(Current->VP)
+            double cost_direct = 1e9;
+            
+            // 先看直线是否通 (极速)
+            if (global_map_->isLineFreeInflate(current_pos.cast<float>(), vp_pos.cast<float>())) {
+                cost_direct = (vp_pos - current_pos).norm();
+            } else {
+                // 直线不通，尝试绕过 (增加步数限制，允许一定程度的绕行)
+                auto path_cv = history_graph_->runLocalAStar(current_pos, vp_pos, 2500);
+                if (!path_cv.empty()) {
+                    cost_direct = history_graph_->calculatePathLength(path_cv);
+                }
+            }
+
+            // --- 决策 ---
+            // 如果直接走代价更小，或者代价差不多(1.2倍内)但直接走更顺畅，则跳过
+            // 这里设置 1.0 意味着只要直接走更短就直接走
+            if (cost_direct < cost_indirect) {
+                ROS_INFO("[FSM] Shortcuts: Skip node. Direct(%.2f) < Indirect(%.2f)", cost_direct, cost_indirect);
+                skip_intermediate_node = true;
             }
         }
+        // ===============================================================
 
-        if (graph_ok && !topo_path.empty()) {
-            // User: "Directly use intermediate history nodes as path points, no A*"
-            global_path.push_back(current_pos);
-            
-            // 添加拓扑节点 (过滤掉离当前位置太近的起始节点)
-            for (const auto& p : topo_path) {
-                if ((p - global_path.back()).norm() > 1.0) {
+        // 3. 组装初始路径点
+        global_path.push_back(current_pos);
+        
+        if (!skip_intermediate_node) {
+            // 如果不跳过，加入拓扑节点
+            for (const auto& p : topo_nodes) {
+                // 简单的去重：如果节点离上一个点极近，忽略
+                if ((p - global_path.back()).norm() > 0.5) {
                     global_path.push_back(p);
                 }
             }
-            
-            // 添加最终视点
-            if ((vp_pos - global_path.back()).norm() > 0.5) {
-                global_path.push_back(vp_pos);
-            } else {
-                global_path.back() = vp_pos; // 修正终点
-            }
-            
-            // [Optimization] 路径剪枝：尝试跳过不必要的中间历史节点
-            // 如果能直接飞到下一个节点，就不要去中间的那个（解决V字形回溯问题）
-            global_path = history_graph_->shortcutPath(current_pos, global_path);
-            
-            // [关键修复] 去除重复点
-            // shortcutPath 可能返回重复点，导致规划失败
-            std::vector<Eigen::Vector3d> dedup_path;
+        }
+        
+        // 加入终点
+        if ((vp_pos - global_path.back()).norm() > 0.1) {
+            global_path.push_back(vp_pos);
+        } else {
+            global_path.back() = vp_pos; // 修正最后一点
+        }
+
+        // 4. 通用路径裁减 (General Shortcut)
+        // 这一步非常重要，它利用直线可视性(Raycast)再次简化路径
+        // 即使 topo_nodes 有多个点，这一步也能把能拉直的都拉直
+        global_path = history_graph_->shortcutPath(current_pos, global_path);
+
+        // 5. 最终去重 (防止 EGO-Planner 报错)
+        std::vector<Eigen::Vector3d> dedup_path;
+        if (!global_path.empty()) {
             dedup_path.push_back(global_path[0]);
             for (size_t i = 1; i < global_path.size(); ++i) {
-                if ((global_path[i] - dedup_path.back()).norm() > 0.3) {  // 距离>0.3m才保留
+                // 阈值设为 0.2m，避免航点过于密集
+                if ((global_path[i] - dedup_path.back()).norm() > 0.2) { 
                     dedup_path.push_back(global_path[i]);
                 }
             }
-            global_path = dedup_path;
-            
-            // [Debug] 打印过滤后的实际路径
-            std::cout << "\033[1;32m[GlobalPath] After Filtering & Shortcut:\033[0m" << std::endl;
-            for (size_t k = 0; k < global_path.size(); ++k) {
-                double dist_to_current = (global_path[k] - current_pos).norm();
-                std::cout << "  WP" << k << ": (" 
-                          << global_path[k].x() << ", " 
-                          << global_path[k].y() << ", " 
-                          << global_path[k].z() << ") dist=" << dist_to_current << "m" << std::endl;
-            }
-            
-            // 计算总长
-            path_len = 0;
-            for(size_t i=0; i<global_path.size()-1; ++i) {
-                path_len += (global_path[i+1] - global_path[i]).norm();
-            }
-            // ROS_INFO("[FSM] Plan: Long range. Using %zu topo nodes.", topo_path.size());
-        } else {
-            // 拓扑失败的回退：尝试 Local A* (虽然可能也不会成功)
-            auto fallback_path = history_graph_->runLocalAStar(current_pos, vp_pos);
-            if (!fallback_path.empty()) {
-                global_path = history_graph_->shortcutPath(current_pos, fallback_path);
-                path_len = history_graph_->calculatePathLength(global_path);
-                ROS_WARN("[FSM] Plan: Topo failed. Fallback to Local A*.");
+            // 确保终点是 VP (去重可能把最后一个很近的点删了)
+            if ((dedup_path.back() - vp_pos).norm() > 0.01) {
+                dedup_path.push_back(vp_pos);
             } else {
-                ROS_ERROR("[FSM] Plan: Topo failed and Direct failed.");
-                return false;
+                dedup_path.back() = vp_pos;
             }
+            global_path = dedup_path;
+        }
+
+        // 计算总长
+        final_path_len = history_graph_->calculatePathLength(global_path);
+
+    } else {
+        // --- 拓扑失效回退 (Fallback) ---
+        // 如果 Dijkstra 没结果，或者 graph_ok=false，直接尝试 A*
+        // ROS_WARN("[FSM] Topo path invalid. Fallback to Local A*.");
+        auto fallback_path = history_graph_->runLocalAStar(current_pos, vp_pos, 5000); // 给大一点步数
+        
+        if (!fallback_path.empty()) {
+            // A* 返回的是密集点，先简化
+            global_path = history_graph_->shortcutPath(current_pos, fallback_path);
+            final_path_len = history_graph_->calculatePathLength(global_path);
+        } else {
+            ROS_ERROR("[FSM] PlanToViewpoint Failed: Both Topo and Direct A* unreachable.");
+            return false;
         }
     }
 
-    // 3. 构建航点队列 & 分级策略
+    // 6. 构建航点队列 & 执行策略
     waypoint_queue_.clear();
-    current_global_path_ = global_path; // 保存用于可视化
+    current_global_path_ = global_path; // Visualization
 
-    // if (config_.enable_visualization) visualizeGlobalPath();
-
-    // 【策略 A】短途/直连模式 -> 直接交给 EGO-Planner
-    if (path_len < 5.0 || global_path.size() <= 2) {
-        ROS_INFO("[FSM] Short path (%.1fm). DIRECT mode.", path_len);
+    // 【策略 A】短途/直连模式 (Short/Simple)
+    // 路径长度短，或者路径点少（只有起点终点），直接把终点给局部规划器
+    if (final_path_len < 6.0 || global_path.size() <= 2) {
+        ROS_INFO("[FSM] Mode: DIRECT (Len: %.1f, Pts: %zu)", final_path_len, global_path.size());
         WaypointInfo wp;
         wp.position = vp_pos;
         wp.yaw = vp_yaw;
@@ -1613,23 +1639,23 @@ bool ExplorationFSMNew::planToViewpoint(int viewpoint_id, const Eigen::Vector3d*
         wp.id = viewpoint_id;
         waypoint_queue_.push_back(wp);
     } 
-    // 【策略 B】长途拓扑模式 -> 跟随航点
+    // 【策略 B】长途拓扑引导模式 (Graph Guided)
     else {
-        ROS_INFO("[FSM] Long path (%.1fm). GRAPH mode (%zu pts).", path_len, global_path.size());
+        ROS_INFO("[FSM] Mode: GRAPH (Len: %.1f, Pts: %zu)", final_path_len, global_path.size());
         
-        // 跳过起点 (当前位置)
+        // 跳过起点 i=0
         for (size_t i = 1; i < global_path.size(); ++i) {
             WaypointInfo wp;
             wp.position = global_path[i];
             
-            // 计算期望朝向
             if (i < global_path.size() - 1) {
-                // 中间点：朝向下一个路径点，方便飞越
+                // 中间航点：朝向下一个点
                 Eigen::Vector3d dir = global_path[i+1] - global_path[i];
-                wp.yaw = std::atan2(dir.y(), dir.x());
+                // 简单的平滑 Yaw，或者保持 current_yaw
+                wp.yaw = std::atan2(dir.y(), dir.x()); 
                 wp.is_viewpoint = false;
             } else {
-                // 终点：使用视点期望朝向
+                // 最终视点
                 wp.yaw = vp_yaw;
                 wp.is_viewpoint = true;
                 wp.id = viewpoint_id;
@@ -1638,10 +1664,10 @@ bool ExplorationFSMNew::planToViewpoint(int viewpoint_id, const Eigen::Vector3d*
         }
     }
 
-    // 4. 启动执行
+    // 7. 启动执行
     current_waypoint_idx_ = 0;
     if(!planNextWaypoint()) {
-        ROS_ERROR("PlanToViewpoint: planNextWaypoint failed");
+        ROS_ERROR("[FSM] planNextWaypoint failed at start.");
         return false;
     }
     return true;

@@ -244,12 +244,7 @@ public:
      * @brief 获取前沿子网格ID列表
      */
     void getFrontierSubGrids(std::vector<int>& frontier_subgrid_ids) const;
-    
-    /**
-     * @brief 获取所有前沿点位置
-     */
-    void getFrontierPositions(std::vector<Position>& positions) const;
-    
+        
     /**
      * @brief 获取按子网格分组的前沿点
      */

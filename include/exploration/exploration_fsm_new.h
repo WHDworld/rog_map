@@ -164,6 +164,15 @@ struct ExplorationFSMConfig {
     std::string lidar_topic;
 };
 
+struct ViewpointCandidate {
+    int id;               // 原始 ID
+    int type;             // 0: Cluster, 1: Semantic
+    Eigen::Vector3d pos;  // 视点坐标
+    float base_gain;      // 基础增益
+    float view_score;     // 视点本身分数
+    std::vector<int> candidate_anchors; // 候选锚点列表
+};
+
 // ==================== 主类 ====================
 
 class ExplorationFSMNew {

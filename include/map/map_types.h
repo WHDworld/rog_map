@@ -164,6 +164,7 @@ struct SemanticTargetMetadata {
     float viewpoint_yaw = 0.0f;     // 视点朝向（弧度，朝向目标质心）
     bool has_viewpoint = false;     // 是否生成了有效视点
     bool is_observed = false;       // 是否已被相机观测（由状态机更新）
+    int history_node_id = -1;       // 关联的历史节点 ID (用于 FSM 视点选择)
     
     SemanticTargetMetadata() {
         centroid.setZero();

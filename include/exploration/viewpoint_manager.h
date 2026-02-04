@@ -107,6 +107,10 @@ struct FrontierCluster {
     Eigen::Vector3f viewpoint_position;   // 视点位置
     float viewpoint_yaw;                  // 视点朝向
     float viewpoint_score;                // 视点评分
+    
+    // [新增] 探索增益（基于外扩未知区域计算）
+    float exploration_gain;
+
     // ==================== [新增] 增量更新缓存标记 ====================
     bool is_cached = false;        // 是否为缓存复用的簇（跳过重新处理）
     bool viewpoint_cached = false; // 视点是否已缓存（跳过重新生成）
@@ -130,7 +134,8 @@ struct FrontierCluster {
         , has_viewpoint(false)
         , viewpoint_position(Eigen::Vector3f::Zero())
         , viewpoint_yaw(0.0f)
-        , viewpoint_score(0.0f) {}
+        , viewpoint_score(0.0f)
+        , exploration_gain(0.0f) {}
 };
 
 /**
@@ -234,11 +239,6 @@ public:
     void start();
     
     /**
-     * @brief 停止定时器
-     */
-    void stop();
-    
-    /**
      * @brief 更新UAV状态
      * @param position UAV位置
      * @param yaw UAV朝向
@@ -261,16 +261,13 @@ public:
      * @brief 检查是否有有效视点
      */
     bool hasValidViewpoints() const;
-    
-    /**
-     * @brief 获取配置
-     */
-    const ViewpointManagerConfig& getConfig() const { return config_; }
-    
+        
     /**
      * @brief 手动触发一次视点更新（用于调试）
      */
     void triggerUpdate();
+    
+    const ViewpointManagerConfig& getConfig() const { return config_; }
     
 private:
     // ==================== 定时器回调 ====================
@@ -454,6 +451,13 @@ private:
      * @param clusters 簇列表
      */
     void filterOverheadClusters(std::vector<FrontierCluster>& clusters);
+    
+    /**
+     * @brief 计算簇的探索增益（基于外扩未知区域）
+     * @param cluster 目标簇
+     * @return 增益值
+     */
+    float calculateClusterGain(const FrontierCluster& cluster);
 
     FrontierCluster* getClusterById(int id);
 

@@ -623,14 +623,17 @@ void GlobalMap::extractGlobalFrontierIncremental() {
                                                VoxelStateBits::isUnknown(nei_it->second);
                     
                     if (is_neighbor_unknown) {
-                        // [注意] 此时目标前沿点是【邻居】(nei_idx)
-                        // 所以高度检查要查 nei_idx
-                        Position nei_pos = indexToPos(nei_idx);
-                        if (nei_pos.z() < config_.frontier_height_min || 
-                            nei_pos.z() > config_.frontier_height_max) continue;
+                        // [Target = Free Voxel] 
+                        // neighbor is Unknown, so 'free_idx' is the boundary free voxel.
                         
-                        sg.sub_grid_frontier_voxels_.insert(nei_idx);
-                        frontier_voxels_.insert(nei_idx);
+                        // Height check on self (Free Voxel)
+                        Position free_pos = indexToPos(free_idx);
+                        if (free_pos.z() < config_.frontier_height_min || 
+                            free_pos.z() > config_.frontier_height_max) break; // Self is invalid, next free
+                        
+                        sg.sub_grid_frontier_voxels_.insert(free_idx);
+                        frontier_voxels_.insert(free_idx);
+                        break; // Found one unknown neighbor, so this free voxel is a frontier. Done.
                     }
                 }
             }
@@ -640,37 +643,38 @@ void GlobalMap::extractGlobalFrontierIncremental() {
             // 适用场景：未探索区域少 (如残留的死角)，列表短，遍历 Unknown 更快
             
             for (const auto& unk_idx : sg.unknown_voxels_list_) {
-                // [优化 1]：先检查自身高度
-                // 因为在策略 B 中，"当前遍历的点" (unk_idx) 就是潜在的前沿点
-                // 如果自身高度都不对，就不用去查 6 个邻居了，省了大量哈希查找
-                Position unk_pos = indexToPos(unk_idx);
-                if (unk_pos.z() < config_.frontier_height_min || 
-                    unk_pos.z() > config_.frontier_height_max) continue;
-
-                // [安全检查] 确保它确实是 Unknown (虽然列表通常是同步的，但为了稳健)
-                // 如果它在 voxels_ map 里且状态不是 unknown，说明列表没同步好，跳过
+                // Safety check
                 auto it = voxels_.find(unk_idx);
                 if (it != voxels_.end() && !VoxelStateBits::isUnknown(it->second)) continue;
 
-                // 检查 6 邻域，看有没有 Free
+                // Check 6 neighbors for Free
+                VoxelIndex best_free_idx;
                 bool has_free_neighbor = false;
+                
                 for (int d = 0; d < 6; d++) {
                     VoxelIndex nei_idx = unk_idx + neighbor_offsets_6[d];
                     
                     if (!isInGlobalMapRange(nei_idx)) continue;
                     
                     auto nei_it = voxels_.find(nei_idx);
-                    // 只有在 map 中且标记为 Free 才是 Free
                     if (nei_it != voxels_.end() && VoxelStateBits::isFree(nei_it->second)) {
-                        has_free_neighbor = true;
-                        break; // [优化 2]：只要找到 1 个 Free 邻居，它就是前沿，无需再查其他 5 个
+                        // Found a Free neighbor!
+                        // Check Height of THIS Free neighbor
+                        Position nei_pos = indexToPos(nei_idx);
+                        if (nei_pos.z() >= config_.frontier_height_min && 
+                            nei_pos.z() <= config_.frontier_height_max) {
+                            
+                            best_free_idx = nei_idx;
+                            has_free_neighbor = true;
+                            break; // Found valid free neighbor
+                        }
                     }
                 }
 
                 if (has_free_neighbor) {
-                    // [注意] 此时目标前沿点是【自身】(unk_idx)
-                    sg.sub_grid_frontier_voxels_.insert(unk_idx);
-                    frontier_voxels_.insert(unk_idx);
+                    // [Target = Free Voxel]
+                    sg.sub_grid_frontier_voxels_.insert(best_free_idx);
+                    frontier_voxels_.insert(best_free_idx);
                 }
             }
         }
@@ -713,15 +717,6 @@ void GlobalMap::getFrontierSubGrids(std::vector<int>& frontier_subgrid_ids) cons
     frontier_subgrid_ids.reserve(current_frontier_subgrids_.size());
     for (int sg_id : current_frontier_subgrids_) {
         frontier_subgrid_ids.push_back(sg_id);
-    }
-}
-
-void GlobalMap::getFrontierPositions(std::vector<Position>& positions) const {
-    std::lock_guard<std::mutex> lock(map_mutex_);
-    positions.clear();
-    positions.reserve(frontier_voxels_.size());
-    for (const auto& f_idx : frontier_voxels_) {
-        positions.push_back(indexToPos(f_idx));
     }
 }
 
