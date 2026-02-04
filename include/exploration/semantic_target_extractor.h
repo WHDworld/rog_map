@@ -38,7 +38,7 @@ struct SemanticExtractorConfig {
     // PCA 分析参数
     int pca_check_interval = 20;        // 每生长多少个点检测一次
     float planarity_threshold = 0.85f;  // 平面度阈值 (>此值判为墙壁)
-    float curvature_threshold = 0.06f;  // 曲率阈值 (<此值判为墙壁) [Robust Metric]
+    float curvature_threshold = 0.03f;  // 曲率阈值 (<此值判为墙壁) [Robust Metric]
     float wall_size_threshold = 1.0f;   // 大于此尺寸的平面才判为墙壁 (m)
     
     // 混合 PCA 参数
@@ -269,6 +269,19 @@ private:
      * @brief 检查从 start 到 end 的射线是否被障碍物遮挡
      */
     bool checkRayVisibility(const Eigen::Vector3f& start, const Eigen::Vector3f& end) const;
+    
+    /**
+     * @brief 多射线可见性检测：向目标包围盒内多个采样点发射射线
+     * @param viewpoint_pos 视点位置
+     * @param bbox_min 目标包围盒最小点
+     * @param bbox_max 目标包围盒最大点
+     * @param visibility_thresh 可见比例阈值（默认 0.8）
+     * @return 可见比例 >= 阈值时返回 true
+     */
+    bool checkMultiRayVisibility(const Eigen::Vector3f& viewpoint_pos,
+                                  const Eigen::Vector3f& bbox_min,
+                                  const Eigen::Vector3f& bbox_max,
+                                  float visibility_thresh = 0.8f) const;
     
 private:
     star_mvf::GlobalMap* global_map_ = nullptr;

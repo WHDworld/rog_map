@@ -168,7 +168,6 @@ void ViewpointManager::update() {
 
     std::unordered_map<int, bool> node_changed_map;  // [新增] 节点变化追踪
     // Step 1 & 2: 从 HistoryGraph 获取活跃节点及其关联的前沿点
-    // 替代了原来的全量 getFrontierPositionsBySubGrid
     ros::Time t_step1 = ros::Time::now();
     
     std::map<int, std::vector<Eigen::Vector3f>> node_frontiers;
@@ -1593,44 +1592,6 @@ void ViewpointManager::matchClustersLocal(std::vector<FrontierCluster>& new_clus
         }
     }
 }
-
-// ==================== [新增] 带缓存的子网格点云收集 ====================
-void ViewpointManager::collectSubGridPoints(const std::vector<int>& subgrid_ids,
-                                            const std::unordered_set<int>& dirty_set,
-                                            std::vector<Eigen::Vector3f>& out_points,
-                                            bool& out_any_changed) {
-    out_points.clear();
-    out_any_changed = false;
-    
-    for (int sg_id : subgrid_ids) {
-        bool is_dirty = (dirty_set.count(sg_id) > 0);
-        
-        if (is_dirty) {
-            // 子网格为脏，需要重新从 GlobalMap 提取
-            out_any_changed = true;
-            
-            std::vector<Eigen::Vector3f> sg_points;
-            if (global_map_->getSubGridFrontierPoints(sg_id, sg_points)) {
-                // 更新缓存
-                subgrid_points_cache_[sg_id] = sg_points;
-                
-                // 合并到输出
-                out_points.insert(out_points.end(), sg_points.begin(), sg_points.end());
-            } else {
-                // 该子网格无前沿点，清空缓存
-                subgrid_points_cache_.erase(sg_id);
-            }
-        } else {
-            // 子网格干净，直接读取缓存
-            auto it = subgrid_points_cache_.find(sg_id);
-            if (it != subgrid_points_cache_.end() && !it->second.empty()) {
-                out_points.insert(out_points.end(), it->second.begin(), it->second.end());
-            }
-        }
-    }
-}
-
-
 
 float ViewpointManager::calculateClusterGain(const FrontierCluster& cluster) {
     if (cluster.points.empty()) return 0.0f;

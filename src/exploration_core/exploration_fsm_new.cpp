@@ -1211,16 +1211,9 @@ bool ExplorationFSMNew::checkCurrentGoalCovered() {
          if (semantic_target_extractor_) {
              int target_id = -(current_viewpoint_id_ + 100);
              
-             // 1. 优先检查 SemanticTargetExtractor 是否已经通过后台标记了
-             // (现在 SemanticTargetExtractor 有定时器在做这件事)
-             const auto& targets = semantic_target_extractor_->getAllTargetsConst(); // 需要去头文件加个 const 接口或者直接用 helper
-             // 由于无法直接访问 all_targets_，我们再次调用 isTargetVisualCovered
-             // 但稍微修改逻辑：如果 SemanticTargetExtractor 已经标记了，我们其实不需要重复计算。
-             // 不过 isTargetVisualCovered 只计算覆盖率，不看 is_observed 标记。
-             
+             // 1. 优先检查 SemanticTargetExtractor 是否已经通过后台标记了             
              // [改进]：这里直接信任 isTargetVisualCovered 的计算结果。
              // 另外，如果 target 已经被标记为 is_observed，那么在 selectBestViewpoint 阶段就不会被选出来。
-             // 如果当前正在执行，说明之前没观测到。现在我们到了，再次检查是合理的。
              // 保持原有 check 也是没问题的，双重保障。
              if (semantic_target_extractor_->isTargetVisualCovered(target_id, 0.8f)) {
                  ROS_INFO("[FSM] Semantic Target %d Covered. Marking OBSERVED.", target_id);
@@ -1337,7 +1330,7 @@ bool ExplorationFSMNew::selectBestViewpoint(int& selected_viewpoint_id, const Ei
         
         // 关键：找周围 15m 内所有节点，不仅仅是最近的一个
         // 建议 HistoryGraph 增加 findNodesInRange 返回 vector<int>
-        std::vector<int> nearby_nodes = history_graph_->findNodesInRange(pos, 15.0);
+        std::vector<int> nearby_nodes = history_graph_->findNodesInRange(pos, 25.0);
         
         // 简单的排序，优先取距离近的 Top 3，减少计算量
         std::sort(nearby_nodes.begin(), nearby_nodes.end(), [&](int a, int b){
@@ -1373,7 +1366,7 @@ bool ExplorationFSMNew::selectBestViewpoint(int& selected_viewpoint_id, const Ei
     // -> 处理 Semantic Targets (ID 映射: -(id + 100))
     for (const auto& t : semantic_targets_copy) {
         if (!t.has_viewpoint) continue;
-        float fixed_gain = 200.0f; // 语义目标给予高优先级
+        float fixed_gain = 1000.0f; // 语义目标给予高优先级
         addCandidate(-(t.id + 100), 1, t.viewpoint_position.cast<double>(), fixed_gain);
     }
 
@@ -1412,7 +1405,7 @@ bool ExplorationFSMNew::selectBestViewpoint(int& selected_viewpoint_id, const Ei
                 local_dist = (anchor_pos - cand.pos).norm();
             } else {
                 // 只有当射线被挡住时，才跑 A*，步数限制 2000
-                auto path = history_graph_->runLocalAStar(anchor_pos, cand.pos, 2000);
+                auto path = history_graph_->runLocalAStar(anchor_pos, cand.pos, 5000);
                 if (!path.empty()) {
                     local_dist = history_graph_->calculatePathLength(path);
                 }

@@ -43,6 +43,7 @@ void SemanticTargetExtractor::loadConfig(const ros::NodeHandle& nh, const std::s
     nh.param(prefix + "exploration_threshold", config_.exploration_threshold, 0.85f);
     nh.param(prefix + "pca_check_interval", config_.pca_check_interval, 20);
     nh.param(prefix + "planarity_threshold", config_.planarity_threshold, 0.85f);
+    nh.param(prefix + "curvature_threshold", config_.curvature_threshold, 0.03f);
     nh.param(prefix + "wall_size_threshold", config_.wall_size_threshold, 1.0f);
     
     // 混合 PCA 参数
@@ -328,7 +329,6 @@ void SemanticTargetExtractor::analyzeSubGrid(star_mvf::SubGrid& sg) {
     int wall_count = 0;
     int new_target_count = 0;
     int merged_count = 0;
-    int invalid_count = 0;
             
     // 遍历该子网格内所有未观测占据体素
     for (const auto& seed : sg.occ_unobserved_list_) {
@@ -382,10 +382,6 @@ void SemanticTargetExtractor::analyzeSubGrid(star_mvf::SubGrid& sg) {
                          cluster.voxels.size(),
                          cluster.centroid.x(), cluster.centroid.y(), cluster.centroid.z());
             }
-        } 
-        else {
-            invalid_count++;
-            // 注意：小簇体素保持 assigned_id = -2（未分配），等待后续重新聚类
         }
         
         // 只有确定分配了目标 ID 才标记体素
@@ -394,12 +390,6 @@ void SemanticTargetExtractor::analyzeSubGrid(star_mvf::SubGrid& sg) {
                 setVoxelTargetId(v, assigned_id);
             }
         }
-    }
-    
-    // 打印分析统计
-    if (seed_count > 0) {
-        ROS_INFO("[SemanticAnalyze] Stats: seeds=%d, walls=%d, new_targets=%d, merged=%d, invalid=%d",
-                 seed_count, wall_count, new_target_count, merged_count, invalid_count);
     }
 }
 
@@ -606,9 +596,9 @@ bool SemanticTargetExtractor::growRegion(const star_mvf::VoxelIndex& seed,
         if (count > 0 && count % config_.pca_check_interval == 0) {
             computePCAFeatures(sum_pos, sum_sq, count, cluster.pca_features);
             
-            float max_ext = cluster.getMaxExtent();
-            ROS_INFO("[PCA Check] count=%d, planarity=%.3f, curvature=%.3f, max_extent=%.2f",
-                     count, cluster.pca_features.planarity, cluster.pca_features.curvature, max_ext);
+            // float max_ext = cluster.getMaxExtent();
+            // ROS_INFO("[PCA Check] count=%d, planarity=%.3f, curvature=%.3f, max_extent=%.2f",
+            //          count, cluster.pca_features.planarity, cluster.pca_features.curvature, max_ext);
             
             bool is_wall_now = isWallOrFloor(cluster.pca_features, cluster);
             
@@ -619,8 +609,6 @@ bool SemanticTargetExtractor::growRegion(const star_mvf::VoxelIndex& seed,
             } else {
                 // 检测到非墙
                 if (was_wall_last_check && last_wall_boundary_idx >= 0) {
-                    // 之前是墙，现在不是 → 将 [0, last_wall_boundary] 标记为已观测墙壁
-                    ROS_INFO("[GreedyWall] Wall->NonWall transition at idx=%d. Marking wall segment.", last_wall_boundary_idx);
                     for (int i = 0; i <= last_wall_boundary_idx; ++i) {
                         const auto& wall_voxel = cluster.voxels[i];
                         global_map_->updateVoxelStateFromCamera(wall_voxel, true);
@@ -694,9 +682,6 @@ bool SemanticTargetExtractor::growRegion(const star_mvf::VoxelIndex& seed,
                 cluster.is_valid = false;
                 return false;
             }
-            // 重新计算剩余部分的 PCA
-            // 注意：这里简化处理，直接返回 false 因为剩余部分需要作为新种子重新生长
-            // 更精确的做法是对剩余部分重新计算，但这会增加复杂度
         }
         
         // 检查相机观测
@@ -714,8 +699,6 @@ bool SemanticTargetExtractor::growRegion(const star_mvf::VoxelIndex& seed,
             ROS_INFO("[GrowRegion] Invalid: voxels=%d, h=%.2f(need:%.2f-%.2f), w=%.2f",
                      count, height, config_.min_target_height, config_.max_target_height, width);
         }
-    } else {
-        ROS_INFO("[GrowRegion] Too few voxels: %d < %d", count, config_.min_voxel_count);
     }
     
     return cluster.is_valid;
@@ -948,6 +931,8 @@ bool SemanticTargetExtractor::generateViewpointForTarget(TargetMetadata& target)
     if (!global_map_) return false;
     
     const Eigen::Vector3f& centroid = target.centroid;
+    const Eigen::Vector3f& bbox_min = target.bbox_min;
+    const Eigen::Vector3f& bbox_max = target.bbox_max;
     
     // 候选视点结构
     struct Candidate {
@@ -981,8 +966,8 @@ bool SemanticTargetExtractor::generateViewpointForTarget(TargetMetadata& target)
                     continue;
                 }
                 
-                // 可见性检查
-                if (!checkRayVisibility(sample_pos, centroid)) {
+                // [优化] 使用多射线可见性检测（向包围盒内多点发射射线，80%以上可见才通过）
+                if (!checkMultiRayVisibility(sample_pos, bbox_min, bbox_max, 0.8f)) {
                     continue;
                 }
                 
@@ -1079,6 +1064,58 @@ bool SemanticTargetExtractor::checkRayVisibility(const Eigen::Vector3f& start,
     return true;
 }
 
+/**
+ * @brief 多射线可见性检测：向目标的实际占据体素发射射线
+ * @param viewpoint_pos 视点位置
+ * @param target_id 目标 ID（用于查找属于该目标的体素）
+ * @param bbox_min 目标包围盒最小点
+ * @param bbox_max 目标包围盒最大点
+ * @param visibility_thresh 可见比例阈值（默认 0.8）
+ * @return 可见比例 >= 阈值时返回 true
+ */
+bool SemanticTargetExtractor::checkMultiRayVisibility(const Eigen::Vector3f& viewpoint_pos,
+                                                       const Eigen::Vector3f& bbox_min,
+                                                       const Eigen::Vector3f& bbox_max,
+                                                       float visibility_thresh) const {
+    if (!global_map_) return true;
+    
+    int total_rays = 0;
+    int visible_rays = 0;
+    
+    // 遍历包围盒内的体素，只检测实际占据体素
+    star_mvf::VoxelIndex min_idx = global_map_->posToIndex(bbox_min);
+    star_mvf::VoxelIndex max_idx = global_map_->posToIndex(bbox_max);
+    
+    // 为降低计算量，稀疏采样（每隔 skip 个体素检测一次）
+    const int skip = 2;
+    
+    for (int z = min_idx.z; z <= max_idx.z; z += skip) {
+        for (int y = min_idx.y; y <= max_idx.y; y += skip) {
+            for (int x = min_idx.x; x <= max_idx.x; x += skip) {
+                star_mvf::VoxelIndex idx(x, y, z);
+                
+                // 只检测占据体素
+                star_mvf::VoxelState state = global_map_->getVoxelState(idx);
+                if (!star_mvf::VoxelStateBits::isOccupied(state)) continue;
+                
+                Eigen::Vector3f voxel_pos = global_map_->indexToPos(idx);
+                total_rays++;
+                
+                // 单射线检测
+                if (checkRayVisibility(viewpoint_pos, voxel_pos)) {
+                    visible_rays++;
+                }
+            }
+        }
+    }
+    
+    // 如果包围盒内没有占据体素（不太可能），默认可见
+    if (total_rays == 0) return true;
+    
+    float visibility_ratio = static_cast<float>(visible_rays) / total_rays;
+    return visibility_ratio >= visibility_thresh;
+}
+
 void SemanticTargetExtractor::getUnobservedTargets(std::vector<TargetMetadata*>& out_targets) {
     out_targets.clear();
     for (auto& target : all_targets_) {
@@ -1134,10 +1171,13 @@ bool SemanticTargetExtractor::isTargetVisualCovered(int target_id, float ratio_t
                 int voxel_tid = getVoxelTargetId(idx);
                 if (voxel_tid != target_id) continue;
 
+                // [修复] 只统计占据体素，自由体素不维护观测状态
+                star_mvf::VoxelState state = global_map_->getVoxelState(idx);
+                if (!star_mvf::VoxelStateBits::isOccupied(state)) continue;
+                
                 total_voxels++;
                 
                 // 检查视觉观测状态
-                star_mvf::VoxelState state = global_map_->getVoxelState(idx);
                 if (star_mvf::VoxelStateBits::isVisited(state)) {
                     visited_voxels++;
                 }

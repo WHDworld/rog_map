@@ -510,18 +510,6 @@ private:
     
     // 全局簇 ID 计数器（用于新发现的簇）
     std::atomic<int> global_cluster_id_{0};
-
-    /**
-     * @brief 收集指定子网格列表的前沿点（带缓存）
-     * @param subgrid_ids 子网格 ID 列表
-     * @param dirty_set 脏子网格集合
-     * @param out_points 输出：合并后的前沿点
-     * @param out_any_changed 输出：是否有任何子网格发生变化
-     */
-    void collectSubGridPoints(const std::vector<int>& subgrid_ids,
-                              const std::unordered_set<int>& dirty_set,
-                              std::vector<Eigen::Vector3f>& out_points,
-                              bool& out_any_changed);
     
     /**
      * @brief 更新历史节点与子网格的映射关系

@@ -345,9 +345,6 @@ void MapManager::vizTimerCallback(const ros::TimerEvent& event) {
     global_map_->visualize();
     
     auto t_end = ros::Time::now();
-    
-    // ROS_INFO_THROTTLE(5.0, "[MapManager] vizTimer #%d: global_voxels=%zu, time=%.1fms", 
-    //          viz_count, global_map_->getVoxelCount(), (t_end - t_start).toSec() * 1000.0);
 }
 
 // syncLocalToGlobal 已移除：现在直接在 GlobalMap::insertPointCloud 中处理

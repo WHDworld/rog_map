@@ -380,7 +380,7 @@ Visualization Manager:
           Marker Topic: /exploration_planner_node/local_map/bound
           Name: local_range
           Namespaces:
-            local_map_bound: true
+            {}
           Queue Size: 100
           Value: true
       Enabled: true
@@ -491,7 +491,7 @@ Visualization Manager:
           Color: 255; 255; 255
           Color Transformer: Intensity
           Decay Time: 0
-          Enabled: true
+          Enabled: false
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -506,7 +506,7 @@ Visualization Manager:
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
-          Value: true
+          Value: false
         - Class: rviz/MarkerArray
           Enabled: false
           Marker Topic: /exploration_planner_node/global_map/sub_grid_range
@@ -563,7 +563,7 @@ Visualization Manager:
           Color: 255; 255; 255
           Color Transformer: AxisColor
           Decay Time: 0
-          Enabled: true
+          Enabled: false
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -578,7 +578,7 @@ Visualization Manager:
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
-          Value: true
+          Value: false
       Enabled: true
       Name: Global_map
     - Class: rviz/Group
@@ -725,7 +725,6 @@ Visualization Manager:
           Marker Topic: /exploration/region_route
           Name: region_route
           Namespaces:
-            history_edges: true
             history_nodes: true
             node_subgrid_links: true
             subgrid_centers: true
@@ -746,6 +745,7 @@ Visualization Manager:
           Name: semantic_targets
           Namespaces:
             semantic_targets: true
+            semantic_viewpoints: true
           Queue Size: 100
           Value: true
       Enabled: true
@@ -935,7 +935,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/XYOrbit
-      Distance: 22.352455139160156
+      Distance: 30.340862274169922
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -943,17 +943,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: -0.3048379421234131
-        Y: -13.604994773864746
-        Z: -5.541112841456197e-05
+        X: -1.8372201919555664
+        Y: -2.5206117630004883
+        Z: -5.350378341972828e-05
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.4047975540161133
+      Pitch: 0.9447973966598511
       Target Frame: perfect_drone
-      Yaw: 2.138554096221924
+      Yaw: 3.14856219291687
     Saved:
       - Class: rviz/ThirdPersonFollower
         Distance: 17.48538589477539

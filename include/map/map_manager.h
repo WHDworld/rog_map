@@ -133,14 +133,6 @@ public:
     // 前沿接口
     void extractGlobalFrontierIncremental() { global_map_->extractGlobalFrontierIncremental(); }
     void getFrontierSubGrids(std::vector<int>& ids) const { global_map_->getFrontierSubGrids(ids); }
-    void getFrontierPositionsBySubGrid(std::vector<SubGridFrontierInfo>& info) const {
-        global_map_->getFrontierPositionsBySubGrid(info);
-    }
-    void getFrontierPointCloud(sensor_msgs::PointCloud2& cloud) const {
-        global_map_->getFrontierPointCloud(cloud);
-    }
-    size_t getFrontierCount() const { return global_map_->getFrontierCount(); }
-    int getTotalFrontierCount() const { return global_map_->getTotalFrontierCount(); }
     
     // 子网格接口
     SubGrid& getSubGrid(int linear_idx) { return global_map_->getSubGrid(linear_idx); }
@@ -150,23 +142,11 @@ public:
     bool isPathSafe(const Position& start, const Position& end, float margin = 0.0f) const {
         return global_map_->isPathSafe(start, end, margin);
     }
-    bool isSphereSafe(const Position& center, float radius) const {
-        return global_map_->isSphereSafe(center, radius);
-    }
     
     // ==================== 膨胀地图接口（规划器需要）====================
     
     bool isOccupiedInflate(const Position& pos) const { 
         return global_map_->isOccupiedInflate(pos); 
-    }
-    bool isUnknownInflate(const Position& pos) const { 
-        return global_map_->isUnknownInflate(pos); 
-    }
-    bool isKnownFreeInflate(const Position& pos) const { 
-        return global_map_->isKnownFreeInflate(pos); 
-    }
-    float getInfResolution() const { 
-        return global_map_->getInfResolution(); 
     }
     
     // ==================== 射线/路径检测（规划器需要）====================
@@ -199,38 +179,6 @@ public:
     bool isLineFree(const Position& start, const Position& end,
                     double max_dist) const {
         return global_map_->isLineFree(start, end, max_dist);
-    }
-    
-    // ==================== 网格类型查询 ====================
-    
-    GridType getGridType(const Position& pos) const {
-        return global_map_->getGridType(pos);
-    }
-    GridType getInfGridType(const Position& pos) const {
-        return global_map_->getInfGridType(pos);
-    }
-    double getMapValue(const Position& pos) const {
-        return global_map_->getMapValue(pos);
-    }
-    
-    // ==================== 包围盒搜索 ====================
-    
-    void boxSearch(const Position& box_min, const Position& box_max,
-                   GridType type, std::vector<Position>& out_points) const {
-        global_map_->boxSearch(box_min, box_max, type, out_points);
-    }
-    void boxSearchInflate(const Position& box_min, const Position& box_max,
-                          GridType type, std::vector<Position>& out_points) const {
-        global_map_->boxSearchInflate(box_min, box_max, type, out_points);
-    }
-    void boundBoxByLocalMap(Position& box_min, Position& box_max) const {
-        global_map_->boundBoxByLocalMap(box_min, box_max);
-    }
-    Position getLocalMapOrigin() const {
-        return global_map_->getLocalMapOrigin();
-    }
-    Position getLocalMapSize() const {
-        return global_map_->getLocalMapSize();
     }
     
     // ==================== 状态查询 ====================

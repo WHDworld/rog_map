@@ -9,12 +9,7 @@
 star_mvf::MapManager::Ptr g_map_manager;
 
 void statusTimerCallback(const ros::TimerEvent& event) {
-    static int count = 0;
-    count++;
-    int frontier_count = g_map_manager->getGlobalMap()->getTotalFrontierCount();
-    size_t voxel_count = g_map_manager->getGlobalMap()->getVoxelCount();
-    ROS_INFO("[MapTestNode] Status #%d: voxels=%zu, frontiers=%d", 
-             count, voxel_count, frontier_count);
+
 }
 
 int main(int argc, char** argv) {

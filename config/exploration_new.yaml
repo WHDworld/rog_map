@@ -59,7 +59,7 @@ rog_map:
 
   # ---------- 全局地图 ----------
   global_map:
-    map_size: [70, 70, 2.0]
+    map_size: [40, 40, 2.0]
     map_model: 0
     p_hit: 0.75 # [FUEL] 命中概率 (logit ~ 1.1)
     p_miss: 0.45 # [FUEL] 缺失概率 (logit ~ -0.2) -> 弱清除
@@ -217,31 +217,44 @@ semantic_extractor:
   # ---------- 触发阈值 ----------
   exploration_threshold: 0.95 # 探索率超过此值触发分析 [0.0-1.0]
 
-  # ---------- PCA 分析参数 ----------
-  pca_check_interval: 40 # 每生长多少个点检测一次
-  planarity_threshold: 0.85 # 平面度阈值 (>此值判为墙壁) [0.0-1.0]
-  wall_size_threshold: 1.5 # 大于此尺寸的平面才判为墙壁 [m]
+  # ---------- PCA 墙壁判定参数 ----------
+  # 墙壁判定逻辑：满足以下任一条件即判为墙壁
+  #   条件1: planarity > planarity_threshold 且 max_extent > wall_size_threshold
+  #   条件2: curvature < curvature_threshold 且 max_extent > wall_size_threshold (Robust)
+  #   条件3: max_extent > 2.5m (强制剔除)
+  pca_check_interval: 40        # 每生长多少个点检测一次 PCA
+  planarity_threshold: 0.85     # 平面度阈值 (>此值可能是墙壁) [0.0-1.0]
+  curvature_threshold: 0.1     # 曲率阈值 (<此值可能是墙壁，人体通常>0.03) [0.0-1.0]
+  wall_size_threshold: 2.0      # 墙壁最小尺寸 (人体高度<2m，设为2.0避免误判) [m]
 
-  # ---------- 混合 PCA 参数 ----------
-  local_pca_radius: 0.3 # 局部 PCA 邻域半径 [m]
+  # ---------- 混合 PCA 参数 (贴墙目标检测，当前未启用) ----------
+  local_pca_radius: 0.3         # 局部 PCA 邻域半径 [m]
   local_planarity_threshold: 0.7 # 局部平面度阈值（低于此值为异常点）
-  hybrid_switch_threshold: 0.6 # 全局平面度低于此值时使用混合分析
+  hybrid_switch_threshold: 0.6   # 全局平面度低于此值时使用混合分析
 
   # ---------- 目标筛选参数 ----------
-  min_voxel_count: 10 # 最小体素数（过滤噪声）
-  max_target_height: 2.5 # 目标最大高度 [m]（过滤天花板/高物体）
-  min_target_height: 0.25 # 目标最小高度 [m]（过滤地面噪声）
-  max_target_width: 2.0 # 目标最大宽度 [m]（过滤宽大物体）
+  min_voxel_count: 10           # 最小体素数（过滤噪声）
+  max_target_height: 3.0        # 目标最大高度 [m]（过滤天花板/高物体）
+  min_target_height: 0.25       # 目标最小高度 [m]（过滤地面噪声）
+  max_target_width: 2.0         # 目标最大宽度 [m]（过滤宽大物体）
 
   # ---------- 相机观测排除 ----------
-  observed_reject_ratio: 0.15 # 边界 occ_observed 比例阈值（超过则排除）
+  observed_reject_ratio: 0.05   # 边界 occ_observed 比例阈值（超过则排除）
 
   # ---------- 自清洁 ----------
-  enable_self_cleaning: true # 是否将识别的墙面标记为已观测
+  enable_self_cleaning: true    # 是否将识别的墙面标记为已观测
 
   # ---------- 更新频率 ----------
-  process_rate: 2.0 # 分析处理频率 [Hz]
-  vis_rate: 1.0 # 可视化更新频率 [Hz]
+  process_rate: 2.0             # 分析处理频率 [Hz]
+  vis_rate: 1.0                 # 可视化更新频率 [Hz]
+
+  # ---------- 语义目标视点采样参数 ----------
+  vp_sensor_range_min: 2.0      # 视点最小观测距离 [m]
+  vp_sensor_range_max: 5.0      # 视点最大观测距离 [m]
+  vp_optimal_distance: 3.0      # 最优观测距离 [m]
+  vp_sample_dphi: 0.3           # 水平角度采样间隔 [rad] (~17°)
+  vp_uav_radius: 0.3            # UAV 安全半径 [m]
+  vp_safety_margin: 0.5         # 视点安全边界 [m]
 
 # ========== 目标重建模块 (TargetReconstructor) ==========
 target_recon:

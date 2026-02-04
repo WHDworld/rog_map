@@ -383,16 +383,6 @@ bool GlobalMap::isUnknown(const VoxelIndex& idx) {
     return VoxelStateBits::isUnknown(getVoxelState(idx));
 }
 
-bool GlobalMap::isFrontier(const Position& pos) {
-    VoxelIndex idx = posToIndex(pos);
-    return isFrontier(idx);
-}
-
-bool GlobalMap::isFrontier(const VoxelIndex& idx) {
-    std::lock_guard<std::mutex> lock(map_mutex_);
-    return frontier_voxels_.count(idx) > 0;
-}
-
 // ==================== 状态更新 ====================
 void GlobalMap::updateVoxelStateFromLiDAR(const VoxelIndex& idx, bool is_occupied) {
     if (!isInGlobalMapRange(idx)) return;
@@ -566,20 +556,6 @@ void GlobalMap::markSubGridDirty(int linear_idx) {
     }
 }
 
-void GlobalMap::getNeighborSubGrids4(const SubGridIndex& idx, std::vector<SubGridIndex>& neighbors) {
-    neighbors.clear();
-    const int dx[] = {1, -1, 0, 0};
-    const int dy[] = {0, 0, 1, -1};
-    
-    for (int i = 0; i < 4; i++) {
-        int nx = idx.x + dx[i];
-        int ny = idx.y + dy[i];
-        if (nx >= 0 && nx < sub_grid_num_x_ && ny >= 0 && ny < sub_grid_num_y_) {
-            neighbors.push_back(SubGridIndex(nx, ny));
-        }
-    }
-}
-
 void GlobalMap::extractGlobalFrontierIncremental() {
     std::lock_guard<std::mutex> lock(map_mutex_);
     
@@ -590,11 +566,7 @@ void GlobalMap::extractGlobalFrontierIncremental() {
         
         SubGrid& sg = sub_grids_[sg_id];
         if (!sg.frontier_dirty) continue;
-        
-        // 1. 清除旧前沿 (逻辑不变)
-        for (const auto& f_idx : sg.sub_grid_frontier_voxels_) {
-            frontier_voxels_.erase(f_idx);
-        }
+
         sg.sub_grid_frontier_voxels_.clear();
 
         // 获取当前探索率
@@ -632,7 +604,6 @@ void GlobalMap::extractGlobalFrontierIncremental() {
                             free_pos.z() > config_.frontier_height_max) break; // Self is invalid, next free
                         
                         sg.sub_grid_frontier_voxels_.insert(free_idx);
-                        frontier_voxels_.insert(free_idx);
                         break; // Found one unknown neighbor, so this free voxel is a frontier. Done.
                     }
                 }
@@ -674,7 +645,6 @@ void GlobalMap::extractGlobalFrontierIncremental() {
                 if (has_free_neighbor) {
                     // [Target = Free Voxel]
                     sg.sub_grid_frontier_voxels_.insert(best_free_idx);
-                    frontier_voxels_.insert(best_free_idx);
                 }
             }
         }
@@ -693,8 +663,6 @@ void GlobalMap::extractGlobalFrontierIncremental() {
              sg.semantic_status_ == SubGrid::SemanticStatus::ACCUMULATING)) {
             ready_for_analysis_subgrids_.insert(sg_id);
             sg.semantic_status_ = SubGrid::SemanticStatus::READY;
-            ROS_INFO("[GlobalMap] SubGrid %d ready for semantic analysis (exploration_rate=%.2f), occ_unobserved_list_ size: %d", 
-                              sg_id, exploration_rate, sg.occ_unobserved_list_.size());
         }
     }
     
@@ -717,31 +685,6 @@ void GlobalMap::getFrontierSubGrids(std::vector<int>& frontier_subgrid_ids) cons
     frontier_subgrid_ids.reserve(current_frontier_subgrids_.size());
     for (int sg_id : current_frontier_subgrids_) {
         frontier_subgrid_ids.push_back(sg_id);
-    }
-}
-
-void GlobalMap::getFrontierPositionsBySubGrid(std::vector<SubGridFrontierInfo>& subgrid_frontiers) const {
-    std::lock_guard<std::mutex> lock(map_mutex_);
-    subgrid_frontiers.clear();
-    
-    for (int sg_id : current_frontier_subgrids_) {
-        if (sg_id < 0 || sg_id >= static_cast<int>(sub_grids_.size())) continue;
-        
-        const SubGrid& sg = sub_grids_[sg_id];
-        if (sg.sub_grid_frontier_voxels_.empty()) continue;
-        
-        SubGridFrontierInfo info;
-        info.subgrid_id = sg_id;
-        info.subgrid_center = sg.center;
-        info.subgrid_min = sg.world_min;
-        info.subgrid_max = sg.world_max;
-        info.frontier_points.reserve(sg.sub_grid_frontier_voxels_.size());
-        
-        for (const auto& f_idx : sg.sub_grid_frontier_voxels_) {
-            info.frontier_points.push_back(indexToPos(f_idx));
-        }
-        
-        subgrid_frontiers.push_back(info);
     }
 }
 
@@ -770,25 +713,6 @@ bool GlobalMap::getSubGridFrontierPoints(int sg_id, std::vector<Eigen::Vector3f>
         out_points.push_back(indexToPos(f_idx).cast<float>()); 
     }
     return true;
-}
-
-void GlobalMap::getFrontierPointCloud(sensor_msgs::PointCloud2& pc_frontier) const {
-    pcl::PointCloud<pcl::PointXYZ> pcl_cloud;
-    std::lock_guard<std::mutex> lock(map_mutex_);
-    pcl_cloud.reserve(frontier_voxels_.size());
-    for (const auto& f_idx : frontier_voxels_) 
-    {
-        Position pos = indexToPos(f_idx);
-        pcl_cloud.push_back(pcl::PointXYZ(pos.x(), pos.y(), pos.z()));
-    }
-    pcl::toROSMsg(pcl_cloud, pc_frontier);
-    pc_frontier.header.frame_id = config_.frame_id;
-    pc_frontier.header.stamp = ros::Time::now();
-}
-
-size_t GlobalMap::getFrontierCount() const {
-    std::lock_guard<std::mutex> lock(map_mutex_);
-    return frontier_voxels_.size();
 }
 
 // ==================== 安全性检查 ====================
@@ -955,27 +879,8 @@ void GlobalMap::visualizeGlobalMap() {
     // 前沿点云单独处理（有自己的数据结构）
     if (need_frontier) {
         sensor_msgs::PointCloud2 frontier_msg;
-        getFrontierPointCloud(frontier_msg);
         global_map_frontier_pub_.publish(frontier_msg);
     }
-}
-
-void GlobalMap::getAllKnownPointCloud(sensor_msgs::PointCloud2& pc_all_known) const {
-    pcl::PointCloud<pcl::PointXYZ> pcl_cloud;
-    
-    {
-        std::lock_guard<std::mutex> lock(map_mutex_);
-        for (const auto& kv : voxels_) {
-            if (!VoxelStateBits::isUnknown(kv.second)) {
-                Position pos = indexToPos(kv.first);
-                pcl_cloud.push_back(pcl::PointXYZ(pos.x(), pos.y(), pos.z()));
-            }
-        }
-    }
-    
-    pcl::toROSMsg(pcl_cloud, pc_all_known);
-    pc_all_known.header.frame_id = config_.frame_id;
-    pc_all_known.header.stamp = ros::Time::now();
 }
 
 bool GlobalMap::isInGlobalRange(const VoxelIndex& idx, 
@@ -1214,31 +1119,6 @@ void GlobalMap::visualizeCameraFrustum() {
     camera_frustum_pub_.publish(markers);
 }
 
-// ==================== 相机视锥相关 ====================
-
-bool GlobalMap::isPointInFrustum(const VoxelIndex& idx) const {
-    Position pos = indexToPos(idx);
-    return isPointInFrustum(pos);
-}
-
-bool GlobalMap::isPointInFrustum(const Position& pos) const {
-    if (!enable_camera_map_) return false;
-    
-    // 将点转换到相机坐标系
-    Eigen::Vector3f cam_pos = current_cam_rot_.inverse() * (pos - current_cam_origin_);
-    
-    // 检查是否在前方
-    if (cam_pos.z() < config_.camera_min_dist || cam_pos.z() > config_.camera_max_dist) {
-        return false;
-    }
-    
-    // 检查是否在视锥内
-    float half_width = cam_pos.z() * tan_half_fov_h_;
-    float half_height = cam_pos.z() * tan_half_fov_v_;
-    
-    return std::abs(cam_pos.x()) < half_width && std::abs(cam_pos.y()) < half_height;
-}
-
 void GlobalMap::updateCameraPose(const Position& origin, const Quaternion& rotation) {
     std::lock_guard<std::mutex> lock(map_mutex_);
     
@@ -1409,12 +1289,7 @@ bool GlobalMap::isUnknownInflate(const Position& pos) const {
     return false;
 }
 
-bool GlobalMap::isKnownFreeInflate(const Position& pos) const {
-    return !isOccupiedInflate(pos) && !isUnknownInflate(pos);
-}
-
 // ==================== ESDF实现 ====================
-
 double GlobalMap::getESDFDistance(const Position& pos) const {
     if (!config_.esdf_config.enable_esdf) {
         // ESDF未启用，使用简化的距离计算
@@ -1431,22 +1306,6 @@ double GlobalMap::getESDFDistance(const Position& pos) const {
     
     // 未计算的体素，返回最大距离或计算近似值
     return config_.esdf_config.esdf_max_distance;
-}
-
-void GlobalMap::getESDFGradient(const Position& pos, Position& gradient) const {
-    gradient = Position::Zero();
-    
-    if (!config_.esdf_config.enable_esdf) return;
-    
-    // 使用数值差分计算梯度
-    float eps = config_.resolution * 0.5f;
-    
-    gradient.x() = (getESDFDistance(pos + Position(eps, 0, 0)) - 
-                    getESDFDistance(pos - Position(eps, 0, 0))) / (2.0f * eps);
-    gradient.y() = (getESDFDistance(pos + Position(0, eps, 0)) - 
-                    getESDFDistance(pos - Position(0, eps, 0))) / (2.0f * eps);
-    gradient.z() = (getESDFDistance(pos + Position(0, 0, eps)) - 
-                    getESDFDistance(pos - Position(0, 0, eps))) / (2.0f * eps);
 }
 
 void GlobalMap::updateESDF(const Position& center) {
@@ -1569,133 +1428,6 @@ bool GlobalMap::isLineFreeInflate(const Position& start, const Position& end,
     }
     
     return true;
-}
-
-// ==================== 网格类型查询 ====================
-
-GridType GlobalMap::getGridType(const Position& pos) const {
-    if (!isInGlobalMapRange(pos)) {
-        return GridType::OUT_OF_MAP;
-    }
-    
-    VoxelIndex idx = posToIndex(pos);
-    return getGridType(idx);
-}
-
-GridType GlobalMap::getGridType(const VoxelIndex& idx) const {
-    if (!isInGlobalMapRange(idx)) {
-        return GridType::OUT_OF_MAP;
-    }
-    
-    std::lock_guard<std::mutex> lock(map_mutex_);
-    auto it = voxels_.find(idx);
-    
-    if (it == voxels_.end()) {
-        return GridType::UNKNOWN;
-    }
-    
-    VoxelState geo = VoxelStateBits::getGeoState(it->second);
-    if (geo == VoxelStateBits::GEO_OCCUPIED) {
-        return GridType::OCCUPIED;
-    } else if (geo == VoxelStateBits::GEO_FREE) {
-        return GridType::KNOWN_FREE;
-    }
-    
-    return GridType::UNKNOWN;
-}
-
-GridType GlobalMap::getInfGridType(const Position& pos) const {
-    if (!isInGlobalMapRange(pos)) {
-        return GridType::OUT_OF_MAP;
-    }
-    
-    if (isOccupiedInflate(pos)) {
-        return GridType::OCCUPIED;
-    } else if (isUnknownInflate(pos)) {
-        return GridType::UNKNOWN;
-    }
-    
-    return GridType::KNOWN_FREE;
-}
-
-double GlobalMap::getMapValue(const Position& pos) const {
-    // 返回概率值（简化版：0为未知，1为占据）
-    GridType type = getGridType(pos);
-    switch (type) {
-        case GridType::OCCUPIED: return 1.0;
-        case GridType::KNOWN_FREE: return 0.0;
-        default: return 0.5;
-    }
-}
-
-// ==================== 包围盒搜索 ====================
-
-void GlobalMap::boxSearch(const Position& box_min, const Position& box_max,
-                          GridType type, std::vector<Position>& out_points) const {
-    out_points.clear();
-    
-    VoxelIndex min_idx = posToIndex(box_min);
-    VoxelIndex max_idx = posToIndex(box_max);
-    
-    std::lock_guard<std::mutex> lock(map_mutex_);
-    
-    for (const auto& kv : voxels_) {
-        if (!isInGlobalRange(kv.first, min_idx, max_idx)) continue;
-        
-        GridType voxel_type;
-        VoxelState geo = VoxelStateBits::getGeoState(kv.second);
-        if (geo == VoxelStateBits::GEO_OCCUPIED) voxel_type = GridType::OCCUPIED;
-        else if (geo == VoxelStateBits::GEO_FREE) voxel_type = GridType::KNOWN_FREE;
-        else voxel_type = GridType::UNKNOWN;
-        
-        if (voxel_type == type) {
-            out_points.push_back(indexToPos(kv.first));
-        }
-    }
-}
-
-void GlobalMap::boxSearchInflate(const Position& box_min, const Position& box_max,
-                                  GridType type, std::vector<Position>& out_points) const {
-    out_points.clear();
-    
-    // 简化实现：遍历体素
-    VoxelIndex min_idx = posToIndex(box_min);
-    VoxelIndex max_idx = posToIndex(box_max);
-    
-    for (int64_t x = min_idx.x; x <= max_idx.x; x++) {
-        for (int64_t y = min_idx.y; y <= max_idx.y; y++) {
-            for (int64_t z = min_idx.z; z <= max_idx.z; z++) {
-                Position pos = indexToPos(VoxelIndex(x, y, z));
-                
-                GridType voxel_type = getInfGridType(pos);
-                if (voxel_type == type) {
-                    out_points.push_back(pos);
-                }
-            }
-        }
-    }
-}
-
-void GlobalMap::boundBoxByLocalMap(Position& box_min, Position& box_max) const {
-    // 限制到局部地图范围
-    Position local_min = robot_state_.position - local_map_size_ * 0.5f;
-    Position local_max = robot_state_.position + local_map_size_ * 0.5f;
-    
-    box_min.x() = std::max(box_min.x(), local_min.x());
-    box_min.y() = std::max(box_min.y(), local_min.y());
-    box_min.z() = std::max(box_min.z(), local_min.z());
-    
-    box_max.x() = std::min(box_max.x(), local_max.x());
-    box_max.y() = std::min(box_max.y(), local_max.y());
-    box_max.z() = std::min(box_max.z(), local_max.z());
-}
-
-Position GlobalMap::getLocalMapOrigin() const {
-    return robot_state_.position - local_map_size_ * 0.5f;
-}
-
-Position GlobalMap::getLocalMapSize() const {
-    return local_map_size_;
 }
 
 void GlobalMap::markSubGridAnalyzed(int linear_idx) {
@@ -1884,61 +1616,6 @@ void GlobalMap::updateSubGridOnStateChange(const VoxelIndex& idx, VoxelState old
             }
         } 
     }
-}
-
-bool GlobalMap::raycastWithConfirm(const Position& start, const Position& end,
-                                    const std::unordered_set<VoxelIndex, VoxelIndexHash>& candidate_occupied,
-                                    std::unordered_set<VoxelIndex, VoxelIndexHash>& confirmed_occupied) {
-    Position dir = end - start;
-    float length = dir.norm();
-    if (length < 1e-6f) return true;
-    
-    dir.normalize();
-    int num_steps = static_cast<int>(length / raycast_step_);
-    VoxelIndex end_idx = posToIndex(end);
-    
-    for (int i = 0; i < num_steps; i++) {
-        Position pos = start + dir * (i * raycast_step_);
-        if (!isInGlobalMapRange(pos)) continue;
-        
-        VoxelIndex idx = posToIndex(pos);
-        
-        // 遇到候选占据体素
-        if (candidate_occupied.count(idx) > 0) {
-            if (idx == end_idx) {
-                return true;  // 到达终点
-            }
-            confirmed_occupied.insert(idx);
-            return false;  // 被截断
-        }
-        
-        // 更新为 Free（使用内部方法避免锁重入）
-        VoxelState& state = voxels_[idx];
-        VoxelState old_geo = VoxelStateBits::getGeoState(state);
-        
-        if (old_geo != VoxelStateBits::GEO_FREE) {
-            VoxelStateBits::setGeoState(state, VoxelStateBits::GEO_FREE);
-            
-            // 更新子网格
-            SubGridIndex sg_idx;
-            voxelToSubGrid(idx, sg_idx);
-            int linear_idx = subGridToLinearIndex(sg_idx);
-            if (linear_idx >= 0 && linear_idx < static_cast<int>(sub_grids_.size())) {
-                SubGrid& sg = sub_grids_[linear_idx];
-                dirty_subgrids_.insert(linear_idx);
-                sg.frontier_dirty = true;
-                
-                if (old_geo == VoxelStateBits::GEO_UNKNOWN) {
-                    sg.removeUnknownVoxel(idx);
-                } else if (old_geo == VoxelStateBits::GEO_OCCUPIED) {
-                    sg.occupied_count--;
-                }
-                sg.addFreeVoxel(idx);
-            }
-        }
-    }
-    
-    return true;
 }
 
 }  // namespace star_mvf

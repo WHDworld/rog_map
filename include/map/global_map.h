@@ -162,11 +162,7 @@ public:
     bool isFree(const VoxelIndex& idx);
     bool isUnknown(const Position& pos);
     bool isUnknown(const VoxelIndex& idx);
-    bool isFrontier(const Position& pos);
-    bool isFrontier(const VoxelIndex& idx);
-    
-    // ==================== 状态更新接口 ====================
-    
+        
     /**
      * @brief 从LiDAR更新体素状态
      */
@@ -210,12 +206,7 @@ public:
      * @brief 标记子网格脏
      */
     void markSubGridDirty(int linear_idx);
-    
-    /**
-     * @brief 获取4邻域子网格
-     */
-    void getNeighborSubGrids4(const SubGridIndex& idx, std::vector<SubGridIndex>& neighbors);
-    
+        
     // ==================== 前沿接口 ====================
 
     // ==================== 增量更新接口 ====================
@@ -244,12 +235,7 @@ public:
      * @brief 获取前沿子网格ID列表
      */
     void getFrontierSubGrids(std::vector<int>& frontier_subgrid_ids) const;
-        
-    /**
-     * @brief 获取按子网格分组的前沿点
-     */
-    void getFrontierPositionsBySubGrid(std::vector<SubGridFrontierInfo>& subgrid_frontiers) const;
-    
+            
     /**
     * @brief 获取指定子网格内的所有前沿点 (用于 HistoryGraph 局部查询)
     * @param sg_id 子网格ID
@@ -257,17 +243,6 @@ public:
     * @return 如果子网格存在且有前沿点返回 true，否则返回 false
     */
     bool getSubGridFrontierPoints(int sg_id, std::vector<Eigen::Vector3f>& out_points) const;    /**
-    
-    * @brief 获取前沿点云
-     */
-    void getFrontierPointCloud(sensor_msgs::PointCloud2& pc_frontier) const;
-    
-    /**
-     * @brief 获取前沿数量
-     */
-    size_t getFrontierCount() const;
-    int getTotalFrontierCount() const { return static_cast<int>(getFrontierCount()); }
-    size_t getVoxelCount() const { return voxels_.size(); }
     
     // ==================== 安全性检查 ====================
     
@@ -293,29 +268,14 @@ public:
      * @brief 检查位置是否在膨胀后未知
      */
     bool isUnknownInflate(const Position& pos) const;
-    
-    /**
-     * @brief 检查位置是否在膨胀后自由
-     */
-    bool isKnownFreeInflate(const Position& pos) const;
-    
-    /**
-     * @brief 获取膨胀分辨率
-     */
-    float getInfResolution() const { return config_.inflation_config.inflation_resolution; }
-    
+        
     // ==================== ESDF接口 ====================
     
     /**
      * @brief 获取ESDF距离
      */
     double getESDFDistance(const Position& pos) const;
-    
-    /**
-     * @brief 获取ESDF梯度
-     */
-    void getESDFGradient(const Position& pos, Position& gradient) const;
-    
+        
     /**
      * @brief 检查ESDF是否启用
      */
@@ -346,45 +306,6 @@ public:
     bool isLineFreeInflate(const Position& start, const Position& end, 
                            bool use_unknown_as_occ = false) const;
     
-    // ==================== 网格类型查询（兼容旧代码）====================
-    
-    /**
-     * @brief 获取网格类型
-     */
-    GridType getGridType(const Position& pos) const;
-    GridType getGridType(const VoxelIndex& idx) const;
-    GridType getInfGridType(const Position& pos) const;
-    
-    /**
-     * @brief 获取概率值（占据概率）
-     */
-    double getMapValue(const Position& pos) const;
-    
-    // ==================== 包围盒搜索 ====================
-    
-    /**
-     * @brief 在包围盒内搜索特定类型的点
-     */
-    void boxSearch(const Position& box_min, const Position& box_max,
-                   GridType type, std::vector<Position>& out_points) const;
-    
-    /**
-     * @brief 在包围盒内搜索特定类型的点（膨胀版本）
-     */
-    void boxSearchInflate(const Position& box_min, const Position& box_max,
-                          GridType type, std::vector<Position>& out_points) const;
-    
-    /**
-     * @brief 限制包围盒到局部地图范围
-     */
-    void boundBoxByLocalMap(Position& box_min, Position& box_max) const;
-    
-    /**
-     * @brief 获取局部地图原点和尺寸
-     */
-    Position getLocalMapOrigin() const;
-    Position getLocalMapSize() const;
-    
     // ==================== 可视化 ====================
     
     /**
@@ -399,20 +320,7 @@ public:
     void visualizeGlobalMapRange();     // 全局地图范围框
     void visualizeSubGridRange();       // 子网格范围
     void visualizeCameraFrustum();      // 相机视锥体
-    
-    /**
-     * @brief 获取已知体素点云
-     */
-    void getAllKnownPointCloud(sensor_msgs::PointCloud2& pc_all_known) const;
-    
-    // ==================== 相机视锥相关 ====================
-    
-    /**
-     * @brief 检查点是否在相机视锥内
-     */
-    bool isPointInFrustum(const VoxelIndex& idx) const;
-    bool isPointInFrustum(const Position& pos) const;
-    
+
     /**
      * @brief 更新相机位姿
      */
@@ -443,7 +351,6 @@ protected:
     float sub_grid_y_ = 0.0f;
     
     // 前沿缓存
-    std::unordered_set<VoxelIndex, VoxelIndexHash> frontier_voxels_;
     std::unordered_set<int> current_frontier_subgrids_;
     std::unordered_set<int> dirty_subgrids_;
     
@@ -498,14 +405,6 @@ protected:
     ros::Publisher camera_frustum_pub_;
     ros::Publisher inflation_pub_;
     ros::Publisher esdf_pub_;
-    
-    /**
-     * @brief 射线投射确认占据（从 LocalMap 移植，内部使用）
-     * @deprecated 被 Log-Odds 机制替代
-     */
-    bool raycastWithConfirm(const Position& start, const Position& end,
-                            const std::unordered_set<VoxelIndex, VoxelIndexHash>& candidate_occupied,
-                            std::unordered_set<VoxelIndex, VoxelIndexHash>& confirmed_occupied);
     
     // ==================== Log-Odds 概率更新 ====================
     std::unordered_map<VoxelIndex, float, VoxelIndexHash> occupancy_buffer_;  // Log-Odds 概率缓冲

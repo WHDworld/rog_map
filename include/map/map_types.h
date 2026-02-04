@@ -110,7 +110,6 @@ namespace VoxelStateBits {
     inline bool isOccupied(VoxelState state) { return getGeoState(state) == GEO_OCCUPIED; }
     inline bool isVisited(VoxelState state) { return (state & VISITED) != 0; }
     inline bool isTarget(VoxelState state) { return (state & TARGET) != 0; }
-    inline bool isFrontier(VoxelState state) { return (state & FRONTIER) != 0; }
     // 状态修改
     inline void setGeoState(VoxelState& state, VoxelState geo) {
         state = (state & ~MASK_GEO) | (geo & MASK_GEO);
