@@ -741,7 +741,7 @@ void ExplorationFSMNew::processExecExploration() {
             ROS_INFO("[FSM] EXEC_EXPLORATION: Reached Final Viewpoint %d. Task Complete.", current_viewpoint_id_);
             total_viewpoints_visited_++;
             
-            // [新增] 如果是语义目标（ID < -1），标记为已观测
+            // [Check] 再次确认标记（防止中途通过但未触发阈值的情况?）
             if (current_viewpoint_id_ < -1 && semantic_target_extractor_) {
                 int target_id = -(current_viewpoint_id_ + 100);
                 semantic_target_extractor_->markTargetObserved(target_id);
@@ -1205,8 +1205,31 @@ bool ExplorationFSMNew::planReconstructionTrajectory(
 
 // [新增] 稀疏快照覆盖检测
 bool ExplorationFSMNew::checkCurrentGoalCovered() {
-    // 语义目标（ID < -1）不使用覆盖率检测，强制执行直到到达
-    if (current_viewpoint_id_ < -1) return false;
+    // [修改] 语义目标（ID < -1）使用视觉覆盖率检测
+    // 如果视觉覆盖率满足要求，则认为目标已探索完成，并标记状态
+    if (current_viewpoint_id_ < -1) {
+         if (semantic_target_extractor_) {
+             int target_id = -(current_viewpoint_id_ + 100);
+             
+             // 1. 优先检查 SemanticTargetExtractor 是否已经通过后台标记了
+             // (现在 SemanticTargetExtractor 有定时器在做这件事)
+             const auto& targets = semantic_target_extractor_->getAllTargetsConst(); // 需要去头文件加个 const 接口或者直接用 helper
+             // 由于无法直接访问 all_targets_，我们再次调用 isTargetVisualCovered
+             // 但稍微修改逻辑：如果 SemanticTargetExtractor 已经标记了，我们其实不需要重复计算。
+             // 不过 isTargetVisualCovered 只计算覆盖率，不看 is_observed 标记。
+             
+             // [改进]：这里直接信任 isTargetVisualCovered 的计算结果。
+             // 另外，如果 target 已经被标记为 is_observed，那么在 selectBestViewpoint 阶段就不会被选出来。
+             // 如果当前正在执行，说明之前没观测到。现在我们到了，再次检查是合理的。
+             // 保持原有 check 也是没问题的，双重保障。
+             if (semantic_target_extractor_->isTargetVisualCovered(target_id, 0.8f)) {
+                 ROS_INFO("[FSM] Semantic Target %d Covered. Marking OBSERVED.", target_id);
+                 semantic_target_extractor_->markTargetObserved(target_id);
+                 return true;
+             }
+         }
+         return false; // 尚未覆盖
+    }
 
     if (current_frontier_.empty()) return true; // 空数据默认已覆盖
 

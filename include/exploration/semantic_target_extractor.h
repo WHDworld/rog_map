@@ -169,7 +169,15 @@ public:
      * @brief 标记目标为已观测
      */
     void markTargetObserved(int target_id);
-    
+
+    /**
+     * @brief 检查目标是否已被视觉覆盖（通过统计包围盒内已观测体素比例）
+     * @param target_id 目标ID
+     * @param ratio_thresh 覆盖率阈值 (0.0-1.0)，默认 0.6
+     * @return 是否已覆盖
+     */
+    bool isTargetVisualCovered(int target_id, float ratio_thresh = 0.6f);
+
     /**
      * @brief 根据种子点重新生成完整的 Cluster 几何
      */
@@ -238,6 +246,7 @@ private:
     void setVoxelTargetId(const star_mvf::VoxelIndex& idx, int target_id);
     
     // ========== 辅助函数 ==========
+    void updateObservationStatus(); // [New] 定时检查视点覆盖状态
     void getNeighbors6(const star_mvf::VoxelIndex& idx, 
                        std::vector<star_mvf::VoxelIndex>& neighbors) const;
     

@@ -493,8 +493,10 @@ private:
     ros::Time state_start_time_;
     
     // 黑名单簇 (用于规划失败时的即时切换)
-    std::unordered_set<int> blacklisted_clusters_;
-    
+    std::unordered_set<int> blacklisted_clusters_; // 仅用于当前帧内
+    std::vector<Eigen::Vector3d> blacklisted_positions_; // [新增] 基于位置的持久化黑名单
+    bool isClusterBlacklisted(const FrontierCluster& cluster); // [新增] 辅助函数
+
     // 黑盒/覆盖检测
     std::vector<Eigen::Vector3f> current_frontier_; // 目标簇
     Eigen::Vector3d current_viewpoint_centroid_;            // 目标簇质心(辅助黑名单)

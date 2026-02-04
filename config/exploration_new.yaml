@@ -59,7 +59,7 @@ rog_map:
 
   # ---------- 全局地图 ----------
   global_map:
-    map_size: [50, 50, 2.0]
+    map_size: [70, 70, 2.0]
     map_model: 0
     p_hit: 0.75 # [FUEL] 命中概率 (logit ~ 1.1)
     p_miss: 0.45 # [FUEL] 缺失概率 (logit ~ -0.2) -> 弱清除
@@ -69,7 +69,7 @@ rog_map:
     ground_height: -0.01
     sub_grid_xy: 0.08
     frontier_height_min: 0.1
-    frontier_height_max: 1.8
+    frontier_height_max: 1.6
 
   # ---------- 膨胀地图 ----------
   inflation:
@@ -219,7 +219,7 @@ semantic_extractor:
 
   # ---------- PCA 分析参数 ----------
   pca_check_interval: 40 # 每生长多少个点检测一次
-  planarity_threshold: 0.75 # 平面度阈值 (>此值判为墙壁) [0.0-1.0]
+  planarity_threshold: 0.85 # 平面度阈值 (>此值判为墙壁) [0.0-1.0]
   wall_size_threshold: 1.5 # 大于此尺寸的平面才判为墙壁 [m]
 
   # ---------- 混合 PCA 参数 ----------
