@@ -159,10 +159,17 @@ struct SemanticTargetMetadata {
     float score = 0.0f;             // 目标评分
     double timestamp = 0.0;         // 发现时间戳
     
+    // ========== 探索视点信息 ==========
+    Position viewpoint_position;    // 探索视点位置
+    float viewpoint_yaw = 0.0f;     // 视点朝向（弧度，朝向目标质心）
+    bool has_viewpoint = false;     // 是否生成了有效视点
+    bool is_observed = false;       // 是否已被相机观测（由状态机更新）
+    
     SemanticTargetMetadata() {
         centroid.setZero();
         bbox_min.setZero();
         bbox_max.setZero();
+        viewpoint_position.setZero();
     }
     
     // 尺寸计算辅助函数

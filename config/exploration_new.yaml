@@ -96,7 +96,7 @@ viewpoint_manager:
   viewpoint_height_max: 2.0 # 视点最大采样高度 [m]
   viewpoint_height_num: 1 # 高度采样数量
   candidate_rmin: 2.0 # 最小采样半径 [m]
-  candidate_rmax: 6.0 # 最大采样半径 [m]
+  candidate_rmax: 5.0 # 最大采样半径 [m]
   candidate_rnum: 5 # 半径采样数量
   candidate_dphi: 0.25 # 角度采样间隔 [rad] (~14°)
   optimal_distance: 3.5 # 最优观测距离 [m]

@@ -359,7 +359,8 @@ void ViewpointManager::update() {
             float dist;
         };
         std::vector<ScoredCluster> scored_clusters;
-        for (size_t i = 0; i < all_clusters.size(); ++i) {
+        for (size_t i = 0; i < all_clusters.size(); ++i) 
+        {
             float dist = (all_clusters[i].centroid - uav_pos).head<2>().norm();
             float size_score = static_cast<float>(all_clusters[i].point_count); // 点数增益
             

@@ -63,8 +63,21 @@ void SemanticTargetExtractor::loadConfig(const ros::NodeHandle& nh, const std::s
     nh.param(prefix + "vis_rate", config_.vis_rate, 1.0f);
     nh.param<std::string>("frame_id", frame_id_, "map");
     
+    // 视点采样参数
+    nh.param(prefix + "vp_sensor_range_min", config_.vp_sensor_range_min, 2.0f);
+    nh.param(prefix + "vp_sensor_range_max", config_.vp_sensor_range_max, 5.0f);
+    // 从 viewpoint_manager 读取飞行高度（单一高度层采样）
+    nh.param("viewpoint_manager/viewpoint_height", config_.vp_flight_height, 1.5f);
+    nh.param(prefix + "vp_optimal_distance", config_.vp_optimal_distance, 3.5f);
+    nh.param(prefix + "vp_sample_dphi", config_.vp_sample_dphi, 0.3f);
+    nh.param(prefix + "vp_uav_radius", config_.vp_uav_radius, 0.3f);
+    nh.param(prefix + "vp_safety_margin", config_.vp_safety_margin, 0.5f);
+    
     ROS_INFO("[SemanticTargetExtractor] Config: exploration_thresh=%.2f, planarity_thresh=%.2f, hybrid_thresh=%.2f",
              config_.exploration_threshold, config_.planarity_threshold, config_.hybrid_switch_threshold);
+    ROS_INFO("[SemanticTargetExtractor] Viewpoint: range=[%.1f,%.1f], flight_height=%.1f, optimal_dist=%.1f",
+             config_.vp_sensor_range_min, config_.vp_sensor_range_max,
+             config_.vp_flight_height, config_.vp_optimal_distance);
 }
 
 // ==================== 定时器回调 ====================
@@ -208,6 +221,70 @@ void SemanticTargetExtractor::publishTargetMarkers() {
         text_marker.text = "T" + std::to_string(i);
         
         marker_array.markers.push_back(text_marker);
+        
+        // 4. 视点箭头（如果有有效视点）
+        if (target.has_viewpoint) {
+            visualization_msgs::Marker arrow_marker;
+            arrow_marker.header.frame_id = frame_id_;
+            arrow_marker.header.stamp = ros::Time::now();
+            arrow_marker.ns = "semantic_viewpoints";
+            arrow_marker.id = marker_id++;
+            arrow_marker.type = visualization_msgs::Marker::ARROW;
+            arrow_marker.action = visualization_msgs::Marker::ADD;
+            
+            // 箭头起点和终点
+            geometry_msgs::Point start_pt, end_pt;
+            start_pt.x = target.viewpoint_position.x();
+            start_pt.y = target.viewpoint_position.y();
+            start_pt.z = target.viewpoint_position.z();
+            
+            // 终点指向目标质心（缩短一点便于观察）
+            Eigen::Vector3f dir = (target.centroid - target.viewpoint_position).normalized();
+            end_pt.x = target.viewpoint_position.x() + dir.x() * 1.0f;
+            end_pt.y = target.viewpoint_position.y() + dir.y() * 1.0f;
+            end_pt.z = target.viewpoint_position.z() + dir.z() * 1.0f;
+            
+            arrow_marker.points.push_back(start_pt);
+            arrow_marker.points.push_back(end_pt);
+            
+            arrow_marker.scale.x = 0.1;  // 箭头线径
+            arrow_marker.scale.y = 0.2;  // 箭头头宽度
+            arrow_marker.scale.z = 0.2;  // 箭头头长度
+            
+            // 绿色箭头表示视点
+            arrow_marker.color.r = 0.0;
+            arrow_marker.color.g = 1.0;
+            arrow_marker.color.b = 0.0;
+            arrow_marker.color.a = 1.0;
+            
+            marker_array.markers.push_back(arrow_marker);
+            
+            // 5. 视点位置球体
+            visualization_msgs::Marker vp_sphere;
+            vp_sphere.header.frame_id = frame_id_;
+            vp_sphere.header.stamp = ros::Time::now();
+            vp_sphere.ns = "semantic_viewpoints";
+            vp_sphere.id = marker_id++;
+            vp_sphere.type = visualization_msgs::Marker::SPHERE;
+            vp_sphere.action = visualization_msgs::Marker::ADD;
+            
+            vp_sphere.pose.position.x = target.viewpoint_position.x();
+            vp_sphere.pose.position.y = target.viewpoint_position.y();
+            vp_sphere.pose.position.z = target.viewpoint_position.z();
+            vp_sphere.pose.orientation.w = 1.0;
+            
+            vp_sphere.scale.x = 0.25;
+            vp_sphere.scale.y = 0.25;
+            vp_sphere.scale.z = 0.25;
+            
+            // 橙色球体表示视点位置
+            vp_sphere.color.r = 1.0;
+            vp_sphere.color.g = 0.5;
+            vp_sphere.color.b = 0.0;
+            vp_sphere.color.a = 1.0;
+            
+            marker_array.markers.push_back(vp_sphere);
+        }
     }
     
     target_marker_pub_.publish(marker_array);
@@ -357,6 +434,15 @@ int SemanticTargetExtractor::createNewTarget(const SemanticCluster& cluster) {
     meta.bbox_max = cluster.bbox_max;
     meta.timestamp = ros::Time::now().toSec();
     meta.score = static_cast<float>(cluster.voxels.size());
+    
+    // 生成探索视点
+    if (generateViewpointForTarget(meta)) {
+        ROS_INFO("[SemanticTargetExtractor] Target %d viewpoint: (%.2f,%.2f,%.2f), yaw=%.2f",
+                 meta.id, meta.viewpoint_position.x(), meta.viewpoint_position.y(), 
+                 meta.viewpoint_position.z(), meta.viewpoint_yaw);
+    } else {
+        ROS_WARN("[SemanticTargetExtractor] Target %d: failed to generate viewpoint", meta.id);
+    }
     
     all_targets_.push_back(meta);
     return meta.id;
@@ -856,5 +942,143 @@ bool SemanticTargetExtractor::computeLocalPCA(const star_mvf::VoxelIndex& center
     return true;
 }
 
+// ==================== 视点生成 ====================
+bool SemanticTargetExtractor::generateViewpointForTarget(TargetMetadata& target) {
+    if (!global_map_) return false;
+    
+    const Eigen::Vector3f& centroid = target.centroid;
+    
+    // 候选视点结构
+    struct Candidate {
+        Eigen::Vector3f position;
+        float yaw;
+        float score;
+    };
+    std::vector<Candidate> valid_candidates;
+    
+    // 采样参数
+    float r_min = config_.vp_sensor_range_min;
+    float r_max = config_.vp_sensor_range_max;
+    float dphi = config_.vp_sample_dphi;
+    float vp_z = config_.vp_flight_height;  // 单一飞行高度
+    
+    // 圆周采样：在目标质心周围采样
+    for (float rc = r_min; rc <= r_max + 1e-3f; rc += 0.5f) {
+        for (float phi = -M_PI; phi < M_PI; phi += dphi) {
+            Eigen::Vector3f sample_pos(
+                centroid.x() + rc * std::cos(phi),
+                centroid.y() + rc * std::sin(phi),
+                vp_z
+            );
+                
+                // 计算朝向（朝向目标质心）
+                Eigen::Vector3f to_target = centroid - sample_pos;
+                float yaw = std::atan2(to_target.y(), to_target.x());
+                
+                // 安全性检查
+                if (!isViewpointPositionSafe(sample_pos)) {
+                    continue;
+                }
+                
+                // 可见性检查
+                if (!checkRayVisibility(sample_pos, centroid)) {
+                    continue;
+                }
+                
+                // 计算评分：距离评分（最优距离评分最高）
+                float dist = to_target.norm();
+                float dist_score = std::exp(-0.5f * std::pow(
+                    (dist - config_.vp_optimal_distance) / (r_max * 0.3f), 2));
+                
+                Candidate cand;
+                cand.position = sample_pos;
+                cand.yaw = yaw;
+                cand.score = dist_score;
+                
+            valid_candidates.push_back(cand);
+        }
+    }
+    
+    if (valid_candidates.empty()) {
+        target.has_viewpoint = false;
+        return false;
+    }
+    
+    // 选择最佳视点
+    auto best_it = std::max_element(valid_candidates.begin(), valid_candidates.end(),
+        [](const Candidate& a, const Candidate& b) {
+            return a.score < b.score;
+        });
+    
+    target.viewpoint_position = best_it->position;
+    target.viewpoint_yaw = best_it->yaw;
+    target.has_viewpoint = true;
+    
+    return true;
+}
+
+bool SemanticTargetExtractor::isViewpointPositionSafe(const Eigen::Vector3f& pos) const {
+    if (!global_map_) return false;
+    
+    // 地图范围检查
+    if (!global_map_->isInGlobalMapRange(pos)) return false;
+    
+    // 占据检查（含膨胀）
+    if (global_map_->isOccupiedInflate(pos)) return false;
+    
+    // 未知区域检查
+    if (global_map_->isUnknown(pos)) return false;
+    
+    // 高度合理性检查（不在地面或过高）
+    if (pos.z() < 0.5f || pos.z() > 3.0f) {
+        return false;
+    }
+    
+    // UAV安全半径检查
+    float check_radius = config_.vp_uav_radius + config_.vp_safety_margin;
+    float step = 0.2f;
+    int num_steps = static_cast<int>(check_radius / step) + 1;
+    
+    for (int dx = -num_steps; dx <= num_steps; ++dx) {
+        for (int dy = -num_steps; dy <= num_steps; ++dy) {
+            float dist_xy = std::sqrt(static_cast<float>(dx*dx + dy*dy)) * step;
+            if (dist_xy > check_radius) continue;
+            
+            Eigen::Vector3f check_pos = pos + Eigen::Vector3f(dx * step, dy * step, 0.0f);
+            
+            if (!global_map_->isInGlobalMapRange(check_pos)) continue;
+            if (global_map_->isOccupied(check_pos)) return false;
+        }
+    }
+    
+    return true;
+}
+
+bool SemanticTargetExtractor::checkRayVisibility(const Eigen::Vector3f& start, 
+                                                   const Eigen::Vector3f& end) const {
+    if (!global_map_) return true;
+    
+    Eigen::Vector3f dir = end - start;
+    float dist = dir.norm();
+    if (dist < 0.1f) return true;
+    
+    dir.normalize();
+    float step = 0.1f;
+    int num_steps = static_cast<int>(dist / step);
+    
+    for (int i = 1; i < num_steps; ++i) {
+        Eigen::Vector3f check_pos = start + dir * (i * step);
+        
+        if (!global_map_->isInGlobalMapRange(check_pos)) continue;
+        if (global_map_->isOccupied(check_pos)) {
+            return false;
+        }
+    }
+    
+    return true;
+}
+
 }  // namespace rog_map
+
+
 

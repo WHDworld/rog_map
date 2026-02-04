@@ -61,6 +61,15 @@ struct SemanticExtractorConfig {
     // 定时器频率
     float process_rate = 2.0f;          // 处理定时器频率 (Hz)
     float vis_rate = 1.0f;              // 可视化定时器频率 (Hz)
+    
+    // ========== 视点采样参数 ==========
+    float vp_sensor_range_min = 2.0f;   // 传感器最小观测距离 (m)
+    float vp_sensor_range_max = 5.0f;   // 传感器最大观测距离 (m)
+    float vp_flight_height = 1.5f;      // 无人机飞行高度 (m)，从 viewpoint_manager 读取
+    float vp_optimal_distance = 3.5f;   // 最优观测距离 (m)
+    float vp_sample_dphi = 0.3f;        // 水平角度采样间隔 (rad)
+    float vp_uav_radius = 0.3f;         // UAV安全半径 (m)
+    float vp_safety_margin = 0.5f;      // 安全边界 (m)
 };
 
 // ========== PCA 几何特征 ==========
@@ -222,6 +231,24 @@ private:
                        std::vector<star_mvf::VoxelIndex>& neighbors) const;
     
     bool isOccupiedUnobserved(const star_mvf::VoxelIndex& idx) const;
+    
+    // ========== 视点生成 ==========
+    /**
+     * @brief 为目标生成最佳探索视点
+     * @param target 目标元数据（输入输出，生成后填充视点字段）
+     * @return 是否成功生成有效视点
+     */
+    bool generateViewpointForTarget(TargetMetadata& target);
+    
+    /**
+     * @brief 检查视点位置是否安全
+     */
+    bool isViewpointPositionSafe(const Eigen::Vector3f& pos) const;
+    
+    /**
+     * @brief 检查从 start 到 end 的射线是否被障碍物遮挡
+     */
+    bool checkRayVisibility(const Eigen::Vector3f& start, const Eigen::Vector3f& end) const;
     
 private:
     star_mvf::GlobalMap* global_map_ = nullptr;
