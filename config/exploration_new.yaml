@@ -78,7 +78,7 @@ rog_map:
 
 # ========== ViewpointManager (5Hz) ==========
 viewpoint_manager:
-  update_rate: 5.0 # Hz
+  update_rate: 2.0 # Hz
 
   # ---------- 安全参数 ----------
   uav_radius: 0.3 # 无人机机身半径 [m]
@@ -102,8 +102,8 @@ viewpoint_manager:
   optimal_distance: 3.5 # 最优观测距离 [m]
 
   # ---------- 前沿聚类 ----------
-  cluster_eps: 0.75 # 聚类半径 [m]
-  min_cluster_size: 50 # 最小簇大小
+  cluster_eps: 0.5 # 聚类半径 [m]
+  min_cluster_size: 100 # 最小簇大小
   cluster_split_threshold: 10.0 # 簇分裂阈值 [m]
   max_clusters: 8 # 最大簇数量
 
@@ -135,7 +135,7 @@ viewpoint_manager:
 # ========== HistoryGraph (2Hz) ==========
 history_graph:
   update_rate: 2.0 # Hz
-  node_spacing: 4.0 # 节点间距 [m]
+  node_spacing: 3.0 # 节点间距 [m]
   max_assoc_dist: 30.0 # 最大关联距离 [m]
 
 # ========== 探索状态机 (100Hz) ==========
@@ -176,8 +176,8 @@ fsm:
 # ========== 规划管理器 ==========
 manager:
   # 动力学约束
-  max_vel: 1.0 # 最大速度 [m/s]
-  max_acc: 0.8 # 最大加速度 [m/s²]
+  max_vel: 2.0 # 最大速度 [m/s]
+  max_acc: 1.0 # 最大加速度 [m/s²]
   max_yaw_rate: 0.25 # 最大偏航角速度 [rad/s]
   max_yaw_acc: 0.25 # 最大偏航角加速度 [rad/s²]
 
@@ -222,8 +222,8 @@ semantic_extractor:
   #   条件1: planarity > planarity_threshold 且 max_extent > wall_size_threshold
   #   条件2: curvature < curvature_threshold 且 max_extent > wall_size_threshold (Robust)
   #   条件3: max_extent > 2.5m (强制剔除)
-  pca_check_interval: 40        # 每生长多少个点检测一次 PCA
-  planarity_threshold: 0.85     # 平面度阈值 (>此值可能是墙壁) [0.0-1.0]
+  pca_check_interval: 30        # 每生长多少个点检测一次 PCA
+  planarity_threshold: 0.90     # 平面度阈值 (>此值可能是墙壁) [0.0-1.0]
   curvature_threshold: 0.1     # 曲率阈值 (<此值可能是墙壁，人体通常>0.03) [0.0-1.0]
   wall_size_threshold: 2.0      # 墙壁最小尺寸 (人体高度<2m，设为2.0避免误判) [m]
 
@@ -235,7 +235,7 @@ semantic_extractor:
   # ---------- 目标筛选参数 ----------
   min_voxel_count: 10           # 最小体素数（过滤噪声）
   max_target_height: 3.0        # 目标最大高度 [m]（过滤天花板/高物体）
-  min_target_height: 0.25       # 目标最小高度 [m]（过滤地面噪声）
+  min_target_height: 0.0       # 目标最小高度 [m]（过滤地面噪声）
   max_target_width: 2.0         # 目标最大宽度 [m]（过滤宽大物体）
 
   # ---------- 相机观测排除 ----------
