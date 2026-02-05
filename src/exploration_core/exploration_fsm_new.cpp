@@ -681,6 +681,12 @@ void ExplorationFSMNew::processExecExploration() {
                 // 如果成功，直接 return，下一帧就会开始执行新轨迹
                 // 无需 transitState，保持在 EXEC_EXPLORATION 状态
                 return; 
+            } else {
+                // [新增] 无缝切换失败，降级到 LOCALPLAN 重新选择视点
+                ROS_WARN("[Coverage] Seamless replan failed. Falling back to LOCALPLAN.");
+                has_trajectory_ = false;
+                transitState(ExplorationState::LOCALPLAN, "Seamless failed");
+                return;
             }
         }
     }
@@ -746,6 +752,10 @@ void ExplorationFSMNew::processExecExploration() {
                 int target_id = -(current_viewpoint_id_ + 100);
                 semantic_target_extractor_->markTargetObserved(target_id);
                 ROS_INFO("[FSM] Semantic Target %d Observation Confirmed.", target_id);
+            } else if (current_viewpoint_id_ >= 0) {
+                // [修复] 对于普通Cluster视点，到达终点后强制加入黑名单，防止原地由于覆盖率判断延迟导致的死循环
+                blacklisted_clusters_.insert(current_viewpoint_id_);
+                ROS_INFO("[FSM] Cluster %d added to blacklist to enforce progress.", current_viewpoint_id_);
             }
             
             has_trajectory_ = false;
@@ -1211,10 +1221,22 @@ bool ExplorationFSMNew::checkCurrentGoalCovered() {
          if (semantic_target_extractor_) {
              int target_id = -(current_viewpoint_id_ + 100);
              
-             // 1. 优先检查 SemanticTargetExtractor 是否已经通过后台标记了             
-             // [改进]：这里直接信任 isTargetVisualCovered 的计算结果。
-             // 另外，如果 target 已经被标记为 is_observed，那么在 selectBestViewpoint 阶段就不会被选出来。
-             // 保持原有 check 也是没问题的，双重保障。
+             // [新增] 先检查是否已被标记为观测，避免重复处理
+             std::vector<TargetMetadata*> unobserved_targets;
+             semantic_target_extractor_->getUnobservedTargets(unobserved_targets);
+             bool is_already_observed = true;
+             for (const auto* t : unobserved_targets) {
+                 if (t->id == target_id) {
+                     is_already_observed = false;
+                     break;
+                 }
+             }
+             if (is_already_observed) {
+                 // 目标已被标记为观测，直接返回 true 触发切换
+                 return true;
+             }
+             
+             // 检查视觉覆盖率
              if (semantic_target_extractor_->isTargetVisualCovered(target_id, 0.8f)) {
                  ROS_INFO("[FSM] Semantic Target %d Covered. Marking OBSERVED.", target_id);
                  semantic_target_extractor_->markTargetObserved(target_id);
@@ -1366,7 +1388,7 @@ bool ExplorationFSMNew::selectBestViewpoint(int& selected_viewpoint_id, const Ei
     // -> 处理 Semantic Targets (ID 映射: -(id + 100))
     for (const auto& t : semantic_targets_copy) {
         if (!t.has_viewpoint) continue;
-        float fixed_gain = 1000.0f; // 语义目标给予高优先级
+        float fixed_gain = 3000.0f; // 语义目标给予高优先级
         addCandidate(-(t.id + 100), 1, t.viewpoint_position.cast<double>(), fixed_gain);
     }
 

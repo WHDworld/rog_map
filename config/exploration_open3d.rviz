@@ -721,22 +721,19 @@ Visualization Manager:
           Queue Size: 1
           Value: false
         - Class: rviz/MarkerArray
-          Enabled: true
+          Enabled: false
           Marker Topic: /exploration/region_route
           Name: region_route
           Namespaces:
-            history_nodes: true
-            node_subgrid_links: true
-            subgrid_centers: true
+            {}
           Queue Size: 100
-          Value: true
+          Value: false
         - Class: rviz/MarkerArray
           Enabled: true
           Marker Topic: /ego_planner/trajectory_vis
           Name: trajectory_vis
           Namespaces:
-            goal_yaw: true
-            trajectory: true
+            {}
           Queue Size: 100
           Value: true
         - Class: rviz/MarkerArray
@@ -935,7 +932,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/XYOrbit
-      Distance: 30.340862274169922
+      Distance: 45.46207046508789
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -943,17 +940,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: -1.8372201919555664
-        Y: -2.5206117630004883
-        Z: -5.350378341972828e-05
+        X: -4.6819658279418945
+        Y: 4.373131275177002
+        Z: -4.587438888847828e-05
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.9447973966598511
+      Pitch: 1.189797043800354
       Target Frame: perfect_drone
-      Yaw: 3.14856219291687
+      Yaw: 2.808558940887451
     Saved:
       - Class: rviz/ThirdPersonFollower
         Distance: 17.48538589477539

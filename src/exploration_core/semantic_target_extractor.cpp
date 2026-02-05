@@ -837,7 +837,7 @@ bool SemanticTargetExtractor::isOccupiedUnobserved(const star_mvf::VoxelIndex& i
     
     // 高度过滤
     Eigen::Vector3f pos = global_map_->indexToPos(idx);
-    float height_thresh = global_map_->getGroundHeight() + 0.2f;
+    float height_thresh = global_map_->getGroundHeight() + 0.01f;
     if (pos.z() <= height_thresh) {
         return false;  // 过滤地面
     }
@@ -987,6 +987,7 @@ bool SemanticTargetExtractor::generateViewpointForTarget(TargetMetadata& target)
     
     if (valid_candidates.empty()) {
         target.has_viewpoint = false;
+        ROS_INFO("No valid viewpoints found for target %d", target.id);
         return false;
     }
     
@@ -999,7 +1000,7 @@ bool SemanticTargetExtractor::generateViewpointForTarget(TargetMetadata& target)
     target.viewpoint_position = best_it->position;
     target.viewpoint_yaw = best_it->yaw;
     target.has_viewpoint = true;
-    
+    ROS_INFO("Found valid viewpoints for target %d", target.id);
     return true;
 }
 
@@ -1204,13 +1205,32 @@ void SemanticTargetExtractor::updateObservationStatus() {
         // 跳过已观测的目标
         if (target.is_observed) continue;
 
-        // 检查覆盖率 (阈值 0.6)
-        // 注意：isTargetVisualCovered 内部会有一定的计算量，
-        // 但由于是在 processTimerCallback (默认2Hz) 中调用，且只针对未观测目标，
-        // 且 isTargetVisualCovered 内部会快速跳过体素少的，应该可以接受。
-        if (isTargetVisualCovered(target.id, 0.8f)) {
+        // 检查覆盖率 (阈值 0.7)
+        if (isTargetVisualCovered(target.id, 0.7f)) {
             target.is_observed = true;
-            ROS_INFO("[SemanticTargetExtractor] Target %d passively OBSERVED during exploration. (background check)", target.id);
+            
+            // [重要] 将包围盒内的占据体素标记为已观测，防止后续重复处理
+            star_mvf::VoxelIndex min_idx = global_map_->posToIndex(target.bbox_min);
+            star_mvf::VoxelIndex max_idx = global_map_->posToIndex(target.bbox_max);
+            
+            int marked_count = 0;
+            for (int z = min_idx.z; z <= max_idx.z; ++z) {
+                for (int y = min_idx.y; y <= max_idx.y; ++y) {
+                    for (int x = min_idx.x; x <= max_idx.x; ++x) {
+                        star_mvf::VoxelIndex idx(x, y, z);
+                        star_mvf::VoxelState state = global_map_->getVoxelState(idx);
+                        
+                        // 只标记占据体素
+                        if (star_mvf::VoxelStateBits::isOccupied(state)) {
+                            global_map_->setVoxelVisitedDirect(idx, true);
+                            marked_count++;
+                        }
+                    }
+                }
+            }
+            
+            ROS_INFO("[SemanticTargetExtractor] Target %d OBSERVED (background check). Marked %d voxels as visited.", 
+                     target.id, marked_count);
         }
     }
 }
