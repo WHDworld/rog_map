@@ -383,50 +383,6 @@ bool GlobalMap::isUnknown(const VoxelIndex& idx) {
     return VoxelStateBits::isUnknown(getVoxelState(idx));
 }
 
-// ==================== 状态更新 ====================
-void GlobalMap::updateVoxelStateFromLiDAR(const VoxelIndex& idx, bool is_occupied) {
-    if (!isInGlobalMapRange(idx)) return;
-    
-    std::lock_guard<std::mutex> lock(map_mutex_);
-    
-    VoxelState& state = voxels_[idx];
-    VoxelState old_geo = VoxelStateBits::getGeoState(state);
-    VoxelState new_geo = is_occupied ? VoxelStateBits::GEO_OCCUPIED : VoxelStateBits::GEO_FREE;
-    
-    // 如果状态未改变，无需更新
-    if (old_geo == new_geo) return;
-    
-    VoxelStateBits::setGeoState(state, new_geo);
-    
-    // 标记子网格脏
-    SubGridIndex sg_idx;
-    voxelToSubGrid(idx, sg_idx);
-    int linear_idx = subGridToLinearIndex(sg_idx);
-    if (linear_idx >= 0 && linear_idx < static_cast<int>(sub_grids_.size())) {
-        SubGrid& sg = sub_grids_[linear_idx];
-        dirty_subgrids_.insert(linear_idx);
-        sg.frontier_dirty = true;
-        
-        // 更新子网格体素列表
-        // 处理旧状态
-        if (old_geo == VoxelStateBits::GEO_UNKNOWN) {
-            sg.removeUnknownVoxel(idx);  // 内部已执行 unknown_count--
-        } else if (old_geo == VoxelStateBits::GEO_FREE) {
-            sg.removeFreeVoxel(idx);  // 内部已执行 free_count--
-        } else if (old_geo == VoxelStateBits::GEO_OCCUPIED) {
-            sg.occupied_count--;  // OCCUPIED需要手动更新
-        }
-        
-        // 处理新状态
-        if (new_geo == VoxelStateBits::GEO_FREE) {
-            sg.addFreeVoxel(idx);  // 内部已执行 free_count++
-        } else if (new_geo == VoxelStateBits::GEO_OCCUPIED) {
-            sg.occupied_count++;  // OCCUPIED需要手动更新
-        }
-        // UNKNOWN状态不需要添加到列表（默认就是UNKNOWN）
-    }
-}
-
 // ==================== 增量更新接口实现 ====================
 
 int GlobalMap::getAndClearFrontierChangedSubGrids(std::vector<int>& out_changed_ids) {
@@ -547,13 +503,6 @@ const SubGrid& GlobalMap::getSubGrid(int linear_idx) const {
 
 int GlobalMap::subGridToLinearIndex(const SubGridIndex& idx) const {
     return idx.y * sub_grid_num_x_ + idx.x;
-}
-
-void GlobalMap::markSubGridDirty(int linear_idx) {
-    if (linear_idx >= 0 && linear_idx < static_cast<int>(sub_grids_.size())) {
-        dirty_subgrids_.insert(linear_idx);
-        sub_grids_[linear_idx].frontier_dirty = true;
-    }
 }
 
 void GlobalMap::extractGlobalFrontierIncremental() {
@@ -816,25 +765,23 @@ void GlobalMap::visualizeGlobalMap() {
             VoxelState geo_state = VoxelStateBits::getGeoState(kv.second);
             bool is_visited = VoxelStateBits::isVisited(kv.second);
             Position pos = indexToPos(kv.first);
-            
+            if(pos.z() < config_.ground_height + 0.2f) continue;
             pcl::PointXYZRGB pt;
             pt.x = pos.x(); pt.y = pos.y(); pt.z = pos.z();
             
             if (geo_state == VoxelStateBits::GEO_OCCUPIED) {
                 if (need_occ) {
                     // 颜色：已访问为绿色，未访问为红色
-                    if (is_visited) {
+                    if (need_visited && is_visited) {
                         pt.r = 0; pt.g = 255; pt.b = 0;
+                        visited_cloud.push_back(pt);
                     } else {
                         pt.r = 255; pt.g = 0; pt.b = 0;
                     }
+                    pt.r = 255; pt.g = 0; pt.b = 0;
                     occ_cloud.push_back(pt);
                 }
-                // 已访问的占据体素也加入 visited_cloud
-                if (need_visited && is_visited) {
-                    pt.r = 150; pt.g = 255; pt.b = 50;  // 黄绿色
-                    visited_cloud.push_back(pt);
-                }
+
             } else if (geo_state == VoxelStateBits::GEO_FREE) {
                 if (need_free) {
                     // 颜色：已访问为浅绿色，未访问为浅蓝色

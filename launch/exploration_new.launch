@@ -17,7 +17,7 @@
     <arg name="auto_start" default="false"/>
     
     <!-- ========== 新架构探索规划节点 ========== -->
-    <node pkg="semantic_exploration" type="exploration_planner_node_new" name="exploration_planner_node" output="screen">
+    <node pkg="semantic_exploration" type="exploration_planner_node_new" name="exploration_planner_node" output="screen" >
         <!-- 加载参数文件到节点的私有命名空间 -->
         <rosparam file="$(find semantic_exploration)/config/exploration_new.yaml" command="load"/>
         

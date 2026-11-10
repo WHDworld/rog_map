@@ -44,7 +44,7 @@ rog_map:
 
   # ---------- 传感器 ----------
   sensor:
-    lidar_max_range: 25.0
+    lidar_max_range: 15.0
     lidar_min_range: 0.2
     lidar_downsample_filter: 1 # 降采样因子
     camera_max_range: 5.0
@@ -59,7 +59,7 @@ rog_map:
 
   # ---------- 全局地图 ----------
   global_map:
-    map_size: [40, 40, 2.0]
+    map_size: [40, 30, 2.0]
     map_model: 0
     p_hit: 0.75 # [FUEL] 命中概率 (logit ~ 1.1)
     p_miss: 0.45 # [FUEL] 缺失概率 (logit ~ -0.2) -> 弱清除
@@ -135,8 +135,8 @@ viewpoint_manager:
 # ========== HistoryGraph (2Hz) ==========
 history_graph:
   update_rate: 2.0 # Hz
-  node_spacing: 3.0 # 节点间距 [m]
-  max_assoc_dist: 30.0 # 最大关联距离 [m]
+  node_spacing: 2.0 # 节点间距 [m]
+  max_assoc_dist: 35.0 # 最大关联距离 [m]
 
 # ========== 探索状态机 (100Hz) ==========
 fsm:
@@ -223,9 +223,9 @@ semantic_extractor:
   #   条件2: curvature < curvature_threshold 且 max_extent > wall_size_threshold (Robust)
   #   条件3: max_extent > 2.5m (强制剔除)
   pca_check_interval: 30        # 每生长多少个点检测一次 PCA
-  planarity_threshold: 0.90     # 平面度阈值 (>此值可能是墙壁) [0.0-1.0]
+  planarity_threshold: 0.975     # 平面度阈值 (>此值可能是墙壁) [0.0-1.0]
   curvature_threshold: 0.1     # 曲率阈值 (<此值可能是墙壁，人体通常>0.03) [0.0-1.0]
-  wall_size_threshold: 2.0      # 墙壁最小尺寸 (人体高度<2m，设为2.0避免误判) [m]
+  wall_size_threshold: 3.0      # 墙壁最小尺寸 (人体高度<2m，设为2.0避免误判) [m]
 
   # ---------- 混合 PCA 参数 (贴墙目标检测，当前未启用) ----------
   local_pca_radius: 0.3         # 局部 PCA 邻域半径 [m]
@@ -233,7 +233,7 @@ semantic_extractor:
   hybrid_switch_threshold: 0.6   # 全局平面度低于此值时使用混合分析
 
   # ---------- 目标筛选参数 ----------
-  min_voxel_count: 10           # 最小体素数（过滤噪声）
+  min_voxel_count: 8           # 最小体素数（过滤噪声）
   max_target_height: 3.0        # 目标最大高度 [m]（过滤天花板/高物体）
   min_target_height: 0.0       # 目标最小高度 [m]（过滤地面噪声）
   max_target_width: 2.0         # 目标最大宽度 [m]（过滤宽大物体）

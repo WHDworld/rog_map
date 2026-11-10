@@ -33,12 +33,13 @@ int main(int argc, char** argv) {
     star_mvf::MapManager::Ptr map_manager = std::make_shared<star_mvf::MapManager>(nh, nh_private);
     map_manager->initFromROS("rog_map");
     map_manager->start();
-    
+
     // 2. 创建并初始化探索状态机
     ROS_INFO("[Main] Creating ExplorationFSMNew...");
     rog_map::ExplorationFSMNew fsm;
+
     fsm.init(nh_private, map_manager);
-    
+
     ROS_INFO("[Main] Exploration Planner started, spinning...");
     
     // 3. 使用 AsyncSpinner 支持多线程回调

@@ -577,11 +577,11 @@ void ExplorationFSMNew::processWaitTrigger() {
         
         // 延迟结束，正式开始
         // [优化] 优先检查重建任务，实现起飞即重建
-        if (target_reconstructor_->hasReconstructionTask()) {
-            ROS_INFO("[FSM] Detected reconstruction task at startup, switching to RECON_PLAN");
-            transitState(ExplorationState::RECON_PLAN, "recon_task_at_startup");
-            return;
-        }
+        // if (target_reconstructor_->hasReconstructionTask()) {
+        //     ROS_INFO("[FSM] Detected reconstruction task at startup, switching to RECON_PLAN");
+        //     transitState(ExplorationState::RECON_PLAN, "recon_task_at_startup");
+        //     return;
+        // }
         // 检查是否有有效视点        
         if (viewpoint_manager_->hasValidViewpoints()) {
             transitState(ExplorationState::LOCALPLAN, "Triggered with viewpoints");
@@ -653,11 +653,11 @@ void ExplorationFSMNew::processExecExploration() {
     if ((ros::Time::now() - last_recon_check_time_).toSec() > 0.5) {
         last_recon_check_time_ = ros::Time::now();
         
-        if (target_reconstructor_->hasReconstructionTask()) {
-            ROS_INFO("[FSM] Detected reconstruction task, from ExecExploration switching to RECON_PLAN");
-            transitState(ExplorationState::RECON_PLAN, "recon_task_detected");
-            return;
-        }
+        // if (target_reconstructor_->hasReconstructionTask()) {
+        //     ROS_INFO("[FSM] Detected reconstruction task, from ExecExploration switching to RECON_PLAN");
+        //     transitState(ExplorationState::RECON_PLAN, "recon_task_detected");
+        //     return;
+        // }
     }
     // 0. 基础状态检查
     if (!has_trajectory_) {
@@ -1352,7 +1352,7 @@ bool ExplorationFSMNew::selectBestViewpoint(int& selected_viewpoint_id, const Ei
         
         // 关键：找周围 15m 内所有节点，不仅仅是最近的一个
         // 建议 HistoryGraph 增加 findNodesInRange 返回 vector<int>
-        std::vector<int> nearby_nodes = history_graph_->findNodesInRange(pos, 25.0);
+        std::vector<int> nearby_nodes = history_graph_->findNodesInRange(pos, 35.0);
         
         // 简单的排序，优先取距离近的 Top 3，减少计算量
         std::sort(nearby_nodes.begin(), nearby_nodes.end(), [&](int a, int b){
@@ -1427,7 +1427,7 @@ bool ExplorationFSMNew::selectBestViewpoint(int& selected_viewpoint_id, const Ei
                 local_dist = (anchor_pos - cand.pos).norm();
             } else {
                 // 只有当射线被挡住时，才跑 A*，步数限制 2000
-                auto path = history_graph_->runLocalAStar(anchor_pos, cand.pos, 5000);
+                auto path = history_graph_->runLocalAStar(anchor_pos, cand.pos, 200000);
                 if (!path.empty()) {
                     local_dist = history_graph_->calculatePathLength(path);
                 }
@@ -1562,7 +1562,7 @@ bool ExplorationFSMNew::planToViewpoint(int viewpoint_id, const Eigen::Vector3d*
             double dist_c_m = (mid_node - current_pos).norm();
             // 如果直线不通，跑 A* 获取真实距离
             if (!global_map_->isLineFreeInflate(current_pos.cast<float>(), mid_node.cast<float>())) {
-                auto path_cm = history_graph_->runLocalAStar(current_pos, mid_node, 1000);
+                auto path_cm = history_graph_->runLocalAStar(current_pos, mid_node, 200000);
                 if (!path_cm.empty()) dist_c_m = history_graph_->calculatePathLength(path_cm);
                 else dist_c_m = 1e9; // 不可达
             }
@@ -1583,7 +1583,7 @@ bool ExplorationFSMNew::planToViewpoint(int viewpoint_id, const Eigen::Vector3d*
                 cost_direct = (vp_pos - current_pos).norm();
             } else {
                 // 直线不通，尝试绕过 (增加步数限制，允许一定程度的绕行)
-                auto path_cv = history_graph_->runLocalAStar(current_pos, vp_pos, 2500);
+                auto path_cv = history_graph_->runLocalAStar(current_pos, vp_pos, 200000);
                 if (!path_cv.empty()) {
                     cost_direct = history_graph_->calculatePathLength(path_cv);
                 }
@@ -1650,7 +1650,7 @@ bool ExplorationFSMNew::planToViewpoint(int viewpoint_id, const Eigen::Vector3d*
         // --- 拓扑失效回退 (Fallback) ---
         // 如果 Dijkstra 没结果，或者 graph_ok=false，直接尝试 A*
         // ROS_WARN("[FSM] Topo path invalid. Fallback to Local A*.");
-        auto fallback_path = history_graph_->runLocalAStar(current_pos, vp_pos, 5000); // 给大一点步数
+        auto fallback_path = history_graph_->runLocalAStar(current_pos, vp_pos, 200000); // 给大一点步数
         
         if (!fallback_path.empty()) {
             // A* 返回的是密集点，先简化

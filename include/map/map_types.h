@@ -181,7 +181,7 @@ struct SemanticTargetMetadata {
 };
 
 // ==================== 子网格结构 ====================
-struct SubGrid {
+struct  SubGrid {
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     
     // 边界信息
@@ -366,16 +366,6 @@ struct SubGrid {
     bool should_iterate_explored() {
         return exploration_rate < 0.5f;
     }
-};
-
-// ==================== 子网格前沿信息（用于视点生成） ====================
-struct SubGridFrontierInfo {
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-    int subgrid_id;
-    Position subgrid_center;
-    Position subgrid_min;
-    Position subgrid_max;
-    std::vector<Position> frontier_points;
 };
 
 // ==================== 6邻域偏移 ====================

@@ -164,11 +164,6 @@ public:
     bool isUnknown(const VoxelIndex& idx);
         
     /**
-     * @brief 从LiDAR更新体素状态
-     */
-    void updateVoxelStateFromLiDAR(const VoxelIndex& idx, bool is_occupied);
-    
-    /**
      * @brief 从相机更新视觉状态
      */
     void updateVoxelStateFromCamera(const VoxelIndex& idx, bool is_visited);
@@ -201,11 +196,6 @@ public:
     const SubGrid& getSubGrid(const SubGridIndex& idx) const;
     const SubGrid& getSubGrid(int linear_idx) const;
     int subGridToLinearIndex(const SubGridIndex& idx) const;
-    
-    /**
-     * @brief 标记子网格脏
-     */
-    void markSubGridDirty(int linear_idx);
         
     // ==================== 前沿接口 ====================
 

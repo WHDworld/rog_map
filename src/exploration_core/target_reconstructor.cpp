@@ -25,6 +25,8 @@ void TargetReconstructor::init(ros::NodeHandle& nh, star_mvf::GlobalMap::Ptr glo
         "/target_recon/accumulated_cloud", 1, true);
     occupied_voxel_pub_ = nh_.advertise<sensor_msgs::PointCloud2>(
         "/target_recon/occupied_voxels", 1, true);
+    confirmed_bbox_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(
+        "/target_recon/confirmed_bboxes", 1, true);
         
     // 订阅话题（使用从参数加载的话题名）
     target_sub_ = nh_.subscribe(target_detection_topic_, 1, &TargetReconstructor::triggerCallback, this);
@@ -351,30 +353,6 @@ bool TargetReconstructor::hasReconstructionTask() const {
     }
     
     return false;
-}
-
-bool TargetReconstructor::getActiveReconstructionStatus(int& target_id, ReconstructionState& recon_state) const {
-    
-    for (const auto& target : tracked_targets_) {
-        if (target.id == active_target_id_) {
-            target_id = target.id;
-            recon_state = target.recon_state;
-            return true;
-        }
-    }
-    
-    return false;
-}
-
-double TargetReconstructor::getReconstructionProgress(int target_id) const {
-    
-    for (const auto& target : tracked_targets_) {
-        if (target.id == target_id) {
-            return target.coverage_ratio;
-        }
-    }
-    
-    return -1.0;
 }
 
 bool TargetReconstructor::getActiveTargetCenter(Eigen::Vector3d& center) const {
@@ -1039,10 +1017,14 @@ void TargetReconstructor::triggerCallback(const vision_msgs::Detection3DArrayCon
     
     // 2. 使用多目标跟踪机制匹配或创建目标
     updateTargetTracking(detections);
-    
+    int confirmed_count = 0;
+    for(const auto& target : tracked_targets_)
+    {
+        if(target.is_confirmed) confirmed_count++;
+    }
     // 3. 日志输出（调试用）
-    // ROS_INFO_THROTTLE(5.0, "[TargetReconstructor] Processed %lu detections, tracked %lu targets", 
-    //                   detections.size(), tracked_targets_.size());
+    ROS_INFO_THROTTLE(5.0, "[TargetReconstructor] Processed %lu detections, tracked %lu targets, confirmed %d targets", 
+                      detections.size(), tracked_targets_.size(), confirmed_count);
 }
 
 void TargetReconstructor::executionTimerCallback(const ros::TimerEvent& e) {
@@ -1072,6 +1054,86 @@ void TargetReconstructor::visTimerCallback(const ros::TimerEvent& e) {
     publishCorridor();
     publishViewpoints();
     publishOptimalPath();
+    
+    // ========== [新增] 发布已确认目标3D检测框 ==========
+    // {
+    //     visualization_msgs::MarkerArray bbox_array;
+        
+    //     // 先发一个 DELETEALL marker 清除旧框
+    //     visualization_msgs::Marker delete_marker;
+    //     delete_marker.action = visualization_msgs::Marker::DELETEALL;
+    //     delete_marker.header.frame_id = "map";
+    //     delete_marker.header.stamp = ros::Time::now();
+    //     bbox_array.markers.push_back(delete_marker);
+        
+    //     int marker_id = 0;
+    //     for (const auto& target : tracked_targets_) {
+    //         if (!target.is_confirmed) continue;
+            
+    //         // 根据重建状态选择颜色
+    //         float r = 1.0, g = 0.6, b = 0.0, a = 0.8; 
+
+    //         // 用 LINE_LIST 绘制立方体12条边
+    //         visualization_msgs::Marker bbox_marker;
+    //         bbox_marker.header.frame_id = "map";
+    //         bbox_marker.header.stamp = ros::Time::now();
+    //         bbox_marker.ns = "confirmed_bbox";
+    //         bbox_marker.id = marker_id++;
+    //         bbox_marker.type = visualization_msgs::Marker::LINE_LIST;
+    //         bbox_marker.action = visualization_msgs::Marker::ADD;
+    //         bbox_marker.scale.x = 0.05;  // 线宽
+    //         bbox_marker.color.r = r;
+    //         bbox_marker.color.g = g;
+    //         bbox_marker.color.b = b;
+    //         bbox_marker.color.a = a;
+    //         bbox_marker.pose.orientation.w = 1.0;
+    //         bbox_marker.lifetime = ros::Duration(0);  // 永久显示
+            
+    //         Eigen::Vector3d half = target.info.size / 2.0;
+    //         Eigen::Vector3d c = target.info.center;
+            
+    //         // 8个顶点
+    //         geometry_msgs::Point p[8];
+    //         for (int i = 0; i < 8; ++i) {
+    //             p[i].x = c.x() + ((i & 1) ? half.x() : -half.x());
+    //             p[i].y = c.y() + ((i & 2) ? half.y() : -half.y());
+    //             p[i].z = c.z() + ((i & 4) ? half.z() : -half.z());
+    //         }
+            
+    //         // 12条边: 底面4条 + 顶面4条 + 竖直4条
+    //         int edges[][2] = {{0,1},{2,3},{0,2},{1,3},  // 底面
+    //                           {4,5},{6,7},{4,6},{5,7},  // 顶面
+    //                           {0,4},{1,5},{2,6},{3,7}}; // 竖直
+    //         for (const auto& edge : edges) {
+    //             bbox_marker.points.push_back(p[edge[0]]);
+    //             bbox_marker.points.push_back(p[edge[1]]);
+    //         }
+    //         bbox_array.markers.push_back(bbox_marker);
+            
+    //         // 目标ID文字标注
+    //         visualization_msgs::Marker text_marker;
+    //         text_marker.header.frame_id = "map";
+    //         text_marker.header.stamp = ros::Time::now();
+    //         text_marker.ns = "confirmed_bbox_text";
+    //         text_marker.id = marker_id++;
+    //         text_marker.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
+    //         text_marker.action = visualization_msgs::Marker::ADD;
+    //         text_marker.pose.position.x = c.x();
+    //         text_marker.pose.position.y = c.y();
+    //         text_marker.pose.position.z = c.z() + half.z();  // 框顶上方
+    //         text_marker.pose.orientation.w = 1.0;
+    //         text_marker.scale.z = 0.3;  // 字体大小
+    //         text_marker.color.r = r;
+    //         text_marker.color.g = g;
+    //         text_marker.color.b = b;
+    //         text_marker.color.a = 1.0;
+    //         text_marker.lifetime = ros::Duration(0);
+    //         text_marker.text = "Target " + std::to_string(target.id);
+    //         bbox_array.markers.push_back(text_marker);
+    //     }
+        
+    //     confirmed_bbox_pub_.publish(bbox_array);
+    // }
     
     // ========== [新增] 发布累积点云和占据态体素 ==========
     TrackedTarget* target = getActiveTargetNoLock();

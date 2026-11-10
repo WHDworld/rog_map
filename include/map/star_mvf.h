@@ -32,7 +32,6 @@ namespace rog_map {
     
     using SubGridIndex = star_mvf::SubGridIndex;
     using SubGrid = star_mvf::SubGrid;
-    using SubGridFrontierInfo = star_mvf::SubGridFrontierInfo;
     
     // 配置类型别名（使用新名称避免冲突）
     using StarMvfInflationConfig = star_mvf::InflationConfig;

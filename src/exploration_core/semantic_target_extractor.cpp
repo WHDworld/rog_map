@@ -83,7 +83,7 @@ void SemanticTargetExtractor::loadConfig(const ros::NodeHandle& nh, const std::s
 
 // ==================== 定时器回调 ====================
 void SemanticTargetExtractor::processTimerCallback(const ros::TimerEvent& event) {
-    update();
+    // update();
     updateObservationStatus(); // [New] 实时检查所有语义目标是否已被偶然观测
 }
 

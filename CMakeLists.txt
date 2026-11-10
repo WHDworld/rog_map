@@ -116,6 +116,7 @@ list(FILTER lib_srcs EXCLUDE REGEX ".*/rog_map/inf_map\\.cpp$")
 list(FILTER lib_srcs EXCLUDE REGEX ".*/rog_map/counter_map\\.cpp$")
 list(FILTER lib_srcs EXCLUDE REGEX ".*/rog_map/esdf_map\\.cpp$")
 list(FILTER lib_srcs EXCLUDE REGEX ".*/rog_map/unified_map\\.cpp$")
+list(FILTER lib_srcs EXCLUDE REGEX ".*/map/lve_map\\.cpp$")
 
 add_library(exploration STATIC ${lib_srcs})
 add_dependencies(exploration ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})

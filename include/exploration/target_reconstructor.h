@@ -181,22 +181,7 @@ public:
      * @return true: 存在新确认目标或未完成重建的目标
      */
     bool hasReconstructionTask() const;
-    
-    /**
-     * @brief 获取当前活跃重建目标的状态
-     * @param target_id [输出] 目标ID
-     * @param recon_state [输出] 重建状态
-     * @return 是否有活跃目标
-     */
-    bool getActiveReconstructionStatus(int& target_id, ReconstructionState& recon_state) const;
-    
-    /**
-     * @brief 获取目标重建进度
-     * @param target_id 目标ID
-     * @return 覆盖率 [0.0, 1.0], -1.0表示目标不存在
-     */
-    double getReconstructionProgress(int target_id) const;
-    
+            
     /**
      * @brief 获取当前活跃目标的中心位置
      * @param center [输出] 目标中心坐标
@@ -525,6 +510,7 @@ private:
     ros::Publisher path_pub_;
     ros::Publisher accumulated_cloud_pub_;  // [新增] 累积点云发布器
     ros::Publisher occupied_voxel_pub_;      // [新增] 占据态体素发布器
+    ros::Publisher confirmed_bbox_pub_;      // [新增] 已确认目标3D检测框发布器
     
     // 状态
     bool initialized_ = false;
