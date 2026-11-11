@@ -4,12 +4,77 @@
  */
 
 #include "map/global_map.h"
+#include "utils/perf_logger.hpp"
 #include <cmath>
 
 // 性能监控
 #include "utils/perf_logger.hpp"
 
 namespace star_mvf {
+
+namespace {
+template <typename Map>
+size_t estimateHashBytes(const Map& map) {
+    // libstdc++ node containers: bucket pointer array plus value, next pointer,
+    // cached hash/alignment overhead. This is an estimate, not allocator truth.
+    return map.bucket_count() * sizeof(void*) +
+           map.size() * (sizeof(typename Map::value_type) + 2 * sizeof(void*));
+}
+
+template <typename T, typename Alloc>
+size_t estimateVectorBytes(const std::vector<T, Alloc>& vec) {
+    return vec.capacity() * sizeof(T);
+}
+}  // namespace
+
+void GlobalMap::logMemoryStats(const std::string& tag) const {
+    if (!PERF_LOG.isInitialized()) return;
+    std::lock_guard<std::mutex> lock(map_mutex_);
+
+    size_t unknown_size = 0, unknown_capacity = 0, unknown_hash_bytes = 0;
+    size_t free_size = 0, free_capacity = 0, free_hash_bytes = 0;
+    size_t occ_size = 0, occ_capacity = 0, occ_hash_bytes = 0;
+    size_t frontier_size = 0, frontier_hash_bytes = 0, target_capacity = 0;
+    for (const auto& sg : sub_grids_) {
+        unknown_size += sg.unknown_voxels_list_.size();
+        unknown_capacity += sg.unknown_voxels_list_.capacity();
+        unknown_hash_bytes += estimateHashBytes(sg.unknown_to_list_pos_);
+        free_size += sg.free_voxels_list_.size();
+        free_capacity += sg.free_voxels_list_.capacity();
+        free_hash_bytes += estimateHashBytes(sg.free_to_list_pos_);
+        occ_size += sg.occ_unobserved_list_.size();
+        occ_capacity += sg.occ_unobserved_list_.capacity();
+        occ_hash_bytes += estimateHashBytes(sg.occ_unobserved_map_);
+        frontier_size += sg.sub_grid_frontier_voxels_.size();
+        frontier_hash_bytes += estimateHashBytes(sg.sub_grid_frontier_voxels_);
+        target_capacity += sg.cached_targets_.capacity();
+    }
+
+    const size_t vectors_bytes =
+        (unknown_capacity + free_capacity + occ_capacity) * sizeof(VoxelIndex) +
+        target_capacity * sizeof(SemanticTargetMetadata) +
+        ray_endpoint_stamp_.capacity() * sizeof(uint32_t) +
+        frame_voxel_stamp_.capacity() * sizeof(uint32_t) +
+        frame_voxel_state_.capacity() * sizeof(int8_t) +
+        frame_touched_voxels_.capacity() * sizeof(VoxelIndex);
+    const size_t hash_bytes = estimateHashBytes(voxels_) + estimateHashBytes(occupancy_buffer_) +
+        estimateHashBytes(inflation_count_) +
+        estimateHashBytes(esdf_distance_) + unknown_hash_bytes + free_hash_bytes +
+        occ_hash_bytes + frontier_hash_bytes;
+    const double estimate_mb = static_cast<double>(vectors_bytes + hash_bytes) / (1024.0 * 1024.0);
+
+    PERF_LOG.logf("MAP", "MEMORY",
+        "tag=%s estimate_mb=%.2f voxels=%zu/%zu occupancy=%zu/%zu frame=%zu/%zu "
+        "inflation=%zu/%zu esdf=%zu/%zu subgrids=%zu unknown=%zu/%zu free=%zu/%zu "
+        "occ_unobserved=%zu/%zu frontier=%zu dirty=%zu changed=%zu active_frontier_sg=%zu",
+        tag.c_str(), estimate_mb, voxels_.size(), voxels_.bucket_count(),
+        occupancy_buffer_.size(), occupancy_buffer_.bucket_count(), frame_touched_voxels_.size(),
+        frame_touched_voxels_.capacity(), inflation_count_.size(), inflation_count_.bucket_count(),
+        esdf_distance_.size(), esdf_distance_.bucket_count(), sub_grids_.size(),
+        unknown_size, unknown_capacity, free_size, free_capacity, occ_size, occ_capacity,
+        frontier_size, dirty_subgrids_.size(), frontier_changed_subgrids_.size(),
+        current_frontier_subgrids_.size());
+}
 
 // ==================== 构造与初始化 ====================
 
@@ -54,6 +119,10 @@ void GlobalMap::initFromROS(const std::string& name_space) {
     
     posToIndex(config_.global_min, global_min_idx_);
     posToIndex(config_.global_max, global_max_idx_);
+    ray_endpoint_stamp_.assign(getTotalVoxelCount(), 0);
+    frame_voxel_stamp_.assign(getTotalVoxelCount(), 0);
+    frame_voxel_state_.assign(getTotalVoxelCount(), 0);
+    frame_touched_voxels_.reserve(65536);
     ROS_INFO("[GlobalMap] Global Map Size: [%f, %f, %f] - [%f, %f, %f]", config_.global_max.x(), config_.global_max.y(), config_.global_max.z(), config_.global_min.x(), config_.global_min.y(), config_.global_min.z());
     // 子网格配置
     nh_.param(name_space + "/global_map/sub_grid_xy", config_.sub_grid_xy, 0.1f);
@@ -94,7 +163,7 @@ void GlobalMap::initFromROS(const std::string& name_space) {
     
     // LiDAR 射线投射参数（从 LocalMap 移植）
     nh_.param(name_space + "/local_map/raycast_step", raycast_step_, 0.1f);
-    nh_.param(name_space + "/local_map/lidar_downsample_filter", lidar_downsample_filter_, 3);
+    nh_.param(name_space + "/sensor/lidar_downsample_filter", lidar_downsample_filter_, 3);
     ROS_INFO("[GlobalMap] LiDAR raycast: step=%.2f, downsample=%d", 
              raycast_step_, lidar_downsample_filter_);
     
@@ -297,6 +366,26 @@ bool GlobalMap::isInGlobalMapRange(const VoxelIndex& idx) const {
     return idx.x >= global_min_idx_.x && idx.x <= global_max_idx_.x &&
            idx.y >= global_min_idx_.y && idx.y <= global_max_idx_.y &&
            idx.z >= global_min_idx_.z && idx.z <= global_max_idx_.z;
+}
+
+size_t GlobalMap::getTotalVoxelCount() const {
+    const int64_t nx = global_max_idx_.x - global_min_idx_.x;
+    const int64_t ny = global_max_idx_.y - global_min_idx_.y;
+    const int64_t nz = global_max_idx_.z - global_min_idx_.z;
+    if (nx <= 0 || ny <= 0 || nz <= 0) return 0;
+    return static_cast<size_t>(nx * ny * nz);
+}
+
+bool GlobalMap::voxelToLinearAddress(const VoxelIndex& idx, size_t& address) const {
+    const int64_t nx = global_max_idx_.x - global_min_idx_.x;
+    const int64_t ny = global_max_idx_.y - global_min_idx_.y;
+    const int64_t nz = global_max_idx_.z - global_min_idx_.z;
+    const int64_t x = idx.x - global_min_idx_.x;
+    const int64_t y = idx.y - global_min_idx_.y;
+    const int64_t z = idx.z - global_min_idx_.z;
+    if (x < 0 || y < 0 || z < 0 || x >= nx || y >= ny || z >= nz) return false;
+    address = static_cast<size_t>((z * ny + y) * nx + x);
+    return true;
 }
 
 Position GlobalMap::clipToMapBoundary(const Position& pt, const Position& sensor_pos) const {
@@ -1389,20 +1478,28 @@ void GlobalMap::markSubGridAnalyzed(int linear_idx) {
 
 void GlobalMap::insertPointCloud(const sensor_msgs::PointCloud2& cloud, 
                                    const Position& sensor_pos) {
+    const auto total_start = ros::WallTime::now();
     pcl::PointCloud<pcl::PointXYZ> pcl_cloud;
     pcl::fromROSMsg(cloud, pcl_cloud);
+    const auto converted_at = ros::WallTime::now();
     
     if (pcl_cloud.empty()) return;
     
     std::lock_guard<std::mutex> lock(map_mutex_);
     
     // 新帧开始，清空帧内缓存
-    raycast_frame_id_++;
-    frame_cache_.clear();
+    if (++raycast_frame_id_ == 0) {
+        std::fill(ray_endpoint_stamp_.begin(), ray_endpoint_stamp_.end(), 0);
+        std::fill(frame_voxel_stamp_.begin(), frame_voxel_stamp_.end(), 0);
+        raycast_frame_id_ = 1;
+    }
+    frame_touched_voxels_.clear();
     
     // 阶段1：处理每个点，标记终点为 hit，沿途标记 miss
     int point_counter = 0;
-    std::unordered_set<VoxelIndex, VoxelIndexHash> processed_endpoints;  // 避免重复射线
+    size_t accepted_points = 0;
+    size_t clipped_points = 0;
+    size_t unique_rays = 0;
     
     for (const auto& pt : pcl_cloud) {
         if (lidar_downsample_filter_ > 1) {
@@ -1417,39 +1514,58 @@ void GlobalMap::insertPointCloud(const sensor_msgs::PointCloud2& cloud,
             // 将终点裁剪到地图边界
             end_pos = clipToMapBoundary(end_pos, sensor_pos);
             is_hit = false;  // 边界点不标记为 hit，只标记沿途 miss
+            ++clipped_points;
             
             // 如果裁剪后仍然无效，跳过
             if (!isInGlobalMapRange(end_pos)) continue;
         }
         
         VoxelIndex end_idx = posToIndex(end_pos);
+        ++accepted_points;
         
         // 标记终点（如果是真实命中点才标记 hit）
         if (is_hit) {
             setCacheOccupancy(end_idx, 1);
         }
         
-        // 避免重复处理同一终点的射线（参考 FUEL flag_rayend_）
-        if (processed_endpoints.count(end_idx) > 0) continue;
-        processed_endpoints.insert(end_idx);
+        // FUEL flag_rayend_ pattern: dense generation stamps avoid allocating and
+        // hashing an unordered_set for every point-cloud frame.
+        size_t endpoint_address = 0;
+        if (voxelToLinearAddress(end_idx, endpoint_address)) {
+            if (ray_endpoint_stamp_[endpoint_address] == raycast_frame_id_) continue;
+            ray_endpoint_stamp_[endpoint_address] = raycast_frame_id_;
+        }
+        ++unique_rays;
         
         // 射线投射：沿途标记 miss
         raycastAndMarkMiss(sensor_pos, end_pos, end_idx);
     }
+    const auto raycast_at = ros::WallTime::now();
+    const size_t frame_voxels = frame_touched_voxels_.size();
     
     // 阶段2：应用缓存更新到概率缓冲区
     applyFrameCache();
+    const auto applied_at = ros::WallTime::now();
+    PERF_LOG.logf("MAP", "INSERT",
+        "input=%zu accepted=%zu clipped=%zu unique_rays=%zu frame_voxels=%zu "
+        "convert_ms=%.3f raycast_ms=%.3f apply_ms=%.3f total_ms=%.3f",
+        pcl_cloud.size(), accepted_points, clipped_points, unique_rays, frame_voxels,
+        (converted_at - total_start).toSec() * 1000.0,
+        (raycast_at - converted_at).toSec() * 1000.0,
+        (applied_at - raycast_at).toSec() * 1000.0,
+        (applied_at - total_start).toSec() * 1000.0);
 }
 
 void GlobalMap::setCacheOccupancy(const VoxelIndex& idx, int8_t occ) {
-    // 缓存本帧更新，hit=1, miss=0
-    auto it = frame_cache_.find(idx);
-    if (it == frame_cache_.end()) {
-        frame_cache_[idx] = occ;
+    size_t address = 0;
+    if (!voxelToLinearAddress(idx, address)) return;
+    if (frame_voxel_stamp_[address] != raycast_frame_id_) {
+        frame_voxel_stamp_[address] = raycast_frame_id_;
+        frame_voxel_state_[address] = occ;
+        frame_touched_voxels_.push_back(idx);
     } else if (occ == 1) {
-        it->second = 1;  // hit 优先于 miss
+        frame_voxel_state_[address] = 1;  // hit wins over miss in one frame
     }
-    // 如果已经是 hit，保持 hit
 }
 
 void GlobalMap::raycastAndMarkMiss(const Position& start, const Position& end,
@@ -1475,9 +1591,10 @@ void GlobalMap::raycastAndMarkMiss(const Position& start, const Position& end,
 void GlobalMap::applyFrameCache() {
     std::vector<std::pair<VoxelIndex, bool>> inflation_updates;
     
-    for (const auto& kv : frame_cache_) {
-        const VoxelIndex& idx = kv.first;
-        int8_t occ = kv.second;
+    for (const VoxelIndex& idx : frame_touched_voxels_) {
+        size_t address = 0;
+        if (!voxelToLinearAddress(idx, address)) continue;
+        const int8_t occ = frame_voxel_state_[address];
         
         // 获取或初始化概率
         float& log_odds = occupancy_buffer_[idx];
@@ -1566,4 +1683,3 @@ void GlobalMap::updateSubGridOnStateChange(const VoxelIndex& idx, VoxelState old
 }
 
 }  // namespace star_mvf
-

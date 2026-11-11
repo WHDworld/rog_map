@@ -19,6 +19,8 @@
 #include <chrono>
 #include <ctime>
 #include <map>
+#include <filesystem>
+#include <unistd.h>
 #include <ros/ros.h>
 #include <ros/console.h>
 
@@ -44,6 +46,9 @@ public:
         
         if (initialized_) return;
         
+        std::error_code mkdir_ec;
+        std::filesystem::create_directories(base_path, mkdir_ec);
+
         // 生成带时间戳的日志文件名
         auto now = std::chrono::system_clock::now();
         std::time_t now_time = std::chrono::system_clock::to_time_t(now);
@@ -51,10 +56,16 @@ public:
         
         std::stringstream ss;
         ss << base_path << "/exploration_perf_"
-           << std::put_time(tm_info, "%Y%m%d_%H%M%S") << ".log";
+           << std::put_time(tm_info, "%Y%m%d_%H%M%S");
+        const std::string stem = ss.str();
+        ss.str("");
+        ss.clear();
+        ss << stem << ".log";
         log_path_ = ss.str();
+        resource_path_ = stem + "_resources.csv";
         
         log_file_.open(log_path_, std::ios::out | std::ios::trunc);
+        resource_file_.open(resource_path_, std::ios::out | std::ios::trunc);
         
         if (log_file_.is_open()) {
             start_time_ = ros::WallTime::now();
@@ -66,6 +77,11 @@ public:
             log_file_ << "  Started: " << std::put_time(tm_info, "%Y-%m-%d %H:%M:%S") << "\n";
             log_file_ << "=============================================================\n\n";
             log_file_.flush();
+            if (resource_file_.is_open()) {
+                resource_file_ << "elapsed_s,rss_kb,vmsize_kb,vmdata_kb,vm_swap_kb,threads,"
+                                  "system_mem_available_kb,system_swap_free_kb,tag\n";
+                resource_file_.flush();
+            }
             
             ROS_INFO("[PerfLogger] Initialized: %s", log_path_.c_str());
         } else {
@@ -87,6 +103,33 @@ public:
      * @brief 获取日志文件路径
      */
     std::string getLogPath() const { return log_path_; }
+    std::string getResourcePath() const { return resource_path_; }
+
+    /** Sample process/system memory from procfs into a separate CSV. */
+    void sampleResources(const std::string& tag) {
+        long rss_kb = 0, vmsize_kb = 0, vmdata_kb = 0, swap_kb = 0, threads = 0;
+        long mem_available_kb = 0, swap_free_kb = 0;
+        parseProcFile("/proc/self/status", [&](const std::string& key, long value) {
+            if (key == "VmRSS:") rss_kb = value;
+            else if (key == "VmSize:") vmsize_kb = value;
+            else if (key == "VmData:") vmdata_kb = value;
+            else if (key == "VmSwap:") swap_kb = value;
+            else if (key == "Threads:") threads = value;
+        });
+        parseProcFile("/proc/meminfo", [&](const std::string& key, long value) {
+            if (key == "MemAvailable:") mem_available_kb = value;
+            else if (key == "SwapFree:") swap_free_kb = value;
+        });
+
+        std::lock_guard<std::mutex> lock(mtx_);
+        if (!initialized_ || !resource_file_.is_open()) return;
+        const double secs = (ros::WallTime::now() - start_time_).toSec();
+        resource_file_ << std::fixed << std::setprecision(3) << secs << ','
+                       << rss_kb << ',' << vmsize_kb << ',' << vmdata_kb << ','
+                       << swap_kb << ',' << threads << ',' << mem_available_kb << ','
+                       << swap_free_kb << ',' << sanitizeCsv(tag) << '\n';
+        resource_file_.flush();
+    }
 
     // ==================== 日志记录接口 ====================
     
@@ -168,6 +211,7 @@ public:
         if (log_file_.is_open()) {
             log_file_.flush();
         }
+        if (resource_file_.is_open()) resource_file_.flush();
     }
     
     /**
@@ -179,6 +223,7 @@ public:
             log_file_ << "\n=== Log Closed ===\n";
             log_file_.close();
         }
+        if (resource_file_.is_open()) resource_file_.close();
         initialized_ = false;
     }
 
@@ -192,6 +237,23 @@ private:
     // 禁止拷贝
     PerfLogger(const PerfLogger&) = delete;
     PerfLogger& operator=(const PerfLogger&) = delete;
+
+    template <typename Callback>
+    static void parseProcFile(const char* path, Callback callback) {
+        std::ifstream input(path);
+        std::string line;
+        while (std::getline(input, line)) {
+            std::istringstream row(line);
+            std::string key;
+            long value = 0;
+            if (row >> key >> value) callback(key, value);
+        }
+    }
+
+    static std::string sanitizeCsv(std::string text) {
+        for (char& c : text) if (c == ',' || c == '\n' || c == '\r') c = '_';
+        return text;
+    }
 
     void writeLine(const std::string& text) {
         std::lock_guard<std::mutex> lock(mtx_);
@@ -210,9 +272,11 @@ private:
     }
 
     std::ofstream log_file_;
+    std::ofstream resource_file_;
     std::mutex mtx_;
     ros::WallTime start_time_;
     std::string log_path_;
+    std::string resource_path_;
     bool initialized_;
 };
 

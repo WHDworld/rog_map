@@ -213,6 +213,8 @@ struct ViewpointManagerConfig {
     float cluster_match_dist = 1.0f;       // ID 继承距离阈值 [m]
     bool enable_incremental_update = true; // 是否启用增量更新
     bool enable_id_inheritance = true;     // 是否启用 ID 继承
+    bool use_voxel_region_growing = true;  // FUEL-style 26-neighbor frontier clustering
+    int gain_max_expand_step = 6;           // unknown-space BFS depth for gain
 };
 
 // ==================== 主类 ====================
@@ -510,6 +512,10 @@ private:
     
     // 全局簇 ID 计数器（用于新发现的簇）
     std::atomic<int> global_cluster_id_{0};
+
+    // Dense generation stamps replace per-cluster unordered_set allocations in gain BFS.
+    std::vector<uint32_t> gain_visit_stamp_;
+    uint32_t gain_generation_ = 0;
     
     /**
      * @brief 更新历史节点与子网格的映射关系

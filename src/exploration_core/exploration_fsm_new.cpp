@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iomanip>
 #include <ros/package.h>
+#include "utils/perf_logger.hpp"
 
 // 简化日志宏
 #define LOG_INFO(msg) ROS_INFO_STREAM("[FSM_NEW] " << msg)
@@ -593,7 +594,7 @@ void ExplorationFSMNew::processWaitTrigger() {
 }
 
 void ExplorationFSMNew::processLocalPlan() {
-    ros::Time t_start = ros::Time::now();
+    ros::WallTime t_start = ros::WallTime::now();
     
     // 1. 选择最佳视点 (两阶段 + 缓存)
     int selected_vp_id = -1;
@@ -616,7 +617,7 @@ void ExplorationFSMNew::processLocalPlan() {
         publishHoverCmd();
         return;
     }
-    ros::Time t_select_vp = ros::Time::now();
+    ros::WallTime t_select_vp = ros::WallTime::now();
     // 2. 生成导航路径 (复用缓存)
     if (!planToViewpoint(selected_vp_id)) {
         ROS_WARN("[FSM] Failed to generate path to VP %d. Blacklisting it.", selected_vp_id);
@@ -634,7 +635,7 @@ void ExplorationFSMNew::processLocalPlan() {
         // [New] 规划成功，清空黑名单
         blacklisted_clusters_.clear();
     }
-    ros::Time t_plan_to_vp = ros::Time::now();
+    ros::WallTime t_plan_to_vp = ros::WallTime::now();
     // 3. 锁定目标，准备起飞
     current_viewpoint_id_ = selected_vp_id;
     
@@ -644,7 +645,12 @@ void ExplorationFSMNew::processLocalPlan() {
     has_prev_traj_ = false;  // [New] 清空旧轨迹缓存
     
     ROS_INFO("[FSM] LOCALPLAN: processLocalPlan success, current_viewpoint_id_: %d, select_vp_time: %.2fms, plan_to_vp_time: %.2fms, plan all_time: %.2fms", 
-        current_viewpoint_id_, (t_select_vp - t_start).toSec() * 1000.0, (t_plan_to_vp - t_select_vp).toSec() * 1000.0, (ros::Time::now() - t_start).toSec() * 1000.0);
+        current_viewpoint_id_, (t_select_vp - t_start).toSec() * 1000.0, (t_plan_to_vp - t_select_vp).toSec() * 1000.0, (ros::WallTime::now() - t_start).toSec() * 1000.0);
+    PERF_LOG.logf("SCHED", "LOCAL_PLAN",
+        "viewpoint=%d select_ms=%.3f route_and_traj_ms=%.3f total_ms=%.3f waypoints=%zu",
+        current_viewpoint_id_, (t_select_vp - t_start).toSec() * 1000.0,
+        (t_plan_to_vp - t_select_vp).toSec() * 1000.0,
+        (ros::WallTime::now() - t_start).toSec() * 1000.0, waypoint_queue_.size());
     transitState(ExplorationState::EXEC_EXPLORATION, "Plan success");
 }
 
@@ -1305,6 +1311,7 @@ bool ExplorationFSMNew::checkCurrentGoalCovered() {
 
 // ==================== LOCALPLAN 核心方法 ====================
 bool ExplorationFSMNew::selectBestViewpoint(int& selected_viewpoint_id, const Eigen::Vector3d* from_pos) {
+    const auto profile_start = ros::WallTime::now();
     std::vector<FrontierCluster> clusters = viewpoint_manager_->getClusters();
     // 深拷贝语义目标，防止多线程问题
     std::vector<TargetMetadata> semantic_targets_copy; 
@@ -1404,6 +1411,7 @@ bool ExplorationFSMNew::selectBestViewpoint(int& selected_viewpoint_id, const Ei
     int best_id = -1;
     float best_score = -1.0f;
     int best_anchor_final = -1;
+    double best_path_cost = -1.0;
 
     for (auto& cand : all_candidates) {
         double min_path_cost = std::numeric_limits<double>::max();
@@ -1462,6 +1470,7 @@ bool ExplorationFSMNew::selectBestViewpoint(int& selected_viewpoint_id, const Ei
             best_score = score;
             best_id = cand.id;
             best_anchor_final = local_best_anchor;
+            best_path_cost = min_path_cost;
         }
     }
 
@@ -1507,6 +1516,13 @@ bool ExplorationFSMNew::selectBestViewpoint(int& selected_viewpoint_id, const Ei
     }
 
     selected_viewpoint_id = best_id;
+    PERF_LOG.logf("SCHED", "SELECT",
+        "clusters=%zu semantic=%zu candidates=%zu anchors=%zu selected=%d anchor=%d "
+        "score=%.6f path_cost=%.3f elapsed_ms=%.3f",
+        clusters.size(), semantic_targets_copy.size(), all_candidates.size(),
+        distinct_anchors_to_solve.size(), best_id, best_anchor_final, best_score,
+        best_path_cost,
+        (ros::WallTime::now() - profile_start).toSec() * 1000.0);
     return true;
 }
 

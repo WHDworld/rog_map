@@ -15,6 +15,9 @@
     <arg name="map_name" default="octa_maze"/>
     <arg name="sim_mode" default="0"/>  <!-- 0=Gazebo, 1=Open3D, 2=Real -->
     <arg name="auto_start" default="false"/>
+    <arg name="map_visualization" default="false"/>
+    <arg name="performance_logging" default="true"/>
+    <arg name="fsm_visualization" default="false"/>
     
     <!-- ========== 新架构探索规划节点 ========== -->
     <node pkg="semantic_exploration" type="exploration_planner_node_new" name="exploration_planner_node" output="screen" >
@@ -25,6 +28,9 @@
         <param name="map_name" value="$(arg map_name)"/>
         <param name="fsm/sim_mode" value="$(arg sim_mode)"/>
         <param name="exploration/auto_start" value="$(arg auto_start)"/>
+        <param name="rog_map/visualization_en" value="$(arg map_visualization)"/>
+        <param name="performance/enabled" value="$(arg performance_logging)"/>
+        <param name="fsm/enable_visualization" value="$(arg fsm_visualization)"/>
     </node>
 
     

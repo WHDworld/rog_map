@@ -12,13 +12,27 @@
  */
 
 #include <ros/ros.h>
+#include <ros/package.h>
 #include "map/map_manager.h"
 #include "exploration/exploration_fsm_new.h"
+#include "utils/perf_logger.hpp"
 
 int main(int argc, char** argv) {
     ros::init(argc, argv, "exploration_planner_node");
     ros::NodeHandle nh;
     ros::NodeHandle nh_private("~");
+
+    std::string perf_log_dir;
+    nh_private.param<std::string>("performance/log_dir", perf_log_dir,
+        ros::package::getPath("semantic_exploration") + "/log/performance");
+    bool perf_enabled = true;
+    nh_private.param("performance/enabled", perf_enabled, true);
+    if (perf_enabled) {
+        PERF_LOG.init(perf_log_dir, false);
+        PERF_LOG.sampleResources("startup_before_modules");
+        PERF_LOG.logf("SYSTEM", "START", "pid=%d log=%s resources=%s", static_cast<int>(getpid()),
+                      PERF_LOG.getLogPath().c_str(), PERF_LOG.getResourcePath().c_str());
+    }
     
     ROS_INFO("===========================================");
     ROS_INFO("    STAR-Searcher Exploration Planner");
@@ -39,6 +53,7 @@ int main(int argc, char** argv) {
     rog_map::ExplorationFSMNew fsm;
 
     fsm.init(nh_private, map_manager);
+    if (perf_enabled) PERF_LOG.sampleResources("startup_after_modules");
 
     ROS_INFO("[Main] Exploration Planner started, spinning...");
     

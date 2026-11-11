@@ -61,30 +61,52 @@ trap cleanup SIGINT SIGTERM EXIT
 
 echo -e "${GREEN}[Script] Starting Simulation Workflow...${NC}"
 
+# Headless by default for profiling/long runs. Override with SIM_GUI=true when needed.
+SIM_GUI=${SIM_GUI:-false}
+
+# PX4 可执行文件和 Gazebo MAVLink 插件缺失时，PX4 会一直等待 simulator/FCU，
+# 但其余 ROS 节点仍会继续启动。启动前显式检查，避免出现难以识别的半启动状态。
+PX4_BUILD_DIR=/home/whd/PX4_Firmware/build/px4_sitl_default
+PX4_BINARY="$PX4_BUILD_DIR/bin/px4"
+MAVLINK_PLUGIN="$PX4_BUILD_DIR/build_gazebo/libgazebo_mavlink_interface.so"
+
+if [ ! -x "$PX4_BINARY" ] || [ ! -f "$MAVLINK_PLUGIN" ]; then
+    echo -e "${RED}[Script] PX4 SITL build is incomplete.${NC}"
+    echo "Missing PX4 binary or Gazebo MAVLink plugin under: $PX4_BUILD_DIR"
+    echo "Build it with: cd /home/whd/PX4_Firmware && make px4_sitl_default"
+    exit 1
+fi
+
 # 1. 启动 PX4 Gazebo 仿真
-echo -e "${BLUE}[1/5] Launching PX4 Gazebo Simulation...${NC}"
+echo -e "${BLUE}[1/6] Launching PX4 Gazebo Simulation...${NC}"
 # 直接运行，利用之前 source 的环境变量
-roslaunch px4 outdoor3.launch &
+roslaunch px4 outdoor3.launch gui:="$SIM_GUI" &
 sleep 10  # 给 Gazebo 更多启动时间
 
-# 2. 启动 Simulation Pose Relay (Python)
-echo -e "${BLUE}[2/5] Starting Simulation Pose Relay...${NC}"
+# 2. 将 iris_0 命名空间下的 Gazebo 传感器话题桥接到感知模块使用的话题名
+echo -e "${BLUE}[2/6] Bridging Gazebo sensor topics...${NC}"
+rosrun topic_tools relay /iris_0/velodyne_points /velodyne_points __name:=sim_lidar_relay &
+rosrun topic_tools relay /iris_0/realsense/depth_camera/color/image_raw /realsense/depth_camera/color/image_raw __name:=sim_camera_relay &
+sleep 1
+
+# 3. 启动 Simulation Pose Relay (Python)
+echo -e "${BLUE}[3/6] Starting Simulation Pose Relay...${NC}"
 # 使用系统自带 python3 以确保能找到 rospkg
 (cd ~/experiment/fast-livo2/src/fast-livo2-target/simulation && /usr/bin/python3 get_simulation_pose.py) &
 sleep 2
 
-# 3. 启动 Fast-Livo Mapping (感知模块)
-echo -e "${BLUE}[3/5] Launching Fast-Livo Mapping...${NC}"
+# 4. 启动 Fast-Livo Mapping (感知模块)
+echo -e "${BLUE}[4/6] Launching Fast-Livo Mapping...${NC}"
 (cd ~/experiment/fast-livo2 && source devel/setup.bash && roslaunch fast_livo mapping_mid360_simulation.launch) &
 sleep 5
 
-# 4. 启动 YOLO 目标检测推理
-echo -e "${BLUE}[4/5] Launching YOLO Inference...${NC}"
+# 5. 启动 YOLO 目标检测推理
+echo -e "${BLUE}[5/6] Launching YOLO Inference...${NC}"
 (cd ~/experiment/yolo_inference && source devel/setup.bash && roslaunch yolo_segmentation yolo_inference.launch) &
 sleep 3
 
-# 5. 启动 Offboard Controller
-echo -e "${BLUE}[5/5] Starting Offboard Control Node...${NC}"
+# 6. 启动 Offboard Controller
+echo -e "${BLUE}[6/6] Starting Offboard Control Node...${NC}"
 (source ~/experiment/STAR-Searcher/devel/setup.bash && rosrun my_control_package offboard_node) &
 
 echo -e "${GREEN}[Script] All modules started. Press Ctrl+C to stop.${NC}"

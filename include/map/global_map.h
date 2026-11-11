@@ -113,6 +113,8 @@ public:
     Position getGlobalMin() const { return config_.global_min; }
     Position getGlobalMax() const { return config_.global_max; }
     float getResolution() const { return config_.resolution; }
+    size_t getTotalVoxelCount() const;
+    bool voxelToLinearAddress(const VoxelIndex& idx, size_t& address) const;
     
     // 子网格信息 (SemanticTargetExtractor 需要)
     float getSubGridSize() const { return sub_grid_x_; }  // 子网格世界尺寸
@@ -322,6 +324,9 @@ public:
     bool enable_camera_map_ = true;
     
     float getGroundHeight() const { return config_.ground_height; }
+
+    /** Log logical sizes, capacities and a conservative container-memory estimate. */
+    void logMemoryStats(const std::string& tag = "periodic") const;
 protected:
     // 配置
     GlobalMapConfig config_;
@@ -406,8 +411,11 @@ protected:
     float unknown_flag_ = 0.01f;     // 未知标志
     
     // 帧内缓存（避免重复处理）
-    std::unordered_map<VoxelIndex, int8_t, VoxelIndexHash> frame_cache_;  // 本帧更新缓存
-    int raycast_frame_id_ = 0;  // 当前帧 ID
+    uint32_t raycast_frame_id_ = 0;  // 当前帧 generation ID
+    std::vector<uint32_t> ray_endpoint_stamp_;  // FUEL-style dense endpoint dedup flags
+    std::vector<uint32_t> frame_voxel_stamp_;   // touched-voxel generation flags
+    std::vector<int8_t> frame_voxel_state_;     // hit/miss for current generation
+    std::vector<VoxelIndex> frame_touched_voxels_;
     
     /**
      * @brief 设置帧内缓存占据状态
@@ -453,4 +461,3 @@ protected:
 }  // namespace star_mvf
 
 #endif  // STAR_MVF_GLOBAL_MAP_H
-

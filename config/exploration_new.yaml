@@ -78,6 +78,10 @@ rog_map:
 
 # ========== ViewpointManager (5Hz) ==========
 viewpoint_manager:
+  # FUEL-style O(N) 26-neighbor region growing. Set false only for A/B fallback.
+  use_voxel_region_growing: true
+  # Unknown-space expansion depth used by the dense-stamp gain evaluator.
+  gain_max_expand_step: 6
   update_rate: 2.0 # Hz
 
   # ---------- 安全参数 ----------

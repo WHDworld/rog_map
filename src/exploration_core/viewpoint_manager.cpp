@@ -14,6 +14,7 @@
  */
 
 #include "exploration/viewpoint_manager.h"
+#include "utils/perf_logger.hpp"
 #include <queue>
 #include <algorithm>
 #include <cmath>
@@ -61,6 +62,8 @@ void ViewpointManager::init(ros::NodeHandle& nh, GlobalMap::Ptr global_map,
     nh_.param("viewpoint_manager/min_cluster_size", config_.min_cluster_size, 30);
     nh_.param("viewpoint_manager/cluster_split_threshold", config_.cluster_split_threshold, 4.0f);
     nh_.param("viewpoint_manager/max_clusters", config_.max_clusters, 30);
+    nh_.param("viewpoint_manager/use_voxel_region_growing", config_.use_voxel_region_growing, true);
+    nh_.param("viewpoint_manager/gain_max_expand_step", config_.gain_max_expand_step, 6);
     
     // 安全参数
     nh_.param("viewpoint_manager/uav_radius", config_.uav_radius, 0.3f);
@@ -83,6 +86,8 @@ void ViewpointManager::init(ros::NodeHandle& nh, GlobalMap::Ptr global_map,
     nh_.param("viewpoint_manager/use_surface_frontier", config_.use_surface_frontier, false);
     nh_.param("viewpoint_manager/use_spherical_sampling", config_.use_spherical_sampling, false);
     nh_.param("viewpoint_manager/use_viewpoint_clustering", config_.use_viewpoint_clustering, false);
+
+    gain_visit_stamp_.assign(global_map_->getTotalVoxelCount(), 0);
     
     // 表面前沿聚类参数
     nh_.param("viewpoint_manager/normal_angle_threshold", config_.normal_angle_threshold, 0.785f);
@@ -342,6 +347,7 @@ void ViewpointManager::update() {
     
     // Step 5: 过滤头顶区域簇
     filterOverheadClusters(all_clusters);
+    const size_t raw_cluster_count = all_clusters.size();
     
     // Step 6: 限制簇数量（双轨筛选策略：本地保留 + 最优增益）
     // 目的：
@@ -531,6 +537,23 @@ void ViewpointManager::update() {
     ROS_DEBUG("[VP_MGR] Update: clusters=%zu, vp=%d | Time: frontier=%.1f, cluster=%.1f, filter=%.1f, gen=%.1fms, total=%.1fms",
              all_clusters.size(), generated_count, 
              t_get_frontier, t_cluster, t_filter, t_gen_vp, t_total);
+    size_t subgrid_cache_points = 0;
+    for (const auto& kv : subgrid_points_cache_) subgrid_cache_points += kv.second.capacity();
+    size_t cached_cluster_points = 0;
+    size_t cached_clusters = 0;
+    for (const auto& kv : prev_node_clusters_) {
+        cached_clusters += kv.second.capacity();
+        for (const auto& cluster : kv.second) cached_cluster_points += cluster.points.capacity();
+    }
+    PERF_LOG.logf("VIEWPOINT", "UPDATE",
+        "frontier_points=%zu changed_sg=%zu nodes=%zu raw_clusters=%zu output_clusters=%zu "
+        "generated=%d cached_vp=%d frontier_ms=%.3f cluster_ms=%.3f filter_ms=%.3f "
+        "generate_ms=%.3f total_ms=%.3f cache_sg=%zu cache_point_capacity=%zu "
+        "cache_clusters=%zu cache_cluster_point_capacity=%zu",
+        total_points, changed_list.size(), active_node_ids.size(), raw_cluster_count,
+        all_clusters.size(), generated_count, cached_count, t_get_frontier, t_cluster,
+        t_filter, t_gen_vp, t_total, subgrid_points_cache_.size(), subgrid_cache_points,
+        cached_clusters, cached_cluster_points);
     
     // if (generated_count > 0) {
     //     ROS_INFO("[VP_MGR] Best viewpoint: pos=(%.2f,%.2f,%.2f), score=%.3f",
@@ -543,80 +566,98 @@ void ViewpointManager::clusterByHistoryNode(const std::vector<Eigen::Vector3f>& 
                                             int node_id,
                                             std::vector<FrontierCluster>& clusters) {
     clusters.clear();
-    
     if (points.size() < static_cast<size_t>(config_.min_cluster_size)) return;
-    
-    std::vector<bool> visited(points.size(), false);
-    
-    for (size_t i = 0; i < points.size(); ++i) {
-        // if(points[i].z() > config_.frontier_height_max || points[i].z() < config_.frontier_height_min) continue;
-        if (visited[i]) continue;
-        
-        // BFS聚类
-        std::queue<size_t> q;
-        std::vector<Eigen::Vector3f> cluster_points;
-        
-        q.push(i);
-        visited[i] = true;
-        
-        while (!q.empty()) {
-            size_t curr = q.front();
-            q.pop();
-            
-            cluster_points.push_back(points[curr]);
-            
-            // 查找邻居
-            for (size_t j = 0; j < points.size(); ++j) {
-                if (visited[j]) continue;
-                // if(points[j].z() > config_.frontier_height_max || points[j].z() < config_.frontier_height_min) continue;
-                float dist = (points[j] - points[curr]).norm();
-                if (dist <= config_.cluster_eps) {
-                    if (checkRayVisibility(points[curr], points[j])) {
-                        visited[j] = true;
-                        q.push(j);
-                    }
+
+    Eigen::Vector3f uav_pos;
+    {
+        std::lock_guard<std::mutex> lock(uav_mutex_);
+        uav_pos = uav_position_;
+    }
+
+    auto emitCluster = [&](const std::vector<size_t>& indices) {
+        if (indices.size() < static_cast<size_t>(config_.min_cluster_size)) return;
+        FrontierCluster cluster;
+        cluster.history_node_id = node_id;
+        cluster.points.reserve(indices.size());
+        Eigen::Vector3f sum = Eigen::Vector3f::Zero();
+        for (size_t index : indices) {
+            cluster.points.push_back(points[index]);
+            sum += points[index];
+        }
+        cluster.point_count = static_cast<int>(cluster.points.size());
+        cluster.centroid = sum / static_cast<float>(cluster.points.size());
+        float max_dist = 0.0f;
+        for (const auto& point : cluster.points)
+            max_dist = std::max(max_dist, (point - cluster.centroid).norm());
+        cluster.extent = max_dist * 2.0f;
+        Eigen::Vector3f to_centroid = cluster.centroid - uav_pos;
+        to_centroid.z() = 0.0f;
+        cluster.normal = to_centroid.norm() > 0.1f ? to_centroid.normalized()
+                                                   : Eigen::Vector3f::UnitX();
+        clusters.push_back(std::move(cluster));
+    };
+
+    if (config_.use_voxel_region_growing) {
+        // FUEL-style frontier expansion. Input points already represent frontier
+        // voxels, so a 26-neighbor lookup is sufficient; no all-pairs scan and no
+        // redundant line-of-sight test between adjacent free voxels are needed.
+        std::unordered_map<star_mvf::VoxelIndex, size_t, star_mvf::VoxelIndexHash> point_index;
+        point_index.reserve(points.size() * 2);
+        for (size_t i = 0; i < points.size(); ++i)
+            point_index.emplace(global_map_->posToIndex(points[i]), i);
+
+        std::vector<uint8_t> visited(points.size(), 0);
+        std::queue<size_t> queue;
+        std::vector<size_t> component;
+        for (size_t seed = 0; seed < points.size(); ++seed) {
+            if (visited[seed]) continue;
+            visited[seed] = 1;
+            queue.push(seed);
+            component.clear();
+            while (!queue.empty()) {
+                const size_t current = queue.front();
+                queue.pop();
+                component.push_back(current);
+                const auto voxel = global_map_->posToIndex(points[current]);
+                for (int dx = -1; dx <= 1; ++dx)
+                    for (int dy = -1; dy <= 1; ++dy)
+                        for (int dz = -1; dz <= 1; ++dz) {
+                            if (dx == 0 && dy == 0 && dz == 0) continue;
+                            star_mvf::VoxelIndex neighbor(voxel.x + dx, voxel.y + dy, voxel.z + dz);
+                            auto it = point_index.find(neighbor);
+                            if (it == point_index.end() || visited[it->second]) continue;
+                            visited[it->second] = 1;
+                            queue.push(it->second);
+                        }
+            }
+            emitCluster(component);
+        }
+        return;
+    }
+
+    // Legacy distance/raycast clustering retained for A/B comparison.
+    std::vector<uint8_t> visited(points.size(), 0);
+    std::queue<size_t> queue;
+    std::vector<size_t> component;
+    for (size_t seed = 0; seed < points.size(); ++seed) {
+        if (visited[seed]) continue;
+        visited[seed] = 1;
+        queue.push(seed);
+        component.clear();
+        while (!queue.empty()) {
+            const size_t current = queue.front();
+            queue.pop();
+            component.push_back(current);
+            for (size_t candidate = 0; candidate < points.size(); ++candidate) {
+                if (visited[candidate]) continue;
+                if ((points[candidate] - points[current]).norm() <= config_.cluster_eps &&
+                    checkRayVisibility(points[current], points[candidate])) {
+                    visited[candidate] = 1;
+                    queue.push(candidate);
                 }
             }
         }
-        
-        // 检查簇大小
-        if (cluster_points.size() >= static_cast<size_t>(config_.min_cluster_size)) {
-            FrontierCluster cluster;
-            cluster.history_node_id = node_id;
-            cluster.points = cluster_points;
-            cluster.point_count = static_cast<int>(cluster_points.size());
-            
-            // 计算质心
-            Eigen::Vector3f sum = Eigen::Vector3f::Zero();
-            for (const auto& pt : cluster_points) {
-                sum += pt;
-            }
-            cluster.centroid = sum / static_cast<float>(cluster_points.size());
-            
-            // 计算范围
-            float max_dist = 0.0f;
-            for (const auto& pt : cluster_points) {
-                float d = (pt - cluster.centroid).norm();
-                if (d > max_dist) max_dist = d;
-            }
-            cluster.extent = max_dist * 2.0f;
-            
-            // 估算法向量
-            Eigen::Vector3f uav_pos;
-            {
-                std::lock_guard<std::mutex> lock(uav_mutex_);
-                uav_pos = uav_position_;
-            }
-            Eigen::Vector3f to_centroid = cluster.centroid - uav_pos;
-            to_centroid.z() = 0.0f;
-            if (to_centroid.norm() > 0.1f) {
-                cluster.normal = to_centroid.normalized();
-            } else {
-                cluster.normal = Eigen::Vector3f::UnitX();
-            }
-            
-            clusters.push_back(cluster);
-        }
+        emitCluster(component);
     }
 }
 
@@ -1595,55 +1636,50 @@ void ViewpointManager::matchClustersLocal(std::vector<FrontierCluster>& new_clus
 
 float ViewpointManager::calculateClusterGain(const FrontierCluster& cluster) {
     if (cluster.points.empty()) return 0.0f;
-    
-    // 扩展参数
-    const int max_expand_step = 6;  // 6 * 0.1m = 0.6m
-    std::unordered_set<star_mvf::VoxelIndex, star_mvf::VoxelIndexHash> visited;
+
+    // FUEL uses dense per-voxel flags because the map bounds are fixed. Use the
+    // same generation-stamp pattern here: O(1) contiguous access, no node
+    // allocation and no unordered_set construction for every cluster.
+    if (gain_visit_stamp_.size() != global_map_->getTotalVoxelCount())
+        gain_visit_stamp_.assign(global_map_->getTotalVoxelCount(), 0);
+    if (++gain_generation_ == 0) {
+        std::fill(gain_visit_stamp_.begin(), gain_visit_stamp_.end(), 0);
+        gain_generation_ = 1;
+    }
+
+    auto markFirstVisit = [&](const star_mvf::VoxelIndex& index) {
+        size_t address = 0;
+        if (!global_map_->voxelToLinearAddress(index, address)) return false;
+        if (gain_visit_stamp_[address] == gain_generation_) return false;
+        gain_visit_stamp_[address] = gain_generation_;
+        return true;
+    };
+
     std::queue<std::pair<star_mvf::VoxelIndex, int>> q;
-    
-    // 初始化
     for (const auto& pt : cluster.points) {
         star_mvf::VoxelIndex idx = global_map_->posToIndex(pt);
-        if (visited.count(idx)) continue;
-        visited.insert(idx);
-        q.push({idx, 0});
+        if (markFirstVisit(idx)) q.push({idx, 0});
     }
-    
-    int unknown_count = 0;
-    std::vector<star_mvf::VoxelIndex> neighbors;
-    
-    // BFS 6-neighbor expansion
-    while (!q.empty()) {
-        auto curr = q.front();
-        q.pop();
-        
-        star_mvf::VoxelIndex curr_idx = curr.first;
-        int depth = curr.second;
-        
-        if (depth >= max_expand_step) continue;
-        
-        // 扩展6邻域 (Explicit)
-        const int dx[6] = {1, -1, 0, 0, 0, 0};
-        const int dy[6] = {0, 0, 1, -1, 0, 0};
-        const int dz[6] = {0, 0, 0, 0, 1, -1};
 
+    int unknown_count = 0;
+    static constexpr int dx[6] = {1, -1, 0, 0, 0, 0};
+    static constexpr int dy[6] = {0, 0, 1, -1, 0, 0};
+    static constexpr int dz[6] = {0, 0, 0, 0, 1, -1};
+    while (!q.empty()) {
+        const auto curr = q.front();
+        q.pop();
+        if (curr.second >= config_.gain_max_expand_step) continue;
         for (int i = 0; i < 6; ++i) {
-            star_mvf::VoxelIndex n_idx = curr_idx;
+            star_mvf::VoxelIndex n_idx = curr.first;
             n_idx.x += dx[i];
             n_idx.y += dy[i];
             n_idx.z += dz[i];
-            
-            if (visited.count(n_idx)) continue;
-            
-            // 关键：只向 未知 区域扩展
-            if (global_map_->isUnknown(n_idx)) {
-                unknown_count++;
-                visited.insert(n_idx);
-                q.push({n_idx, depth + 1});
-            }
+            if (!markFirstVisit(n_idx)) continue;
+            if (!global_map_->isUnknown(n_idx)) continue;
+            ++unknown_count;
+            q.push({n_idx, curr.second + 1});
         }
     }
-    
     return static_cast<float>(unknown_count);
 }
 

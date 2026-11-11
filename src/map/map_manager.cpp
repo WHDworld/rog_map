@@ -11,6 +11,7 @@
 #include <sensor_msgs/image_encodings.h>
 #include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/highgui/highgui.hpp>
+#include "utils/perf_logger.hpp"
 
 namespace star_mvf {
 
@@ -127,9 +128,9 @@ void MapManager::lidarCallback(const sensor_msgs::PointCloud2ConstPtr& msg) {
     // === 简化架构：直接在 GlobalMap 中处理 ===
     
     // Step 1: 直接在 GlobalMap 中插入点云（射线投射 + 状态更新）
-    auto t1 = ros::Time::now();
+    auto t1 = ros::WallTime::now();
     global_map_->insertPointCloud(*msg, sensor_pos);
-    auto t2 = ros::Time::now();
+    auto t2 = ros::WallTime::now();
     
     // Step 2: 更新相机位姿（用于视觉状态更新）
     if (has_camera_pose_) {
@@ -142,10 +143,21 @@ void MapManager::lidarCallback(const sensor_msgs::PointCloud2ConstPtr& msg) {
         }
         global_map_->updateCameraPose(cam_pos, cam_rot);
     }
+    auto t_camera = ros::WallTime::now();
     
     // Step 3: 提取前沿
     global_map_->extractGlobalFrontierIncremental();
-    auto t3 = ros::Time::now();
+    auto t3 = ros::WallTime::now();
+
+    PERF_LOG.logf("PIPELINE", "LIDAR_FRAME",
+        "frame=%d bytes=%zu insert_ms=%.3f camera_ms=%.3f frontier_ms=%.3f total_ms=%.3f",
+        lidar_count, msg->data.size(), (t2 - t1).toSec() * 1000.0,
+        (t_camera - t2).toSec() * 1000.0, (t3 - t_camera).toSec() * 1000.0,
+        (t3 - t1).toSec() * 1000.0);
+    if (lidar_count == 1 || lidar_count % 10 == 0) {
+        global_map_->logMemoryStats("lidar_" + std::to_string(lidar_count));
+        PERF_LOG.sampleResources("lidar_" + std::to_string(lidar_count));
+    }
     
     // 性能日志（每10帧输出一次）
     // if (lidar_count % 100 == 0) {
@@ -350,4 +362,3 @@ void MapManager::vizTimerCallback(const ros::TimerEvent& event) {
 // syncLocalToGlobal 已移除：现在直接在 GlobalMap::insertPointCloud 中处理
 
 }  // namespace star_mvf
-
