@@ -5,9 +5,8 @@
  * 启动 ExplorationFSMNew 状态机，集成：
  * - MapManager (局部/全局地图同步)
  * - ViewpointManager (视点生成与管理)
- * - HistoryGraph (历史节点网络)
+ * - GlobalTourPlanner (全局调度：ATSP + 局部精化)
  * - EGOPlannerManager (轨迹规划)
- * - TargetReconstructor (目标重建)
  * - SemanticTargetExtractor (语义目标提取)
  */
 
@@ -38,8 +37,8 @@ int main(int argc, char** argv) {
     ROS_INFO("    STAR-Searcher Exploration Planner");
     ROS_INFO("===========================================");
     ROS_INFO("  New Architecture: 4-State FSM");
-    ROS_INFO("  Features: ViewpointManager, HistoryGraph,");
-    ROS_INFO("            EGO Planner, TargetReconstructor");
+    ROS_INFO("  Features: ViewpointManager, GlobalTourPlanner,");
+    ROS_INFO("            EGO Planner, SemanticTargetExtractor");
     ROS_INFO("===========================================");
     
     // 1. 创建并初始化地图管理器

@@ -388,6 +388,28 @@ bool GlobalMap::voxelToLinearAddress(const VoxelIndex& idx, size_t& address) con
     return true;
 }
 
+bool GlobalMap::linearAddressToVoxel(size_t address, VoxelIndex& idx) const {
+    // 严格逆变换：voxelToLinearAddress 使用 address = (z * ny + y) * nx + x
+    const int64_t nx = global_max_idx_.x - global_min_idx_.x;
+    const int64_t ny = global_max_idx_.y - global_min_idx_.y;
+    const int64_t nz = global_max_idx_.z - global_min_idx_.z;
+    if (nx <= 0 || ny <= 0 || nz <= 0) return false;
+    const size_t total = static_cast<size_t>(nx * ny * nz);
+    if (address >= total) return false;
+
+    const size_t ux = static_cast<size_t>(nx);
+    const size_t uy = static_cast<size_t>(ny);
+    const int64_t x = static_cast<int64_t>(address % ux);
+    const size_t t = address / ux;
+    const int64_t y = static_cast<int64_t>(t % uy);
+    const int64_t z = static_cast<int64_t>(t / uy);
+
+    idx.x = global_min_idx_.x + x;
+    idx.y = global_min_idx_.y + y;
+    idx.z = global_min_idx_.z + z;
+    return true;
+}
+
 Position GlobalMap::clipToMapBoundary(const Position& pt, const Position& sensor_pos) const {
     // 参考 FUEL sdf_map.cpp closetPointInMap
     // 找到从 sensor_pos 到 pt 的射线与地图边界的交点
@@ -755,7 +777,8 @@ bool GlobalMap::getSubGridFrontierPoints(int sg_id, std::vector<Eigen::Vector3f>
 
 // ==================== 安全性检查 ====================
 
-bool GlobalMap::isPathSafe(const Position& start, const Position& end, float safety_margin) const {
+bool GlobalMap::isPathSafe(const Position& start, const Position& end, float safety_margin,
+                           bool unknown_as_occupied) const {
     Position dir = end - start;
     float length = dir.norm();
     if (length < 1e-6f) return true;
@@ -763,19 +786,23 @@ bool GlobalMap::isPathSafe(const Position& start, const Position& end, float saf
     dir.normalize();
     float step = config_.resolution;
     int num_steps = static_cast<int>(length / step) + 1;
-    
+
+    // 在函数级持锁，避免逐体素加锁/解锁的开销（posToIndex 不访问 voxels_）
+    std::lock_guard<std::mutex> lock(map_mutex_);
+
     for (int i = 0; i <= num_steps; i++) {
         Position pos = start + dir * (i * step);
-        
+
         // 检查当前位置
         VoxelIndex idx;
         const_cast<GlobalMap*>(this)->posToIndex(pos, idx);
-        
-        std::lock_guard<std::mutex> lock(map_mutex_);
+
         auto it = voxels_.find(idx);
         if (it != voxels_.end() && VoxelStateBits::isOccupied(it->second)) {
             return false;
         }
+        if (unknown_as_occupied &&
+            (it == voxels_.end() || VoxelStateBits::isUnknown(it->second))) return false;
         
         // 检查安全余量
         if (safety_margin > 0.0f) {
@@ -786,6 +813,10 @@ bool GlobalMap::isPathSafe(const Position& start, const Position& end, float saf
                         VoxelIndex check_idx(idx.x + dx, idx.y + dy, idx.z + dz);
                         auto check_it = voxels_.find(check_idx);
                         if (check_it != voxels_.end() && VoxelStateBits::isOccupied(check_it->second)) {
+                            return false;
+                        }
+                        if (unknown_as_occupied &&
+                            (check_it == voxels_.end() || VoxelStateBits::isUnknown(check_it->second))) {
                             return false;
                         }
                     }

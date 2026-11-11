@@ -1,0 +1,23 @@
+LKH TSP Solver — licensing notice
+=================================
+
+This directory contains a vendored copy of the LKH TSP solver as distributed
+with FUEL (Fast-Exploration). The upstream bundle contains no LICENSE file.
+
+LKH is Copyright (c) Keld Helsgaun, Department of Computer Science,
+Roskilde University, Denmark. Reference implementation and terms:
+http://akira.ruc.dk/~keld/research/LKH/
+
+The LKH source files are provided for research use. Users of this repository
+are responsible for verifying that their use complies with the upstream terms
+before redistribution or commercial use. No additional license is granted by
+this project beyond what the upstream distribution permits.
+
+Third-party notices preserved in the sources
+--------------------------------------------
+- src/Delaunay.c: Copyright (c) RMIT 1993. All rights reserved. License to copy
+  and use this software for non-commercial purposes is granted provided the
+  copyright notice is retained; derivative works are permitted under the same
+  conditions.
+
+Files in this directory retain their upstream copyright headers verbatim.

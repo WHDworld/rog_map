@@ -5,14 +5,6 @@
 namespace ego_planner
 {
 
-// Helper to normalize angle to [-PI, PI]
-static double normalize_angle(double angle)
-{
-  while (angle > M_PI) angle -= 2.0 * M_PI;
-  while (angle < -M_PI) angle += 2.0 * M_PI;
-  return angle;
-}
-
 // B-spline Basis Functions (Uniform, k=3 for cubic)
 // Evaluate value at u in [0, 1] relative to span
 // Control points influence: P0, P1, P2, P3
@@ -51,7 +43,9 @@ bool YawOptimizer::optimize(const poly_traj::Trajectory& xyz_traj,
                             double start_yaw, 
                             double end_yaw, 
                             std::vector<double>& yaw_ctrl_pts,
-                            double dt)
+                            double dt,
+                            double start_yaw_rate,
+                            double start_yaw_acc)
 {
   double total_duration = xyz_traj.getTotalDuration();
   if (total_duration < 0.1) return false;
@@ -263,6 +257,22 @@ bool YawOptimizer::optimize(const poly_traj::Trajectory& xyz_traj,
       H(idx_s[r], idx_s[c]) += w_fix_start * vec_s(r) * vec_s(c);
     }
     f(idx_s[r]) += -2.0 * w_fix_start * start_yaw * vec_s(r);
+  }
+
+  // Match the full angular boundary state of the trajectory being replaced.
+  // For the cubic uniform B-spline at u=0:
+  //   yaw_dot  = (-P0 + P2) / (2 dt)
+  //   yaw_ddot = ( P0 - 2 P1 + P2) / dt^2
+  const Eigen::Vector3d vec_sv(-0.5 / dt, 0.0, 0.5 / dt);
+  const Eigen::Vector3d vec_sa(1.0 / (dt * dt), -2.0 / (dt * dt),
+                               1.0 / (dt * dt));
+  for (int r = 0; r < 3; ++r) {
+    for (int c = 0; c < 3; ++c) {
+      H(idx_s[r], idx_s[c]) +=
+          w_fix_start * (vec_sv(r) * vec_sv(c) + vec_sa(r) * vec_sa(c));
+    }
+    f(idx_s[r]) += -2.0 * w_fix_start *
+                   (start_yaw_rate * vec_sv(r) + start_yaw_acc * vec_sa(r));
   }
   
   // End Pos: t=T corresponds to span M-1, u=1? No, span indices 0..M-1.
@@ -643,6 +653,25 @@ double YawOptimizer::evaluateYawDot(const std::vector<double>& ctrl_pts, double 
   }
   
   return yaw_dot / dt; // Chain rule
+}
+
+double YawOptimizer::evaluateYawDDot(const std::vector<double>& ctrl_pts, double t,
+                                     double total_dur)
+{
+  if (ctrl_pts.size() < 4 || total_dur <= 0.0) return 0.0;
+
+  const int M = static_cast<int>(ctrl_pts.size()) - 3;
+  const double dt = total_dur / M;
+  int i = static_cast<int>(t / dt);
+  i = std::max(0, std::min(i, M - 1));
+  const double u = std::max(0.0, std::min(1.0, (t - i * dt) / dt));
+
+  // Second derivatives of the four cubic uniform basis functions w.r.t. u.
+  Eigen::Vector4d second;
+  second << 1.0 - u, -2.0 + 3.0 * u, 1.0 - 3.0 * u, u;
+  double yaw_ddot = 0.0;
+  for (int k = 0; k < 4; ++k) yaw_ddot += second(k) * ctrl_pts[i + k];
+  return yaw_ddot / (dt * dt);
 }
 
 } // namespace ego_planner

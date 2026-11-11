@@ -30,7 +30,9 @@ public:
                 double start_yaw, 
                 double end_yaw, 
                 std::vector<double>& yaw_ctrl_pts,
-                double dt = 0.05);
+                double dt = 0.05,
+                double start_yaw_rate = 0.0,
+                double start_yaw_acc = 0.0);
 
   /**
    * @brief Yaw轨迹优化（支持中间航点yaw约束）
@@ -60,6 +62,7 @@ public:
   
   static double evaluateYaw(const std::vector<double>& ctrl_pts, double t, double total_dur);
   static double evaluateYawDot(const std::vector<double>& ctrl_pts, double t, double total_dur);
+  static double evaluateYawDDot(const std::vector<double>& ctrl_pts, double t, double total_dur);
 
 private:
   // Optimization weights (TV-YC tuned)

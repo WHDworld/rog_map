@@ -15,6 +15,7 @@
 #include <vector>
 #include <queue>
 #include <set>
+#include <mutex>
 #include <unordered_map>
 #include <Eigen/Dense>
 #include <Eigen/Eigenvalues>
@@ -70,6 +71,10 @@ struct SemanticExtractorConfig {
     float vp_sample_dphi = 0.3f;        // 水平角度采样间隔 (rad)
     float vp_uav_radius = 0.3f;         // UAV安全半径 (m)
     float vp_safety_margin = 0.5f;      // 安全边界 (m)
+
+    // 候选视点输出（来自 global_scheduler）
+    int top_view_num = 5;               // 每个语义目标保留的候选视点数
+    float max_decay = 0.8f;             // 候选保留阈值 score >= max_decay * best
 };
 
 // ========== PCA 几何特征 ==========
@@ -161,9 +166,9 @@ public:
                            std::vector<TargetMetadata>& out_targets) const;
                            
     /**
-     * @brief 获取所有未观测的目标（返回指针以便修改状态）
+     * @brief 获取所有未观测目标的快照（线程安全，供全局调度使用）
      */
-    void getUnobservedTargets(std::vector<TargetMetadata*>& out_targets);
+    void getUnobservedTargetsSnapshot(std::vector<TargetMetadata>& out_targets) const;
     
     /**
      * @brief 标记目标为已观测
@@ -247,6 +252,11 @@ private:
     
     // ========== 辅助函数 ==========
     void updateObservationStatus(); // [New] 定时检查视点覆盖状态
+
+    /**
+     * @brief 无锁版本的视觉覆盖检查，调用方必须持有 targets_mutex_
+     */
+    bool isTargetVisualCoveredInternal(int target_id, float ratio_thresh) const;
     void getNeighbors6(const star_mvf::VoxelIndex& idx, 
                        std::vector<star_mvf::VoxelIndex>& neighbors) const;
     
@@ -298,6 +308,7 @@ private:
     std::unordered_map<star_mvf::VoxelIndex, int, star_mvf::VoxelIndexHash> voxel_target_ids_;
     
     // 全局目标列表
+    mutable std::mutex targets_mutex_;  // 保护 all_targets_ 与观测状态
     std::vector<TargetMetadata> all_targets_;
     int next_target_id_ = 0;
     

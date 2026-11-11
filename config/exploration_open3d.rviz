@@ -13,7 +13,7 @@ Panels:
         - /Exploration1
         - /reconstructor1
       Splitter Ratio: 0.4043392539024353
-    Tree Height: 1158
+    Tree Height: 1039
   - Class: rviz/Selection
     Name: Selection
   - Class: rviz/Tool Properties
@@ -171,7 +171,7 @@ Visualization Manager:
           Color: 173; 127; 168
           Color Transformer: FlatColor
           Decay Time: 0
-          Enabled: false
+          Enabled: true
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -186,7 +186,7 @@ Visualization Manager:
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
-          Value: false
+          Value: true
         - Alpha: 1
           Class: rviz/Axes
           Enabled: false
@@ -491,7 +491,7 @@ Visualization Manager:
           Color: 255; 255; 255
           Color Transformer: Intensity
           Decay Time: 0
-          Enabled: false
+          Enabled: true
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -506,7 +506,7 @@ Visualization Manager:
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
-          Value: false
+          Value: true
         - Class: rviz/MarkerArray
           Enabled: false
           Marker Topic: /exploration_planner_node/global_map/sub_grid_range
@@ -718,12 +718,29 @@ Visualization Manager:
           Queue Size: 1
           Value: false
         - Class: rviz/MarkerArray
+          Enabled: true
+          Marker Topic: /exploration/global_tour
+          Name: GlobalTour
+          Namespaces:
+            global_tour_nodes: true
+            global_tour_order: true
+          Queue Size: 10
+          Value: true
+        - Class: rviz/MarkerArray
+          Enabled: true
+          Marker Topic: /exploration/refined_tour
+          Name: RefinedTour
+          Namespaces:
+            refined_tour: true
+          Queue Size: 10
+          Value: true
+        - Class: rviz/MarkerArray
           Enabled: false
-          Marker Topic: /exploration/region_route
-          Name: region_route
+          Marker Topic: /exploration/path
+          Name: ScheduledPath
           Namespaces:
             {}
-          Queue Size: 100
+          Queue Size: 10
           Value: false
         - Class: rviz/MarkerArray
           Enabled: false
@@ -738,22 +755,13 @@ Visualization Manager:
           Marker Topic: /semantic_targets_vis
           Name: semantic_targets
           Namespaces:
-            semantic_targets: true
-            semantic_viewpoints: true
+            {}
           Queue Size: 100
           Value: true
       Enabled: true
       Name: Exploration
     - Class: rviz/Group
       Displays:
-        - Class: rviz/MarkerArray
-          Enabled: true
-          Marker Topic: /target_recon/viewpoints
-          Name: target_viewpoints
-          Namespaces:
-            {}
-          Queue Size: 100
-          Value: true
         - Alpha: 1
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
@@ -787,101 +795,23 @@ Visualization Manager:
           Marker Topic: /target_detection/confirmed_bboxes
           Name: confirmed_bboxes
           Namespaces:
-            box3D: true
+            {}
           Queue Size: 100
           Value: true
         - Class: rviz/Image
           Enabled: true
-          Image Topic: /yolo/debug_visualization
+          Image Topic: /realsense/depth_camera/color/image_raw
           Max Value: 1
           Median window: 5
           Min Value: 0
-          Name: Image
+          Name: RawCamera
           Normalize Range: true
           Queue Size: 2
           Transport Hint: raw
           Unreliable: false
           Value: true
-        - Alpha: 0.20000000298023224
-          BoundColor: 255; 0; 0
-          Class: decomp_rviz_plugins/PolyhedronArray
-          Enabled: true
-          MeshColor: 0; 170; 255
-          Name: target_corridor
-          Queue Size: 10
-          Scale: 0.10000000149011612
-          State: Mesh
-          Topic: /target_recon/corridor
-          Unreliable: false
-          Value: true
-          VsColor: 0; 255; 0
-          VsScale: 1
-        - Class: rviz/MarkerArray
-          Enabled: true
-          Marker Topic: /target_recon/optimized_path
-          Name: target_optimized_path
-          Namespaces:
-            {}
-          Queue Size: 100
-          Value: true
-        - Alpha: 1
-          Autocompute Intensity Bounds: true
-          Autocompute Value Bounds:
-            Max Value: 10
-            Min Value: -10
-            Value: true
-          Axis: Z
-          Channel Name: intensity
-          Class: rviz/PointCloud2
-          Color: 255; 255; 255
-          Color Transformer: RGB8
-          Decay Time: 0
-          Enabled: false
-          Invert Rainbow: false
-          Max Color: 255; 255; 255
-          Min Color: 0; 0; 0
-          Name: targe_occupy
-          Position Transformer: XYZ
-          Queue Size: 10
-          Selectable: true
-          Size (Pixels): 3
-          Size (m): 0.009999999776482582
-          Style: Flat Squares
-          Topic: /target_recon/occupied_voxels
-          Unreliable: false
-          Use Fixed Frame: true
-          Use rainbow: true
-          Value: false
-        - Alpha: 1
-          Autocompute Intensity Bounds: true
-          Autocompute Value Bounds:
-            Max Value: 10
-            Min Value: -10
-            Value: true
-          Axis: Z
-          Channel Name: intensity
-          Class: rviz/PointCloud2
-          Color: 255; 255; 255
-          Color Transformer: RGB8
-          Decay Time: 0
-          Enabled: true
-          Invert Rainbow: false
-          Max Color: 255; 255; 255
-          Min Color: 0; 0; 0
-          Name: target_point
-          Position Transformer: XYZ
-          Queue Size: 10
-          Selectable: true
-          Size (Pixels): 3
-          Size (m): 0.004999999888241291
-          Style: Points
-          Topic: /target_recon/accumulated_cloud
-          Unreliable: false
-          Use Fixed Frame: true
-          Use rainbow: true
-          Value: true
       Enabled: true
-      Name: reconstructor
+      Name: SemanticDetection
     - Alpha: 1
       Buffer Length: 1
       Class: rviz/Path
@@ -929,7 +859,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/XYOrbit
-      Distance: 64.51593017578125
+      Distance: 49.96113586425781
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -1032,12 +962,12 @@ Visualization Manager:
 Window Geometry:
   Displays:
     collapsed: false
-  Height: 1536
+  Height: 1433
   Hide Left Dock: false
   Hide Right Dock: true
-  Image:
+  QMainWindow State: 000000ff00000000fd0000000100000000000002050000053ffc0200000007fb000000100044006900730070006c006100790073010000003d0000044c000000c900fffffffb0000001200530065006c0065006300740069006f006e00000002ea0000014a0000005c00fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007300000003ba000001b00000005c00fffffffb0000000a00560069006500770073000000044b0000014f000000a400fffffffb0000000800540069006d0065000000053e000000a50000003900fffffffb0000000a0049006d0061006700650100000506000000dd0000000000000000fb0000001200520061007700430061006d006500720061010000048f000000ed0000001600ffffff000007f50000053f00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  RawCamera:
     collapsed: false
-  QMainWindow State: 000000ff00000000fd000000010000000000000205000005a6fc0200000006fb000000100044006900730070006c006100790073010000003d000004c3000000c900fffffffb0000001200530065006c0065006300740069006f006e00000002ea0000014a0000005c00fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007300000003ba000001b00000005c00fffffffb0000000a00560069006500770073000000044b0000014f000000a400fffffffb0000000800540069006d0065000000053e000000a50000003900fffffffb0000000a0049006d0061006700650100000506000000dd0000001600ffffff000007ad000005a600000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Selection:
     collapsed: false
   Time:
@@ -1046,6 +976,6 @@ Window Geometry:
     collapsed: false
   Views:
     collapsed: false
-  Width: 2488
-  X: 72
-  Y: 27
+  Width: 2560
+  X: 0
+  Y: 40

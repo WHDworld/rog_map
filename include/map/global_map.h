@@ -115,6 +115,7 @@ public:
     float getResolution() const { return config_.resolution; }
     size_t getTotalVoxelCount() const;
     bool voxelToLinearAddress(const VoxelIndex& idx, size_t& address) const;
+    bool linearAddressToVoxel(size_t address, VoxelIndex& idx) const;
     
     // 子网格信息 (SemanticTargetExtractor 需要)
     float getSubGridSize() const { return sub_grid_x_; }  // 子网格世界尺寸
@@ -229,7 +230,7 @@ public:
     void getFrontierSubGrids(std::vector<int>& frontier_subgrid_ids) const;
             
     /**
-    * @brief 获取指定子网格内的所有前沿点 (用于 HistoryGraph 局部查询)
+    * @brief 获取指定子网格内的所有前沿点（供全局前沿聚类使用）
     * @param sg_id 子网格ID
     * @param out_points 输出的前沿点列表
     * @return 如果子网格存在且有前沿点返回 true，否则返回 false
@@ -241,7 +242,8 @@ public:
     /**
      * @brief 检查路径是否安全
      */
-    bool isPathSafe(const Position& start, const Position& end, float safety_margin = 0.0f) const;
+    bool isPathSafe(const Position& start, const Position& end, float safety_margin = 0.0f,
+                    bool unknown_as_occupied = false) const;
     
     /**
      * @brief 检查球形区域是否安全

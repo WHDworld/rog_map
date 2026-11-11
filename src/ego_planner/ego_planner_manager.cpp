@@ -246,7 +246,7 @@ namespace ego_planner
       const Eigen::Vector3d &start_acc, const Eigen::Vector3d &local_target_pt,
       const Eigen::Vector3d &local_target_vel, const bool flag_polyInit,
       const bool flag_randomPolyTraj, const bool touch_goal,
-      double start_yaw, double end_yaw)
+      double start_yaw, double end_yaw, double start_yaw_rate, double start_yaw_acc)
   {
     // 检查优化器是否初始化
     if (!ploy_traj_opt_) {
@@ -415,7 +415,8 @@ namespace ego_planner
        
        std::vector<double> yaw_cps;
        bool yaw_success = yaw_optimizer_->optimize(traj_.local_traj.traj, 
-                                                  start_yaw, end_yaw, yaw_cps);
+                                                  start_yaw, end_yaw, yaw_cps, 0.05,
+                                                  start_yaw_rate, start_yaw_acc);
        
        if (yaw_success) {
            traj_.local_traj.use_yaw_traj = true;

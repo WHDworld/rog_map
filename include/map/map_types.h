@@ -142,8 +142,21 @@ struct SubGridIndex {
 
 // ==================== 语义目标元数据 (用于高价值目标缓存) ====================
 /**
+ * @brief 语义目标候选视点（轻量结构，避免 map 层依赖 exploration 层）
+ */
+struct SemanticViewpointCandidate {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+    Position position;
+    float yaw = 0.0f;
+    float score = 0.0f;
+
+    SemanticViewpointCandidate() { position.setZero(); }
+};
+
+/**
  * @brief 语义目标元数据
- * 
+ *
  * 存储从几何地图中提取的高价值目标信息
  * 设计为轻量级结构，便于 SubGrid 级缓存
  */
@@ -159,11 +172,11 @@ struct SemanticTargetMetadata {
     double timestamp = 0.0;         // 发现时间戳
     
     // ========== 探索视点信息 ==========
-    Position viewpoint_position;    // 探索视点位置
+    Position viewpoint_position;    // 探索视点位置（候选列表首项，兼容可视化）
     float viewpoint_yaw = 0.0f;     // 视点朝向（弧度，朝向目标质心）
     bool has_viewpoint = false;     // 是否生成了有效视点
     bool is_observed = false;       // 是否已被相机观测（由状态机更新）
-    int history_node_id = -1;       // 关联的历史节点 ID (用于 FSM 视点选择)
+    std::vector<SemanticViewpointCandidate> candidate_viewpoints; // top-K 候选视点
     
     SemanticTargetMetadata() {
         centroid.setZero();

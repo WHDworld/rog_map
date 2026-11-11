@@ -28,6 +28,11 @@ export GAZEBO_MODEL_PATH=~/.gazebo/models:$GAZEBO_MODEL_PATH
 
 # Livox 插件路径
 export GAZEBO_PLUGIN_PATH=/home/whd/experiment/gazebo_simulation/devel/lib:$GAZEBO_PLUGIN_PATH
+# gazebo_ros_velodyne_gpu_laser links against Gazebo's libGpuRayPlugin.so,
+# which is installed outside the default dynamic-linker search path.
+GAZEBO_SYSTEM_PLUGIN_DIR=/usr/lib/x86_64-linux-gnu/gazebo-11/plugins
+export GAZEBO_PLUGIN_PATH="$GAZEBO_SYSTEM_PLUGIN_DIR:$GAZEBO_PLUGIN_PATH"
+export LD_LIBRARY_PATH="$GAZEBO_SYSTEM_PLUGIN_DIR:$LD_LIBRARY_PATH"
 
 # Anaconda/Python 环境 (以防 python3 需要)
 export PATH=/home/whd/anaconda3/bin:$PATH
@@ -48,6 +53,8 @@ cleanup() {
     # 注意：这里移除了 python3 的全杀，防止误伤系统其他进程，只杀特定的 ros 节点
     killall -9 gzserver gzclient px4 roslaunch rosmaster rviz 2>/dev/null
     pkill -9 -f "get_simulation_pose.py"
+    pkill -9 -f "fastlivo_mapping"
+    pkill -9 -f "mapping_mid360_simulation.launch"
     
     # 3. 清理 YOLO 推理进程（防止GPU内存泄漏）
     pkill -9 -f "yolo_inference_node"
@@ -58,6 +65,15 @@ cleanup() {
 
 # 捕获 Ctrl+C (SIGINT) 和 脚本退出 (EXIT)
 trap cleanup SIGINT SIGTERM EXIT
+
+# 启动前清理上一次仿真遗留的进程，避免 ROS 节点重名、端口占用，
+# 以及 Fast-LIVO/Gazebo 残留进程污染内存和性能统计。
+echo -e "${BLUE}[Preflight] Cleaning stale simulation processes...${NC}"
+pkill -9 -f "fastlivo_mapping" 2>/dev/null || true
+pkill -9 -f "mapping_mid360_simulation.launch" 2>/dev/null || true
+pkill -9 -f "get_simulation_pose.py" 2>/dev/null || true
+pkill -9 -f "yolo_inference_node" 2>/dev/null || true
+killall -9 gzserver gzclient px4 roslaunch rosmaster rviz 2>/dev/null || true
 
 echo -e "${GREEN}[Script] Starting Simulation Workflow...${NC}"
 

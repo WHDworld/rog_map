@@ -6,18 +6,17 @@
     架构特点：
     1. 地图更新在 lidarCallback 中完成（~10Hz）
     2. 视点生成由 ViewpointManager 定时器处理（5Hz）
-    3. 历史节点由 HistoryGraph 定时器处理（2Hz）
-    4. 探索状态机为4状态设计（100Hz）
-    5. 规划器直接在状态机中调用，不再有单独的规划状态机
+    3. 探索状态机为4状态设计（100Hz）
+    4. 全局调度由 GlobalTourPlanner 处理（ATSP + 局部精化）
     -->
     
     <!-- ========== 参数 ========== -->
     <arg name="map_name" default="octa_maze"/>
     <arg name="sim_mode" default="0"/>  <!-- 0=Gazebo, 1=Open3D, 2=Real -->
     <arg name="auto_start" default="false"/>
-    <arg name="map_visualization" default="false"/>
+    <arg name="map_visualization" default="true"/>
     <arg name="performance_logging" default="true"/>
-    <arg name="fsm_visualization" default="false"/>
+    <arg name="fsm_visualization" default="true"/>
     
     <!-- ========== 新架构探索规划节点 ========== -->
     <node pkg="semantic_exploration" type="exploration_planner_node_new" name="exploration_planner_node" output="screen" >

@@ -5,9 +5,8 @@
 # 架构特点：
 # 1. 地图更新在 lidarCallback 中完成（~10Hz）
 # 2. 视点生成由 ViewpointManager 定时器处理（5Hz）
-# 3. 历史节点由 HistoryGraph 定时器处理（2Hz）
-# 4. 探索状态机为4状态设计（100Hz）
-# 5. 规划器直接在状态机中调用
+# 3. 探索状态机为4状态设计（100Hz）
+# 4. 全局调度由 GlobalTourPlanner 处理（ATSP + 局部精化）
 #
 # ===========================================================
 
@@ -78,8 +77,6 @@ rog_map:
 
 # ========== ViewpointManager (5Hz) ==========
 viewpoint_manager:
-  # FUEL-style O(N) 26-neighbor region growing. Set false only for A/B fallback.
-  use_voxel_region_growing: true
   # Unknown-space expansion depth used by the dense-stamp gain evaluator.
   gain_max_expand_step: 6
   update_rate: 2.0 # Hz
@@ -120,27 +117,38 @@ viewpoint_manager:
   overhead_height_threshold: 0.3 # 头顶高度阈值 [m]
   overhead_distance_threshold: 3.0 # 头顶水平距离阈值 [m]
 
-  # ---------- 策略开关 ----------
-  use_surface_frontier: false # 是否使用表面前沿聚类（基于法向量相似性）
-  use_spherical_sampling: false # 是否使用球扇形均匀采样（false则使用圆周采样）
-  use_viewpoint_clustering: false # 是否使用增量视点聚类（生成锚点）
-  # ---------- 表面前沿聚类参数 ----------
-  normal_angle_threshold: 0.785 # 法向量聚类角度阈值 [rad] (~45°)
-  normal_pca_k: 10 # PCA计算法向量时的邻域点数
-  # ---------- 球扇形采样参数 ----------
-  sphere_sample_radius: 2.5 # 球扇形采样半径 [m]
-  sphere_theta_max: 0.785 # 最大极角 [rad] (~45°)
-  sphere_sample_num: 20 # 球扇形内采样点数
-  # ---------- 增量视点聚类参数 ----------
-  vp_cluster_distance: 3.0 # 视点聚类距离阈值 [m]
-  vp_cluster_radius: 5.0 # 视点聚类外接圆半径阈值 [m]
-  vp_cluster_min_dist: 6.0 # 视点需要聚类的最小距离 [m]
+# ========== GlobalTourPlanner (全局调度) ==========
+global_scheduler:
+  max_tasks: 30 # ATSP 最多任务数
+  refine_local: true # 是否执行局部视点精化
+  refined_num: 5 # 精化窗口任务数
+  refined_radius: 5.0 # 精化窗口累计距离 [m]
+  top_view_num: 5 # 每个任务保留的候选视点数
+  max_decay: 0.8 # 候选保留阈值 score >= max_decay * best
 
-# ========== HistoryGraph (2Hz) ==========
-history_graph:
-  update_rate: 2.0 # Hz
-  node_spacing: 2.0 # 节点间距 [m]
-  max_assoc_dist: 35.0 # 最大关联距离 [m]
+  # 效用权重 U = gain*w_g + semantic*w_s + viewpoint*w_q
+  gain_weight: 0.70
+  semantic_weight: 0.25
+  viewpoint_weight: 0.05
+
+  # 首跳代价参数
+  utility_penalty: 5.0 # C_0j 中低效用惩罚
+  hysteresis_bonus: 1.0 # 保持上一目标的奖励
+  min_switch_interval: 0.5 # 首跳去抖时间 [s]
+  direction_weight: 1.5 # 运动时间中的转向权重
+
+  # ATSP / LKH
+  cost_scale: 100
+  invalid_cost: 1000000
+  solver_time_limit: 0.1 # LKH 时间限制 [s]
+
+  # 已知自由路径
+  unknown_as_occupied: true
+  path_max_expansions: 200000
+  safety_margin: 0.5 # 路径安全膨胀 [m]
+  min_flight_height: 1.0 # 全局路径最低飞行高度 [m]，0=不限制
+
+  enable_visualization: true
 
 # ========== 探索状态机 (100Hz) ==========
 fsm:
@@ -161,17 +169,18 @@ fsm:
 
   # 重规划触发
   replan_check_interval: 1.0 # 重规划检查间隔 [s]
+  trajectory_switch_delay: 0.20 # 从旧轨迹未来状态衔接，覆盖规划与发布延迟
+  plan_retry_initial: 0.10 # 规划失败退避，避免 100 Hz 重试风暴
+  plan_retry_max: 1.0
+  trajectory_bounds_margin: 0.05 # 拒绝飞出 GlobalMap 高度范围的局部轨迹
   waypoint_approach_dist: 1.0 # 航点接近距离 [m]
   trajectory_timeout: 10.0 # 轨迹超时 [s]
   coverage_trigger_ratio: 0.3 # 覆盖触发比例
+  minimum_task_execution_time: 0.5 # 新任务至少执行该时长后才允许因覆盖/消失切换
 
   # 碰撞检测
   collision_check_interval: 0.05 # 碰撞检查间隔 [s]
   collision_lookahead: 1.0 # 碰撞前瞻时间 [s]
-
-  # 视点选择
-  max_viewpoint_distance: 15.0 # 最大视点距离 [m]
-  close_viewpoint_threshold: 5.0 # 近距离视点阈值 [m]
 
   # 探索控制
   auto_start: true # 自动开始探索
@@ -259,93 +268,6 @@ semantic_extractor:
   vp_sample_dphi: 0.3           # 水平角度采样间隔 [rad] (~17°)
   vp_uav_radius: 0.3            # UAV 安全半径 [m]
   vp_safety_margin: 0.5         # 视点安全边界 [m]
-
-# ========== 目标重建模块 (TargetReconstructor) ==========
-target_recon:
-  # ---------- 话题配置 ----------
-  # 共用话题 (直接从rog_map读取，无需重复配置):
-  #   - obstacle_cloud: 使用 rog_map/lidar_topic
-  #   - odom: 使用 rog_map/odom_topic
-  # 专用话题:
-  target_cloud_topic: "/target_pointcloud" # 目标点云话题
-  target_detection_topic: "/target_detection/confirmed_targets" # 目标检测话题
-
-  # ---------- 采样策略 ----------
-  sampling_mode: 3 # 0=spherical, 1=cylindrical, 2=hemisphere
-  sampling_strategy: "spherical"
-
-  # ---------- 安全走廊参数 ----------
-  corridor_radius: 2.0 # 走廊半径 [m]
-  local_bbox_x: 4.0 # 以目标中心为中心的搜索区域半尺寸 [m]
-  local_bbox_y: 4.0 # 以目标中心为中心的搜索区域半尺寸 [m]
-  local_bbox_z: 3.0 # 以目标中心为中心的搜索区域半尺寸 [m]
-  obstacle_search_radius: 5.0 # 障碍物搜索半径 [m]
-  min_ground_height: 0.2 # 最小飞行高度 [m]
-
-  # ---------- 球面采样参数 ----------
-  spherical:
-    min_distance: 2.0 # 最小采样距离 [m]
-    max_distance: 4.0 # 最大采样距离 [m]
-    num_layers: 5 # 采样层数
-    min_elevation: 15.0 # 最小仰角 [deg]
-    max_elevation: 60.0 # 最大仰角 [deg]
-    points_per_layer: 8 # 每层采样点数
-
-  # ---------- 圆柱采样参数 ----------
-  cylindrical:
-    radius: 2.5 # 圆柱半径 [m]
-    min_height: 0.3 # 最小高度 [m]
-    max_height: 2.0 # 最大高度 [m]
-    num_height_layers: 5 # 高度层数
-    points_per_circle: 10 # 每圈采样点数
-
-  # ---------- 半球采样参数 ----------
-  hemisphere:
-    min_distance: 1.5 # 最小采样距离 [m]
-    max_distance: 3.0 # 最大采样距离 [m]
-    num_layers: 2 # 采样层数
-    min_elevation: 20.0 # 最小仰角 [deg]
-    max_elevation: 75.0 # 最大仰角 [deg]
-    points_per_layer: 12 # 每层采样点数
-
-  # ---------- [新增] 螺旋采样参数 (Multi-Layer Helix, 高度自适应) ----------
-  helix:
-    min_distance: 1.0 # 最近距离 [m]
-    max_distance: 3.0 # 最远距离 [m]
-    num_revolutions: 3 # 螺旋圈数（绕几圈）
-    points_per_rev: 8 # 每圈点数
-    height_margin: 0.2 # 高度边距 [m]（相对于目标BBox）
-
-  # ---------- 滤波参数 ----------
-  safety_margin: 0.3 # 安全边距 [m]
-  min_visibility_ratio: 0.1 # 最小可见性比例
-
-  # ---------- 评分权重 ----------
-  coverage_weight: 0.40 # 覆盖率权重
-  angle_weight: 0.3 # 角度权重
-  distance_weight: 0.20 # 距离权重
-  safety_weight: 0.3 # 安全权重
-  normal_weight: 0.30 # 法向量权重
-  optimal_distance: 2.5 # 最优观测距离 [m]
-
-  # ---------- Octree参数 ----------
-  octree_resolution: 0.1 # Octree分辨率 [m]
-  octree_hit_threshold: 3 # 重建质量阈值
-
-  # ---------- TSP优化 ----------
-  max_2opt_iterations: 100 # 2-opt最大迭代次数
-
-  # ---------- 重建完成判定 ----------
-  coverage_complete_threshold: 0.85 # 覆盖率完成阈值
-  max_viewpoints: 10 # 最大视点数
-  min_viewpoints: 6 # 最小视点数
-
-  # ---------- 到达判定 ----------
-  position_tolerance: 0.3 # 位置容差 [m]
-  yaw_tolerance: 0.15 # Yaw容差 [rad]
-
-  # ---------- 更新频率 ----------
-  update_rate: 2.0 # 视点优化更新频率 [Hz]
 
 extrin_calib:
   Rcl: [0, 1, 0, 0, 0, -1, -1, 0, 0]

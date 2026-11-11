@@ -80,6 +80,8 @@ include_directories(
         SYSTEM
         include
         include/ego_planner   # EGO Planner 头文件
+        third_party/lkh_tsp_solver/include
+        third_party/lkh_tsp_solver/include/lkh_tsp_solver
         ../../../devel/include
         ${catkin_INCLUDE_DIRS}
         ${Eigen3_INCLUDE_DIRS}
@@ -122,6 +124,21 @@ add_library(exploration STATIC ${lib_srcs})
 add_dependencies(exploration ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_include_directories(exploration PUBLIC include)
 target_link_libraries(exploration PUBLIC ${THIRD_PARTY})
+
+# ===========================================================
+# LKH TSP 求解器（vendored，FUEL）
+# ===========================================================
+file(GLOB LKH_C_SRCS CONFIGURE_DEPENDS third_party/lkh_tsp_solver/src/*.c)
+add_library(lkh_tsp_solver STATIC
+        ${LKH_C_SRCS}
+        third_party/lkh_tsp_solver/src/lkh_interface.cpp
+)
+target_include_directories(lkh_tsp_solver PUBLIC
+        third_party/lkh_tsp_solver/include
+        third_party/lkh_tsp_solver/include/lkh_tsp_solver
+)
+set_source_files_properties(${LKH_C_SRCS} PROPERTIES COMPILE_FLAGS "-std=gnu99 -w -Wno-error")
+target_link_libraries(lkh_tsp_solver PUBLIC m)
 
 # ===========================================================
 # EGO Planner (MINCO Trajectory) 规划器
@@ -169,15 +186,40 @@ add_executable(exploration_planner_node_new
         src/exploration_core/exploration_planner_node_new.cpp
         src/exploration_core/exploration_fsm_new.cpp
         src/exploration_core/viewpoint_manager.cpp
-        src/exploration_core/history_graph.cpp
+        src/exploration_core/grid_path_finder.cpp
+        src/exploration_core/global_tour_planner.cpp
         src/exploration_core/semantic_target_extractor.cpp
-        src/exploration_core/target_reconstructor.cpp
-        src/exploration_core/target_voxel_grid.cpp
 )
 add_dependencies(exploration_planner_node_new ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-target_link_libraries(exploration_planner_node_new 
+target_link_libraries(exploration_planner_node_new
         ego_planner_lib
         exploration
+        lkh_tsp_solver
         ${THIRD_PARTY}
         ${catkin_LIBRARIES}
 )
+
+# ===========================================================
+# 全局调度单元测试
+# ===========================================================
+if(CATKIN_ENABLE_TESTING)
+    # exploration_core 的实现不在 exploration 静态库中，测试目标需直接编译。
+    catkin_add_gtest(test_global_scheduler
+            test/test_global_scheduler.cpp
+            src/exploration_core/viewpoint_manager.cpp
+            src/exploration_core/grid_path_finder.cpp
+            src/exploration_core/global_tour_planner.cpp
+    )
+    if(TARGET test_global_scheduler)
+        add_dependencies(test_global_scheduler
+                ${${PROJECT_NAME}_EXPORTED_TARGETS}
+                ${catkin_EXPORTED_TARGETS})
+        target_link_libraries(test_global_scheduler
+                ego_planner_lib
+                exploration
+                lkh_tsp_solver
+                ${THIRD_PARTY}
+                ${catkin_LIBRARIES}
+        )
+    endif()
+endif()

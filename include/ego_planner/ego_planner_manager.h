@@ -40,7 +40,8 @@ namespace ego_planner
         const Eigen::Vector3d &start_acc, const Eigen::Vector3d &end_pt,
         const Eigen::Vector3d &end_vel, const bool flag_polyInit, 
         const bool flag_randomPolyTraj, const bool touch_goal,
-        double start_yaw = 0.0, double end_yaw = 10000.0);
+        double start_yaw = 0.0, double end_yaw = 10000.0,
+        double start_yaw_rate = 0.0, double start_yaw_acc = 0.0);
     
     bool planGlobalTrajWaypoints(
         const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,

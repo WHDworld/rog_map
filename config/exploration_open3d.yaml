@@ -304,10 +304,6 @@ exploration:
   min_coverage_score: 0.3           # 最小覆盖评分 [0,1]
   min_visibility_ratio: 0.70          # 最小可见性比例 [0,1] (建议0.3-0.5，太高会导致没有候选视点)
   
-  # ---------- 历史节点参数（借鉴EDEN算法） ----------
-  history_node_distance: 3.0        # 历史节点间隔距离 [m]
-  node_frontier_radius: 20.0         # 节点关联前沿区域的最大半径 [m]
-  
   # ---------- 前沿点过滤参数 ----------
   ground_offset: 0.1                # 地面偏移 [m]
   
@@ -315,31 +311,6 @@ exploration:
   overhead_height_threshold: 0.3    # 头顶高度阈值 [m]
   overhead_distance_threshold: 3.0  # 头顶水平距离阈值 [m]
   
-  # ============================================================
-  #     SFExplorer 策略参数（可选功能开关）
-  # ============================================================
-  # 参考论文: SFExplorer - Surface-Frontier-based Efficient UAV Exploration
-  
-  # ---------- 策略开关 ----------
-  use_surface_frontier: false       # 是否使用表面前沿聚类（基于法向量相似性）
-  use_spherical_sampling: false    # 是否使用球扇形均匀采样（false则使用圆周采样）
-  use_viewpoint_clustering: false   # 是否使用增量视点聚类（生成锚点）
-  
-  # ---------- 表面前沿聚类参数 ----------
-  normal_angle_threshold: 0.785     # 法向量聚类角度阈值 [rad] (~45°)
-  normal_pca_k: 10                  # PCA计算法向量时的邻域点数
-  
-  # ---------- 球扇形采样参数 ----------
-  sphere_sample_radius: 2.5         # 球扇形采样半径 [m]
-  sphere_theta_max: 0.785           # 最大极角 [rad] (~45°)
-  sphere_sample_num: 20             # 球扇形内采样点数
-  
-  # ---------- 增量视点聚类参数 ----------
-  vp_cluster_distance: 3.0          # 视点聚类距离阈值 [m]
-  vp_cluster_radius: 5.0            # 视点聚类外接圆半径阈值 [m]
-  vp_cluster_min_dist: 6.0          # 视点需要聚类的最小距离 [m]
-
-
 # ============================================================
 #                     可视化颜色配置
 # ============================================================

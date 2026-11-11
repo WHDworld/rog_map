@@ -10,8 +10,8 @@
  * 
  * 设计原则：
  * - 直接调用规划器接口，不再有单独的规划状态机
- * - 视点由 ViewpointManager 生成，本FSM只负责选择和执行
- * - 路径由 HistoryGraph 提供，支持多跳历史节点引导
+ * - 任务由 ViewpointManager / SemanticTargetExtractor 生成
+ * - 全局顺序与路径由 GlobalTourPlanner（ATSP + 局部精化）提供
  */
 
 #ifndef EXPLORATION_FSM_NEW_H
@@ -34,19 +34,18 @@
 #include <memory>
 #include <mutex>
 #include <atomic>
+#include <optional>
+#include <unordered_set>
 
 // 地图系统
 #include "map/star_mvf.h"
 #include "semantic_exploration/PolyTraj.h"
 // 新架构模块
-#include "exploration/history_graph.h"
+#include "exploration/global_tour_planner.h"
 #include "exploration/viewpoint_manager.h"
 
 // 规划器
 #include "ego_planner/ego_planner_manager.h"
-
-// 目标重建
-#include "exploration/target_reconstructor.h"
 
 // 语义目标提取
 #include "exploration/semantic_target_extractor.h"
@@ -73,9 +72,6 @@ enum class ExplorationState {
     WAIT_TRIGGER,       // 等待触发
     LOCALPLAN,          // 本地规划（选择视点、生成轨迹）
     EXEC_EXPLORATION,   // 执行探索（监控轨迹执行）
-
-    RECON_PLAN,         // 规划前往重建视点的路径
-    EXEC_RECON,         // 执行重建任务(在该状态下会逐个访问视点)
     FINISH              // 完成
 };
 
@@ -83,11 +79,12 @@ enum class ExplorationState {
 
 struct WaypointInfo {
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-    
+
     Eigen::Vector3d position;             // 位置
     double yaw;                           // 朝向
-    bool is_viewpoint;                    // 是否为探索视点（否则是历史节点）
-    int id;                               // 视点ID或历史节点ID
+    bool is_viewpoint;                    // 是否为最终探索视点（否则为中间航路点）
+    int id;                               // 视点/语义目标 ID（仅可视化用）
+    ExplorationTaskKey task_key;          // 所属调度任务（中间航路点为默认值）
     
     WaypointInfo()
         : position(Eigen::Vector3d::Zero())
@@ -97,21 +94,6 @@ struct WaypointInfo {
     
     WaypointInfo(const Eigen::Vector3d& pos, double y, bool is_vp, int i)
         : position(pos), yaw(y), is_viewpoint(is_vp), id(i) {}
-};
-
-// ==================== 重建轨迹分段信息 ====================
-
-struct ReconSegmentInfo {
-    double start_time;   // 本段起始时间（相对traj_start_time_）
-    double end_time;     // 本段结束时间
-    double start_yaw;    // 起始yaw
-    double end_yaw;      // 终止yaw
-    
-    ReconSegmentInfo()
-        : start_time(0.0), end_time(0.0), start_yaw(0.0), end_yaw(0.0) {}
-    
-    ReconSegmentInfo(double st, double et, double sy, double ey)
-        : start_time(st), end_time(et), start_yaw(sy), end_yaw(ey) {}
 };
 
 // ==================== 配置参数 ====================
@@ -131,17 +113,18 @@ struct ExplorationFSMConfig {
     
     // 重规划触发
     double replan_check_interval = 0.5;   // 重规划检查间隔 [s]
+    double trajectory_switch_delay = 0.20; // 新轨迹未来生效时间 [s]
+    double plan_retry_initial = 0.10;     // 规划失败初始退避 [s]
+    double plan_retry_max = 1.0;          // 规划失败最大退避 [s]
+    double trajectory_bounds_margin = 0.05; // 轨迹与地图上下边界安全距离 [m]
     double waypoint_approach_dist = 1.5;  // 接近航点时触发重规划的距离 [m]
     double trajectory_timeout = 10.0;     // 轨迹执行超时 [s]
     double coverage_trigger_ratio = 0.3;  // 触发重规划的覆盖比例
+    double minimum_task_execution_time = 0.5; // 新任务最短执行时间 [s]
     
     // 碰撞检测
     double collision_check_interval = 0.05; // 碰撞检测间隔 [s]
     double collision_lookahead = 0.5;     // 碰撞预测时间 [s]
-    
-    // 视点选择
-    double max_viewpoint_distance = 15.0; // 最大视点距离 [m]
-    double close_viewpoint_threshold = 5.0; // 近距离视点阈值（直接规划）[m]
     
     // 规划参数
     double planning_horizon = 7.5;        // 规划视野 [m]
@@ -155,22 +138,8 @@ struct ExplorationFSMConfig {
     // 可视化
     bool enable_visualization = true;
 
-    // 重建接近参数
-    double recon_approach_threshold = 4.0;   // 接近目标阈值 [m]，距离超过此值时先接近
-    double recon_approach_distance = 3.0;    // 接近停止距离 [m]，飞到距目标此距离处
-    double recon_yaw_threshold = 0.5;        // Yaw对准阈值 [rad]，约30度
-
     std::string odom_topic;
     std::string lidar_topic;
-};
-
-struct ViewpointCandidate {
-    int id;               // 原始 ID
-    int type;             // 0: Cluster, 1: Semantic
-    Eigen::Vector3d pos;  // 视点坐标
-    float base_gain;      // 基础增益
-    float view_score;     // 视点本身分数
-    std::vector<int> candidate_anchors; // 候选锚点列表
 };
 
 // ==================== 主类 ====================
@@ -232,19 +201,36 @@ private:
     // ==================== LOCALPLAN 核心方法 ====================
     
     /**
-     * @brief 选择最佳视点
-     * @param selected_viewpoint_id 输出选中的视点ID
-     * @return 是否找到有效视点
+     * @brief 采集统一探索任务（前沿簇 + 未观测语义目标，过滤黑名单）
      */
-    bool selectBestViewpoint(int& selected_viewpoint_id, const Eigen::Vector3d* from_pos = nullptr);
-    
+    std::vector<ExplorationTask> collectExplorationTasks();
+
     /**
-      * @brief 规划到视点的路径
-      * @param viewpoint_id 视点ID
-      * @param from_pos 可选的起始位置 (用于无缝切换时的预测位置)
-      * @return 是否规划成功
-      */
-    bool planToViewpoint(int viewpoint_id, const Eigen::Vector3d* from_pos = nullptr);
+     * @brief 当前机器人状态快照（供全局调度）
+     */
+    RobotPlanningState snapshotRobotState() const;
+
+    /**
+     * @brief 将调度目标转换为航点队列并启动轨迹规划
+     */
+    bool planToScheduledGoal(const ScheduledGoal& goal);
+
+    /**
+     * @brief 是否仍有可调度的探索目标（不考虑黑名单）
+     */
+    bool hasActiveExplorationTargets() const;
+
+    /**
+     * @brief 当前任务是否仍存在（前沿簇/未观测语义目标）
+     */
+    bool currentTaskExists() const;
+
+    /**
+     * @brief 当前活动任务键集合（用于检测任务集变化）
+     */
+    std::unordered_set<ExplorationTaskKey, ExplorationTaskKeyHash> activeTaskKeys() const;
+
+    // 旧单点视点路径规划接口已移除（由 GlobalTourPlanner 统一调度）
     
     /**
      * @brief 规划到下一个航点的轨迹
@@ -297,7 +283,8 @@ private:
     void visualizeFrustums();
     void visualizeExplorationInfo();
     void clearVisualization();
-    void visualizeHistoryGraph();
+    void visualizeGlobalTour();
+    void visualizeRefinedTour();
     /**
      * @brief 创建视锥体marker
      */
@@ -321,7 +308,8 @@ private:
     
     ros::Publisher exploration_state_pub_; // 探索状态
     ros::Publisher frontier_cluster_pub_;  // 前沿簇可视化
-    ros::Publisher region_route_pub_; // [Visual] 历史节点拓扑
+    ros::Publisher global_tour_pub_;      // [Visual] 全局巡游顺序
+    ros::Publisher refined_tour_pub_;     // [Visual] 局部精化视点
     ros::Publisher viewpoint_marker_pub_;  // 视点可视化
     ros::Publisher frustum_marker_pub_;    // 视锥体可视化
     ros::Publisher info_marker_pub_;       // 信息可视化
@@ -340,6 +328,8 @@ private:
     double traj_duration_;                 // 轨迹总时长
     bool has_trajectory_ = false;
     ros::Time last_replan_time_;
+    ros::Time next_plan_allowed_time_;
+    int consecutive_plan_failures_ = 0;
     double end_yaw_;                       // 轨迹末端期望 Yaw
 
     double last_yaw_ = 0.0, last_yaw_dot_ = 0.0;      // Yaw 平滑专用
@@ -355,12 +345,6 @@ private:
     std::vector<double> prev_yaw_ctrl_pts_;  // [新增] 旧Yaw轨迹控制点
     bool prev_use_yaw_traj_ = false;         // [新增] 旧轨迹是否使用Yaw B样条
     double prev_last_yaw_ = 0.0;             // [新增] 保存旧轨迹时的last_yaw_
-
-    // ==================== [新增] Yaw 轨迹切换平滑过渡 ====================
-    double yaw_offset_at_switch_ = 0.0;      // 轨迹切换时 yaw 偏差
-    double yaw_switch_time_ = 0.0;           // 轨迹切换时刻
-    int yaw_switch_traj_id_ = -1;            // 已处理的轨迹 ID
-    static constexpr double kYawBlendDuration = 0.5; // 混合持续时间 (秒)
 
     // ==================== [新增] 轨迹日志记录 ====================
     std::ofstream traj_log_file_;         // 轨迹日志文件流
@@ -389,53 +373,12 @@ private:
     // 模块
     MapManager::Ptr map_manager_;
     GlobalMap::Ptr global_map_;
-    HistoryGraph::Ptr history_graph_;
     ViewpointManager::Ptr viewpoint_manager_;
+    GlobalTourPlanner::Ptr global_tour_planner_;
     ego_planner::EGOPlannerManager::Ptr planner_manager_;
 
-    // ========== 重建任务相关 ==========
-    TargetReconstructor::Ptr target_reconstructor_;
-    
     // ========== 语义目标提取 ==========
     std::unique_ptr<SemanticTargetExtractor> semantic_target_extractor_;
-    
-    ReconViewpoint current_recon_viewpoint_;
-    ros::Time last_recon_check_time_;
-    ros::Time last_recon_update_time_;
-    void processReconPlan(const ros::TimerEvent& e);
-    void processExecRecon(const ros::TimerEvent& e);
-    
-    // 重建轨迹滑动窗口规划相关
-    std::vector<ReconViewpoint> recon_path_;      // 完整重建路径
-    int recon_path_idx_;                          // 当前执行到的路径索引(全局)
-    int recon_window_start_;                      // 当前窗口起始索引
-    static constexpr int RECON_WINDOW_SIZE = 3;   // 滑动窗口大小
-    
-    // 重建接近阶段状态
-    bool recon_approaching_ = false;              // 是否正在接近目标阶段
-    Eigen::Vector3d recon_target_center_;         // 当前重建目标中心缓存
-    
-    /**
-     * @brief 滑动窗口规划重建轨迹
-     * @param viewpoints 完整视点序列
-     * @param from_idx 窗口起始索引
-     * @param window_size 窗口大小(默认3)
-     * @return 是否规划成功
-     */
-    bool planReconstructionTrajectory(const std::vector<ReconViewpoint>& viewpoints, 
-                                       int from_idx = 0, 
-                                       int window_size = RECON_WINDOW_SIZE);
-    
-    // 重建轨迹分段yaw信息（用于视点间平滑过渡）
-    std::vector<ReconSegmentInfo> recon_segments_;
-    
-    /**
-     * @brief 计算重建模式下的yaw（视点间平滑插值）
-     * @param t_cur 当前轨迹时间
-     * @param dt 时间步长
-     * @return {yaw, yaw_dot}
-     */
-    std::pair<double, double> calculateReconSegmentYaw(double t_cur, double dt);
     
     // 配置
     ExplorationFSMConfig config_;
@@ -467,52 +410,32 @@ private:
     ros::ServiceClient set_mode_client_;     // 模式切换服务
     bool offboard_ready_ = false;            // OFFBOARD 模式是否就绪
     
-    // 当前探索目标
-    // 当前探索目标
-    int current_viewpoint_id_ = -1;       // 当前目标视点ID
-    std::vector<WaypointInfo> waypoint_queue_; // 航点队列（历史节点+视点）
+    // 当前探索目标（统一任务键）
+    std::optional<ExplorationTaskKey> current_task_key_;
+    GlobalTourPlan current_tour_plan_;
+    std::vector<WaypointInfo> waypoint_queue_; // 航点队列（中间航路点 + 最终视点）
     int current_waypoint_idx_ = 0;        // 当前航点索引
 
-    // ==================== [新增] 视点选择稳定性优化 ====================
-    
-    // 视点选择状态
-    int last_selected_cluster_id_ = -1;        // 上一帧选中的簇 ID（用于迟滞）
-    int last_selected_anchor_id_ = -1;         // 上一帧绑定的锚点 ID（用于锚点锁定）
-    ros::Time last_viewpoint_switch_time_;     // 上次视点切换时间
-    
-    // 配置参数结构体
-    struct ViewpointSelectionConfig {
-        double hysteresis_gain = 1.2;          // 迟滞增益（当前目标获得 20% 加分）
-        double heading_penalty_weight = 0.5;   // 航向惩罚权重（后方目标代价 ×1.5）
-        double min_switch_interval = 0.5;      // 最小切换间隔 [s]
-        double anchor_lock_distance = 2.0;     // 锚点锁定距离阈值 [m]
-        double velocity_threshold = 0.3;       // 使用速度方向的最低速度 [m/s]
-    } vp_selection_config_;
-    
     // 状态计时
     ros::Time state_start_time_;
-    
-    // 黑名单簇 (用于规划失败时的即时切换)
-    std::unordered_set<int> blacklisted_clusters_; // 仅用于当前帧内
-    std::vector<Eigen::Vector3d> blacklisted_positions_; // [新增] 基于位置的持久化黑名单
-    bool isClusterBlacklisted(const FrontierCluster& cluster); // [新增] 辅助函数
+
+    // 任务黑名单（规划失败/已完成任务，按类型化键过滤）
+    std::unordered_set<ExplorationTaskKey, ExplorationTaskKeyHash> task_blacklist_;
+
+    // 上次规划时的活动任务集合（检测任务集变化）
+    std::unordered_set<ExplorationTaskKey, ExplorationTaskKeyHash> last_active_task_keys_;
+    bool global_tour_dirty_ = false;
+    ros::Time task_execution_start_time_;
 
     // 黑盒/覆盖检测
-    std::vector<Eigen::Vector3f> current_frontier_; // 目标簇
-    Eigen::Vector3d current_viewpoint_centroid_;            // 目标簇质心(辅助黑名单)
+    std::vector<Eigen::Vector3f> current_frontier_; // 目标簇（覆盖检测与可视化）
+    Eigen::Vector3d current_viewpoint_centroid_;    // 目标簇质心
     Eigen::Vector3d current_vp_pos_; // 当前视点位置
     double current_vp_yaw_; // 当前视点朝向
-    int current_frontier_history_id_ = -1; // 目标簇历史ID
-    bool triggerSeamlessReplan();
+    bool triggerSeamlessReplan(bool force_replace_current = false);
     bool checkCurrentGoalCovered();
 
-    // [已删除] use_replan_start_ 相关变量已被 planTrajectory 内部统一预测逻辑替代
-
-    DijkstraResult cached_dijkstra_result_;
-
-    std::vector<Eigen::Vector3d> current_global_path_; // 用于长距离导航的拓扑路径
-
-    bool use_global_path_ = false; // 标志位：当前是否在使用全局拓扑路径导航
+    std::vector<Eigen::Vector3d> current_global_path_; // 当前调度路径（可视化）
     // 轨迹执行状态
     ros::Time trajectory_start_time_;
     ros::Time last_replan_check_time_;

@@ -704,15 +704,24 @@ Visualization Manager:
           Value: true
         - Class: rviz/MarkerArray
           Enabled: true
-          Marker Topic: /exploration/region_route
-          Name: region_route
-          Namespaces:
-            associated_subgrids: true
-            history_node_ids: true
-            history_nodes: true
-            history_path: true
-            node_subgrid_links: true
-          Queue Size: 100
+          Marker Topic: /exploration/global_tour
+          Name: GlobalTour
+          Namespaces: {}
+          Queue Size: 10
+          Value: true
+        - Class: rviz/MarkerArray
+          Enabled: true
+          Marker Topic: /exploration/refined_tour
+          Name: RefinedTour
+          Namespaces: {}
+          Queue Size: 10
+          Value: true
+        - Class: rviz/MarkerArray
+          Enabled: true
+          Marker Topic: /exploration/path
+          Name: ScheduledPath
+          Namespaces: {}
+          Queue Size: 10
           Value: true
       Enabled: true
       Name: Exploration

@@ -4,6 +4,8 @@
  */
 
 #include "exploration/semantic_target_extractor.h"
+
+#include <algorithm>
 #include <unordered_set>
 
 namespace rog_map {
@@ -73,6 +75,10 @@ void SemanticTargetExtractor::loadConfig(const ros::NodeHandle& nh, const std::s
     nh.param(prefix + "vp_sample_dphi", config_.vp_sample_dphi, 0.3f);
     nh.param(prefix + "vp_uav_radius", config_.vp_uav_radius, 0.3f);
     nh.param(prefix + "vp_safety_margin", config_.vp_safety_margin, 0.5f);
+
+    // 候选视点数量由全局调度统一控制
+    nh.param("global_scheduler/top_view_num", config_.top_view_num, 5);
+    nh.param("global_scheduler/max_decay", config_.max_decay, 0.8f);
     
     ROS_INFO("[SemanticTargetExtractor] Config: exploration_thresh=%.2f, planarity_thresh=%.2f, hybrid_thresh=%.2f",
              config_.exploration_threshold, config_.planarity_threshold, config_.hybrid_switch_threshold);
@@ -96,7 +102,8 @@ void SemanticTargetExtractor::update() {
     if (!global_map_) {
         return;
     }
-    
+    std::lock_guard<std::mutex> lock(targets_mutex_);
+
     // 从 GlobalMap 获取待分析的子网格索引（已达到探索率阈值）
     const auto& ready_subgrids = global_map_->getReadyForAnalysisSubGrids();
     
@@ -490,6 +497,7 @@ void SemanticTargetExtractor::mergeTargets(const std::set<int>& target_ids) {
 
 // ==================== 目标获取 ====================
 void SemanticTargetExtractor::getAllTargets(std::vector<TargetMetadata>& out_targets) const {
+    std::lock_guard<std::mutex> lock(targets_mutex_);
     out_targets.clear();
     // 过滤掉已删除的目标（id == -1）
     for (const auto& target : all_targets_) {
@@ -987,20 +995,44 @@ bool SemanticTargetExtractor::generateViewpointForTarget(TargetMetadata& target)
     
     if (valid_candidates.empty()) {
         target.has_viewpoint = false;
+        target.candidate_viewpoints.clear();
         ROS_INFO("No valid viewpoints found for target %d", target.id);
         return false;
     }
-    
-    // 选择最佳视点
-    auto best_it = std::max_element(valid_candidates.begin(), valid_candidates.end(),
-        [](const Candidate& a, const Candidate& b) {
-            return a.score < b.score;
-        });
-    
-    target.viewpoint_position = best_it->position;
-    target.viewpoint_yaw = best_it->yaw;
+
+    // 按评分降序，保留 top-K（score >= max_decay * best）
+    std::sort(valid_candidates.begin(), valid_candidates.end(),
+              [](const Candidate& a, const Candidate& b) { return a.score > b.score; });
+
+    const float best_score = valid_candidates.front().score;
+    const float threshold = std::max(0.0f, config_.max_decay) * best_score;
+    const int max_candidates = std::max(1, config_.top_view_num);
+
+    target.candidate_viewpoints.clear();
+    target.candidate_viewpoints.reserve(static_cast<size_t>(max_candidates));
+    for (const auto& candidate : valid_candidates) {
+        if (static_cast<int>(target.candidate_viewpoints.size()) >= max_candidates) break;
+        if (candidate.score < threshold) continue;
+        star_mvf::SemanticViewpointCandidate viewpoint;
+        viewpoint.position = candidate.position;
+        viewpoint.yaw = candidate.yaw;
+        viewpoint.score = candidate.score;
+        target.candidate_viewpoints.push_back(viewpoint);
+    }
+    if (target.candidate_viewpoints.empty()) {
+        star_mvf::SemanticViewpointCandidate viewpoint;
+        viewpoint.position = valid_candidates.front().position;
+        viewpoint.yaw = valid_candidates.front().yaw;
+        viewpoint.score = valid_candidates.front().score;
+        target.candidate_viewpoints.push_back(viewpoint);
+    }
+
+    const auto& best = target.candidate_viewpoints.front();
+    target.viewpoint_position = best.position;
+    target.viewpoint_yaw = best.yaw;
     target.has_viewpoint = true;
-    ROS_INFO("Found valid viewpoints for target %d", target.id);
+    ROS_INFO("Found %zu candidate viewpoints for target %d (best score=%.3f)",
+             target.candidate_viewpoints.size(), target.id, best.score);
     return true;
 }
 
@@ -1117,16 +1149,19 @@ bool SemanticTargetExtractor::checkMultiRayVisibility(const Eigen::Vector3f& vie
     return visibility_ratio >= visibility_thresh;
 }
 
-void SemanticTargetExtractor::getUnobservedTargets(std::vector<TargetMetadata*>& out_targets) {
+void SemanticTargetExtractor::getUnobservedTargetsSnapshot(
+    std::vector<TargetMetadata>& out_targets) const {
+    std::lock_guard<std::mutex> lock(targets_mutex_);
     out_targets.clear();
-    for (auto& target : all_targets_) {
+    for (const auto& target : all_targets_) {
         if (!target.is_observed && target.has_viewpoint) {
-            out_targets.push_back(&target);
+            out_targets.push_back(target);
         }
     }
 }
 
 void SemanticTargetExtractor::markTargetObserved(int target_id) {
+    std::lock_guard<std::mutex> lock(targets_mutex_);
     for (auto& target : all_targets_) {
         if (target.id == target_id) {
             target.is_observed = true;
@@ -1138,6 +1173,12 @@ void SemanticTargetExtractor::markTargetObserved(int target_id) {
 }
 
 bool SemanticTargetExtractor::isTargetVisualCovered(int target_id, float ratio_thresh) {
+    std::lock_guard<std::mutex> lock(targets_mutex_);
+    return isTargetVisualCoveredInternal(target_id, ratio_thresh);
+}
+
+bool SemanticTargetExtractor::isTargetVisualCoveredInternal(int target_id,
+                                                            float ratio_thresh) const {
     if (!global_map_) return false;
 
     // 1. 查找目标元数据
@@ -1200,13 +1241,14 @@ bool SemanticTargetExtractor::isTargetVisualCovered(int target_id, float ratio_t
 // ==================== [New] 实时观测状态更新 ====================
 void SemanticTargetExtractor::updateObservationStatus() {
     if (!global_map_) return;
+    std::lock_guard<std::mutex> lock(targets_mutex_);
 
     for (auto& target : all_targets_) {
         // 跳过已观测的目标
         if (target.is_observed) continue;
 
         // 检查覆盖率 (阈值 0.7)
-        if (isTargetVisualCovered(target.id, 0.7f)) {
+        if (isTargetVisualCoveredInternal(target.id, 0.7f)) {
             target.is_observed = true;
             
             // [重要] 将包围盒内的占据体素标记为已观测，防止后续重复处理
